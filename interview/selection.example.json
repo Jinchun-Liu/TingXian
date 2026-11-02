@@ -1,0 +1,17 @@
+[
+  {
+    "path": "background.md",
+    "kind": "personal",
+    "allow_external": true
+  },
+  {
+    "path": "resume.md",
+    "kind": "personal",
+    "allow_external": true
+  },
+  {
+    "path": "reference-answers.md",
+    "kind": "practice",
+    "allow_external": true
+  }
+]

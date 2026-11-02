@@ -1,0 +1,72 @@
+[
+  {
+    "id": 1,
+    "group": "technical",
+    "question": "怎样设计云数据库创建接口的测试用例？",
+    "expected": null,
+    "avoid": "声称本人生产实施"
+  },
+  {
+    "id": 2,
+    "group": "technical",
+    "question": "接口超时如何设置有边界的重试？",
+    "expected": null,
+    "avoid": "无界重试"
+  },
+  {
+    "id": 3,
+    "group": "technical",
+    "question": "契约测试和集成测试有什么区别？",
+    "expected": null,
+    "avoid": "等同测试范围"
+  },
+  {
+    "id": 4,
+    "group": "technical",
+    "question": "SQL 中 NULL 和 0 有什么区别？",
+    "expected": null,
+    "avoid": "将未知值当零"
+  },
+  {
+    "id": 5,
+    "group": "technical",
+    "question": "如何验证分页接口不会丢数据或重复？",
+    "expected": null,
+    "avoid": "仅正常路径"
+  },
+  {
+    "id": 6,
+    "group": "technical",
+    "question": "数据库故障切换测试应该观察哪些指标？",
+    "expected": null,
+    "avoid": "声称本人生产实施"
+  },
+  {
+    "id": 7,
+    "group": "technical",
+    "question": "如何排查一次 CI 流水线失败？",
+    "expected": null,
+    "avoid": "配置存在即通过"
+  },
+  {
+    "id": 8,
+    "group": "technical",
+    "question": "负载测试中 P95 和平均延迟有什么不同？",
+    "expected": null,
+    "avoid": "混淆分位数"
+  },
+  {
+    "id": 9,
+    "group": "technical",
+    "question": "如何测试幂等性？",
+    "expected": null,
+    "avoid": "重复请求必定成功"
+  },
+  {
+    "id": 10,
+    "group": "technical",
+    "question": "如何区分资源不足与过量供给？",
+    "expected": null,
+    "avoid": "指标方向颠倒"
+  }
+]
