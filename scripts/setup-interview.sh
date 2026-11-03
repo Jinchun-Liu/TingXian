@@ -16,7 +16,7 @@ npm install --prefix "$INTERVIEW_TOOLS/node" pnpm@9.15.9 --no-audit --no-fund
 cd "$INTERVIEW_ROOT/frontend"
 pnpm install --frozen-lockfile --store-dir "$INTERVIEW_TOOLS/pnpm-store"
 if [ "${1:-}" = '--with-model' ]; then
-  INTERVIEW_MODEL_DIR="$HOME/Library/Application Support/local.meetily.interview/models"
+  INTERVIEW_MODEL_DIR="$HOME/Library/Application Support/io.github.jinchunliu.meetilyinterview/models"
   mkdir -p "$INTERVIEW_MODEL_DIR"
   if [ ! -f "$INTERVIEW_MODEL_DIR/ggml-base.bin" ]; then
     /usr/bin/curl --fail --location --retry 2 --connect-timeout 10 --max-time 600 \

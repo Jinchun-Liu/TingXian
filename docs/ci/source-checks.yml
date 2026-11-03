@@ -21,8 +21,8 @@ jobs:
           cache-dependency-path: frontend/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
         working-directory: frontend
-      - run: node scripts/test-interview.cjs
-      - run: node scripts/test-interview-controls.cjs
+      - run: node scripts/test-public-source.cjs
+      - run: python3 scripts/test-interview-monitor.py
       - run: pnpm exec tsc --noEmit --incremental false
         working-directory: frontend
       - run: python3 scripts/check-public-source.py

@@ -660,6 +660,8 @@ const Sidebar: React.FC = () => {
     );
   };
 
+  if (pathname === '/interview') return null;
+
   return (
     <div className="fixed top-0 left-0 h-screen z-40">
       {/* Floating collapse button */}

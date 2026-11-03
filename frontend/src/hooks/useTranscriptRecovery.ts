@@ -9,6 +9,7 @@ import { useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { indexedDBService, MeetingMetadata, StoredTranscript } from '@/services/indexedDBService';
 import { storageService } from '@/services/storageService';
+import { interviewExit } from '@/lib/interview-exit';
 import { applyPinnedSummaryLanguageToMeeting } from '@/lib/summary-language-preferences';
 import { toast } from 'sonner';
 
@@ -108,6 +109,8 @@ export function useTranscriptRecovery(): UseTranscriptRecoveryReturn {
    * Recover a meeting from IndexedDB
    */
   const recoverMeeting = useCallback(async (meetingId: string): Promise<{ success: boolean; audioRecoveryStatus?: AudioRecoveryStatus | null; meetingId?: string }> => {
+    const exitGeneration=interviewExit.generation();
+    if(interviewExit.pending())return {success:false};
     setIsRecovering(true);
     try {
       // 1. Load meeting metadata
@@ -179,7 +182,8 @@ export function useTranscriptRecovery(): UseTranscriptRecoveryReturn {
       const saveResponse = await storageService.saveMeeting(
         metadata.title,
         formattedTranscripts,
-        folderPath ?? null
+        folderPath ?? null,
+        exitGeneration
       );
 
       const savedMeetingId = saveResponse.meeting_id;

@@ -20,7 +20,7 @@ export interface StoredTranscript {
   meetingId: string;          // Foreign key to meetings store
   text: string;               // Transcript text
   timestamp: string;          // ISO 8601 timestamp
-  confidence: number;         // Whisper confidence score
+  confidence?: number | null;         // Unknown for local ASR; old numeric values are unverified
   sequenceId: number;         // Sequence number for ordering
   storedAt: number;           // Unix timestamp when saved
   audio_start_time?: number;  // Recording-relative start time in seconds
@@ -42,6 +42,25 @@ class IndexedDBService {
   private writesSuspended = false;
   suspendRecordingWrites() { this.writesSuspended = true; }
   resumeRecordingWrites() { this.writesSuspended = false; }
+
+  recordingWritesSuspended() { return this.writesSuspended; }
+  /** Metadata + count indexes only; startup inspection does not load speech. */
+  async inspectInterviewHistory(): Promise<{meetings:number;transcripts:number}> {
+    if (!this.db) await this.init();
+    return new Promise((resolve,reject)=>{
+      const tx=this.db!.transaction(['meetings','transcripts'],'readonly');
+      const request=tx.objectStore('meetings').getAll();
+      let meetings=0,transcripts=0;
+      request.onsuccess=()=>{
+        const owned=(request.result as MeetingMetadata[]).filter(m=>m.title==='Interview practice');meetings=owned.length;
+        const index=tx.objectStore('transcripts').index('meetingId');
+        for(const item of owned){const count=index.count(item.meetingId);count.onsuccess=()=>{transcripts+=count.result;};}
+      };
+      tx.oncomplete=()=>resolve({meetings,transcripts});
+      tx.onerror=()=>reject(tx.error || new Error('无法检查恢复缓存'));
+      tx.onabort=()=>reject(tx.error || new Error('恢复缓存检查中断'));
+    });
+  }
 
   /** Complete snapshot, including saved entries, taken after capture has stopped.
    * Errors must propagate: an empty fallback would falsely permit data loss. */

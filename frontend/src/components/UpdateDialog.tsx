@@ -11,7 +11,7 @@ import {
 import { Button } from './ui/button';
 import { updateService, UpdateInfo, UpdateProgress } from '@/services/updateService';
 import { check, Update } from '@tauri-apps/plugin-updater';
-import { relaunch } from '@tauri-apps/plugin-process';
+import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 
 interface UpdateDialogProps {
@@ -132,7 +132,7 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
       handleOpenChange(false);
 
       // Relaunch the app
-      await relaunch();
+      await invoke('interview_exit_request', { restart: true });
     } catch (err: any) {
       console.error('Update failed:', err);
       setError(err.message || 'Failed to download or install update');

@@ -22,6 +22,7 @@ import { RecordingPostProcessingProvider } from '@/contexts/RecordingPostProcess
 import { ImportAudioDialog, ImportDropOverlay } from '@/components/ImportAudio'
 import { ImportDialogProvider } from '@/contexts/ImportDialogContext'
 import { isAudioExtension, getAudioFormatsDisplayList } from '@/constants/audioFormats'
+import { ExitCleanup } from '@/components/interview/ExitCleanup'
 
 
 // Module-level component — stable reference across RootLayout re-renders.
@@ -186,6 +187,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="font-sans antialiased">
+        <ExitCleanup />
         <AnalyticsProvider>
           <RecordingStateProvider>
             <TranscriptProvider>

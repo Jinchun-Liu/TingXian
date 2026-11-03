@@ -1,8 +1,8 @@
 {
     "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-    "productName": "Meetily Interview Local",
-    "version": "0.4.1",
-    "identifier": "local.meetily.interview",
+    "productName": "Meetily Interview",
+    "version": "0.2.0-alpha.1",
+    "identifier": "io.github.jinchunliu.meetilyinterview",
     "build": {
         "frontendDist": "../out",
         "devUrl": "http://localhost:3118",
@@ -12,7 +12,7 @@
     "app": {
         "windows": [
             {
-                "title": "Meetily · 面试辅助（本地修改版）",
+                "title": "Meetily Interview · 通用面试助手",
                 "width": 1440,
                 "height": 920,
                 "resizable": true,

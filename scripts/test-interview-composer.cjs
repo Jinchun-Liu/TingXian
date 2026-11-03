@@ -1,0 +1,45 @@
+// Real composer event handlers; this does not simulate a physical macOS IME.
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const fromFrontend=require('node:module').createRequire(path.resolve(__dirname,'../frontend/package.json'));
+const React=fromFrontend('react'),{create,act}=fromFrontend('react-test-renderer'),ts=fromFrontend('typescript');
+const m={exports:{}};
+const code=ts.transpileModule(fs.readFileSync(path.resolve(__dirname,'../frontend/src/components/interview/QuestionComposer.tsx'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,jsx:ts.JsxEmit.ReactJSX}}).outputText;
+new Function('require','module','exports',code)(name=>name==='@/components/ui/button'?{Button:p=>React.createElement('button',p)}:name==='lucide-react'?{Send:()=>null}:fromFrontend(name),m,m.exports);
+const text=node=>typeof node==='string'?node:(node?.children||[]).map(text).join('');
+(async()=>{
+  let tree,submits=0,searches=0,cancels=0,changed='';
+  let props={value:'契约测试与 JSON Schema',editingSelf:false,busy:false,cloudAllowed:false,onChange:v=>{changed=v;},onSubmit:()=>{submits++;},onLocalSearch:()=>{searches++;},onCancelEdit:()=>{cancels++;}};
+  const render=()=>React.createElement(m.exports.QuestionComposer,props);
+  await act(async()=>{tree=create(render());});
+  const update=async patch=>{props={...props,...patch};await act(async()=>tree.update(render()));};
+  const area=()=>tree.root.findByProps({id:'question'});
+  const button=label=>tree.root.findAllByType('button').find(b=>text(b)===label);
+  const key=async patch=>{
+    let prevented=false;
+    const event={key:'Enter',metaKey:true,ctrlKey:false,altKey:false,shiftKey:false,repeat:false,nativeEvent:{},preventDefault(){prevented=true;},...patch};
+    await act(async()=>area().props.onKeyDown(event));return prevented;
+  };
+  assert.equal(button('发送').props.disabled,true);
+  await key();await act(async()=>button('发送').props.onClick());assert.equal(submits,0,'cloud-disabled paths sent');
+  await update({editingSelf:true});assert.equal(button('保存修正').props.disabled,false);
+  await key();assert.equal(submits,1,'local correction required cloud permission');
+  await act(async()=>button('取消修改').props.onClick());assert.equal(cancels,1);
+  await update({editingSelf:false,cloudAllowed:true,busy:true});
+  await key();await act(async()=>button('发送').props.onClick());assert.equal(submits,1);assert.equal(area().props.value,props.value);
+  await update({busy:false});await act(async()=>area().props.onCompositionStart());
+  assert.equal(button('发送').props.disabled,true);assert.equal(button('本地检索').props.disabled,true);
+  assert.equal(await key(),false,'composition Enter was intercepted');
+  await act(async()=>button('发送').props.onClick());assert.equal(submits,1);
+  await act(async()=>area().props.onCompositionEnd());
+  for(const nativeEvent of [{isComposing:true},{keyCode:229}])assert.equal(await key({nativeEvent}),false);
+  assert.equal(submits,1,'native composition guard sent a request');
+  assert.equal(await key({repeat:true}),true);assert.equal(submits,1,'key repeat resubmitted');
+  for(const patch of [{metaKey:false},{shiftKey:true},{altKey:true},{key:'a'}])assert.equal(await key(patch),false);
+  assert.equal(submits,1);
+  assert.equal(await key(),true);assert.equal(await key({metaKey:false,ctrlKey:true}),true);assert.equal(submits,3);
+  await act(async()=>area().props.onChange({target:{value:'修改后的整句'}}));assert.equal(changed,'修改后的整句');
+  await act(async()=>button('本地检索').props.onClick());assert.equal(searches,1);assert.equal(submits,3);
+  await update({value:'  '});await key();assert.equal(button('发送').props.disabled,true);assert.equal(submits,3);
+  await act(async()=>tree.unmount());
+  console.log('PASS: composer cloud/busy/blank gates, local correction, IME composition/ref/native/229 guards, repeat/newline/modifier handling, cancel and local search');
+})().catch(e=>{console.error(e);process.exitCode=1;});

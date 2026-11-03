@@ -472,6 +472,10 @@ pub fn get_language_preference_internal() -> Option<String> {
 
 mod interview;
 pub mod interview_history;
+pub mod interview_exit;
+pub mod interview_sessions;
+pub mod interview_connection;
+pub mod interview_index;
 
 pub fn run() {
     log::set_max_level(log::LevelFilter::Info);
@@ -503,6 +507,7 @@ pub fn run() {
         )) as NotificationManagerState<tauri::Wry>)
         .manage(audio::init_system_audio_state())
         .manage(interview::InterviewState::default())
+        .manage(interview_exit::ExitState::default())
         .manage(summary::summary_engine::ModelManagerState(Arc::new(tokio::sync::Mutex::new(None))))
         .setup(|_app| {
             #[cfg(target_os = "windows")]
@@ -621,6 +626,9 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
                     api.prevent_close();
+                    if interview_exit::ensure_not_exiting(window.app_handle()).is_err() {
+                        let _=window.show();let _=window.set_focus();return;
+                    }
                     if let Err(e) = window.hide() {
                         log::error!("Failed to hide main window on close request: {}", e);
                     } else {
@@ -634,12 +642,41 @@ pub fn run() {
             interview::interview_config,
             interview::profile_choose,
             interview::profile_scan,
+            interview::profile_structured_preview,
             interview::profile_import,
+            interview::profile_import_cancel,
+            interview::profile_import_status,
+            interview::profile_index_clear,
+            interview::profile_document_update,
+            interview::profile_document_segments,
+            interview::profile_facts_correct,
+            interview::profile_facts_current,
+            interview::profile_facts_history,
             interview::rag_search,
             interview::answer_start,
+            interview::interview_preferences_get,
+            interview::interview_preferences_save,
+            interview::interview_request_config_get,
+            interview::interview_request_config_save,
+            interview::interview_connection_status,
+            interview::interview_connection_test,
+            interview::interview_connection_cancel,
             interview::answer_cancel,
             interview::session_clear,
+            interview::interview_session_save,
+            interview::interview_session_export,
+            interview::interview_session_list,
+            interview::interview_session_load,
             interview::interview_history_clear,
+            interview::interview_residue_status,
+            interview::interview_residue_clear,
+            interview_exit::interview_exit_request,
+            interview_exit::interview_exit_status,
+            interview_exit::interview_exit_generation,
+            interview_exit::interview_exit_prepare,
+            interview_exit::interview_exit_archive,
+            interview_exit::interview_exit_cancel,
+            interview_exit::interview_exit_finish,
             interview::interview_audio_start,
             interview::interview_audio_level,
             interview::interview_microphone_set,
@@ -868,6 +905,12 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|_app_handle, event| {
             match event {
+                tauri::RunEvent::ExitRequested { api, code, .. } if code != Some(tauri::RESTART_EXIT_CODE) => {
+                    if !_app_handle.state::<interview_exit::ExitState>().approved() {
+                        api.prevent_exit();
+                        interview_exit::request_exit(_app_handle,false);
+                    }
+                }
                 #[cfg(target_os = "macos")]
                 tauri::RunEvent::Reopen { .. } => {
                     tray::focus_main_window(_app_handle);

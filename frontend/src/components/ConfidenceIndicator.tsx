@@ -1,49 +1,24 @@
 'use client';
 
 interface ConfidenceIndicatorProps {
-  confidence: number;
+  confidence?: number | null;
   showIndicator?: boolean;
 }
 
+// The supported local engines do not expose utterance confidence. Historical
+// numbers may have been synthesized from text length or a fixed default; never
+// turn them into green/red quality ratings or percentages of accuracy.
 export const ConfidenceIndicator: React.FC<ConfidenceIndicatorProps> = ({
   confidence,
   showIndicator = true,
 }) => {
-  // Don't render if preference is disabled
-  if (!showIndicator) {
-    return null;
-  }
-
-  // Get color class based on confidence threshold
-  const getColorClass = (conf: number): string => {
-    if (conf >= 0.8) return 'bg-green-500'; // 80-100%: High confidence
-    if (conf >= 0.7) return 'bg-yellow-500'; // 70-79%: Good confidence
-    if (conf >= 0.4) return 'bg-orange-500'; // 40-79%: Medium confidence
-    return 'bg-red-500'; // Below 50%: Low confidence
-  };
-
-  // Get descriptive label for accessibility
-  const getConfidenceLabel = (conf: number): string => {
-    if (conf >= 0.8) return 'High confidence';
-    if (conf >= 0.7) return 'Good confidence';
-    if (conf >= 0.4) return 'Medium confidence';
-    return 'Low confidence';
-  };
-
-  const confidencePercent = (confidence * 100).toFixed(0);
-  const colorClass = getColorClass(confidence);
-  const label = getConfidenceLabel(confidence);
-
+  if (!showIndicator) return null;
+  const unverified = typeof confidence === 'number' && Number.isFinite(confidence)
+    && confidence >= 0 && confidence <= 1;
+  const label = unverified ? '识别分数未验证，不代表准确率' : '未提供识别置信度';
   return (
-    <div
-      className="flex items-center gap-1"
-      title={`${confidencePercent}% confidence - ${label}`}
-      aria-label={`Transcription confidence: ${confidencePercent}%`}
-    >
-      <div
-        className={`w-2 h-2 rounded-full ${colorClass} transition-colors duration-200`}
-        role="status"
-      />
-    </div>
+    <span className="text-xs text-gray-500" title={label} aria-label={label} role="status">
+      {unverified ? '分数未验证' : '置信度未知'}
+    </span>
   );
 };

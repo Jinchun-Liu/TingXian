@@ -1,7 +1,7 @@
 use log::{debug as log_debug, error as log_error, info as log_info, warn as log_warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_store::StoreExt;
 
 use crate::{
@@ -934,7 +934,16 @@ pub async fn api_save_transcript<R: Runtime>(
     transcripts: Vec<serde_json::Value>,
     folder_path: Option<String>,
     auth_token: Option<String>,
+    exit_generation: Option<u64>,
 ) -> Result<serde_json::Value, String> {
+    // A queued post-stop save must not recreate temporary history after quit
+    // cleanup has archived it. Hold the same lifecycle guard as the exit lease.
+    let generation=exit_generation.unwrap_or(0);
+    crate::interview_exit::ensure_history_generation(&_app,generation)?;
+    let _history_write=if let Some(interview)=_app.try_state::<crate::interview::InterviewState>() {
+        Some(interview.lifecycle.clone().lock_owned().await)
+    }else{None};
+    crate::interview_exit::ensure_history_generation(&_app,generation)?;
     log_info!(
         "api_save_transcript called for meeting: {}, transcripts: {}, folder_path: {:?}, auth_token: {}",
         meeting_title,
@@ -961,10 +970,10 @@ pub async fn api_save_transcript<R: Runtime>(
             format!("Invalid transcript data format: {}. Please check the data structure.", e)
         })?;
 
-    // Log parsed segments count and first segment details
+    // Keep timing diagnostics without copying transcript contents into logs.
     if let Some(first_seg) = transcripts_to_save.first() {
-        log_debug!("First parsed segment: text='{}', audio_start_time={:?}, audio_end_time={:?}, duration={:?}",
-                   first_seg.text.chars().take(50).collect::<String>(),
+        log_debug!("First parsed segment: chars={}, audio_start_time={:?}, audio_end_time={:?}, duration={:?}",
+                   first_seg.text.chars().count(),
                    first_seg.audio_start_time,
                    first_seg.audio_end_time,
                    first_seg.duration);

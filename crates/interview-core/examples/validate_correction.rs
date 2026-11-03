@@ -15,6 +15,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         "企业员工培训的测试应该怎么做？",
         "我没有做过生产环境的 Doris 测试，面试时应该怎么说？",
         "我们先聊聊软件测试。",
+        "FastAPI 返回 JSON 时，字段缺失、null、数字零和空字符串应该如何分别测试？JSON Schema 通过为什么仍可能有业务错误？",
     ];
     let mut results = vec![];
     for input in cases {

@@ -1,0 +1,80 @@
+{
+  "kind": "synthetic_tts_regression_only",
+  "voice": "Tingting",
+  "language": "zh",
+  "rate": 170,
+  "limitations": "合成语音仅用于可复现对照，不替代真实口音、通话或人工语义评分。示例跨行业，不代表任何个人经历。",
+  "cases": [
+    {
+      "id": "brand",
+      "text": "请比较品牌认知、品牌资产与客户终身价值，不要把曝光量直接等同于转化率。",
+      "terms": [
+        "品牌认知",
+        "品牌资产",
+        "客户终身价值",
+        "不要",
+        "转化率"
+      ]
+    },
+    {
+      "id": "culture",
+      "text": "公共文化服务如何兼顾文化可及性、社区参与和策展叙事？",
+      "terms": [
+        "文化可及性",
+        "社区参与",
+        "策展叙事"
+      ]
+    },
+    {
+      "id": "supply_chain",
+      "text": "比较安全库存、需求预测、交付周期和牛鞭效应，说明库存周转率提升可能带来哪些风险。",
+      "terms": [
+        "安全库存",
+        "需求预测",
+        "牛鞭效应",
+        "库存周转率"
+      ]
+    },
+    {
+      "id": "software",
+      "text": "请解释 Kubernetes 的 readiness probe 和 liveness probe，说明滚动发布中的可用性取舍。",
+      "terms": [
+        "Kubernetes",
+        "readiness probe",
+        "liveness probe",
+        "滚动发布"
+      ]
+    },
+    {
+      "id": "research",
+      "text": "样本量只有二十，相关性不等于因果关系，置信区间也不能替代业务判断。",
+      "terms": [
+        "二十",
+        "不等于",
+        "因果关系",
+        "置信区间",
+        "不能"
+      ]
+    },
+    {
+      "id": "design",
+      "text": "无障碍设计需要关注键盘导航、焦点顺序和屏幕阅读器，不只是提高颜色对比度。",
+      "terms": [
+        "无障碍",
+        "键盘导航",
+        "焦点顺序",
+        "屏幕阅读器",
+        "不只是"
+      ]
+    },
+    {
+      "id": "english",
+      "text": "How would you evaluate stakeholder alignment, opportunity cost, and long-term customer retention?",
+      "terms": [
+        "stakeholder alignment",
+        "opportunity cost",
+        "customer retention"
+      ]
+    }
+  ]
+}

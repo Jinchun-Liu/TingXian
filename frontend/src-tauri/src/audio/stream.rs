@@ -220,6 +220,9 @@ impl AudioStream {
                 }
 
                 info!("⚠️ Stream: Core Audio processing task ended for {}", device_name);
+                // A normal stop aborts this task. EOF while capture is live
+                // is a real stream failure, not a silent success.
+                capture.report_unexpected_end();
             }
         });
 

@@ -230,12 +230,12 @@ impl RecordingManager {
         microphone_device: Option<Arc<AudioDevice>>,
         system_device: Option<Arc<AudioDevice>>,
         auto_save: bool,
-    ) -> std::result::Result<mpsc::UnboundedReceiver<AudioChunk>, RecordingStartError> {
+    ) -> std::result::Result<super::asr_queue::AsrReceiver, RecordingStartError> {
         info!("Starting recording manager (auto_save: {})", auto_save);
         if microphone_device.is_none() { self.state.disable_microphone(); }
 
         // Set up transcription channel
-        let (transcription_sender, transcription_receiver) = mpsc::unbounded_channel::<AudioChunk>();
+        let (transcription_sender, transcription_receiver) = super::asr_queue::channel(&self.state);
         let (recording_sender, recording_receiver) = mpsc::unbounded_channel::<AudioChunk>();
 
         // Start recording state first
@@ -519,6 +519,8 @@ impl RecordingManager {
     pub fn add_transcript_segment(&self, segment: super::recording_saver::TranscriptSegment) {
         self.recording_saver.add_transcript_segment(segment);
     }
+
+    pub(crate) fn transcript_buffer(&self)->Arc<std::sync::Mutex<Vec<super::recording_saver::TranscriptSegment>>> {self.recording_saver.transcript_buffer()}
 
     /// Add a transcript chunk to be saved later (legacy method)
     pub fn add_transcript_chunk(&self, text: String) {

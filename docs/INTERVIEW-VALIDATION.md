@@ -1,20 +1,27 @@
-# Public Alpha validation scope
+# v0.2.0-alpha.1 validation scope
 
-The first public source snapshot derives from local commit `a107408c962b479bb4aa3bd094108f03e0d3fa76`.
+This publication freezes development source at HEAD `8f4eeeacdff20f801cb18cf6b23916c1883b735a` plus the adaptive-answer and layout edits present at snapshot time. It includes the newer local transcription, profile-review and session features; private source history and real evaluation records are excluded. Generalization is performed only in the independent public checkout.
 
-The source baseline was exercised on Apple Silicon macOS 14.6.1 with headphones and a two-device Feishu test. The original tester confirmed separate remote/self display and context-aware follow-up, microphone off/on, no self-triggered answer calls, stop/start without restarting the app, and clear/start while capturing. These observations are limited to that environment and are not a fresh acceptance test of every public-release change.
+## Executed locally on Apple Silicon macOS
 
-The publication pass replaces personal defaults with synthetic examples and generic prompts, adds fork-specific documentation and source CI, disables upstream binary updates, and excludes private local history. It does not include the work-in-progress larger-model comparison or whole-utterance refinement.
+| Check | Result |
+| --- | --- |
+| Interview UI regressions | 17 scripts passed, including actual React controls and configurable scene settings |
+| Monitoring metrics | 10 Python tests passed |
+| Core library | 46 unit/integration tests passed, including local simulated HTTP failures, source conflicts, structured imports and context settings |
+| Native Rust library | Final full run: 289 passed, 0 failed, 4 explicitly ignored |
+| TypeScript | `tsc --noEmit --incremental false` passed |
+| Frontend production export | `next build` passed; retained upstream lint/dependency warnings |
+| Synthetic profile demo | 3/3 files imported, 10 offline retrieval queries completed, no API calls |
+| Browser preview | Generic heading and scene controls rendered; browser preview has no Tauri native bridge and is not a desktop functional test |
+| Public source scan | Passed tracked-file credential-pattern and private-artifact checks; not a security audit |
 
-Current publication checks are recorded below after execution. No live API call or real recording is part of these checks. Complete 60-minute continuous-call stability, 30 end-to-end audio latency measurements, and cross-platform acceptance remain outstanding.
+The native suite initially passed 288 tests with four explicitly ignored and one failure because FFmpeg was absent from the isolated test executable search path. The checkpoint test passed after adding the downloaded build-time FFmpeg to a temporary test PATH. The corrected full run passed all 289 runnable tests; four explicit opt-in tests remained ignored.
 
-## Checks executed for publication
+## Scope and limits
 
-- Scheduler regression: passed (source isolation, full remote turn boundary, queue limits and reset).
-- Real React control regression: passed (mic gating, stop/restart, clear/restart, Trash failure preservation).
-- TypeScript `tsc --noEmit --incremental false`: passed.
-- `interview-core`: 7 unit tests passed after replacing a personal-profile fixture with a synthetic one.
-- Upstream portable GGML verifier: 14 tests passed.
-- Tracked source scan: passed for credential patterns and excluded private artifact types; this is not a security audit.
+No real AI request, microphone capture, meeting call, signed installation package or fresh 60-minute stability run was performed for this release. Hardware/system-audio tests and the explicit real-Trash exit test remain opt-in; their ignored status is not a pass. Configurable languages are input options, not measured multilingual accuracy claims. The new neutral prompt has deterministic payload coverage but no cross-industry answer-quality acceptance.
 
-The public snapshot has not been rebuilt into a complete desktop bundle or tested in a fresh live call during this publication pass. Upstream formatting warnings remain; source checks do not apply a repository-wide reformat.
+Earlier private testing of the baseline covered separate source display, remote-only suggestions, contextual follow-ups, microphone switching and stop/clear/restart. Those observations do not establish acceptance of every change in this public version. Thirty end-to-end audio latency measurements, sustained-call behavior and cross-platform acceptance remain outstanding.
+
+Tests used synthetic data and a dummy process credential. The publication copy and its build output were isolated; the active development application was not restarted or replaced.

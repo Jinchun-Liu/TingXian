@@ -1,0 +1,31 @@
+const fs = require('node:fs');
+const assert = require('node:assert/strict');
+const ts = require('../frontend/node_modules/typescript');
+const source = fs.readFileSync(require('node:path').join(__dirname, '../frontend/src/lib/interview-latency.ts'), 'utf8');
+const compiled = ts.transpileModule(source, {compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText;
+const out = {exports:{}};new Function('module','exports',compiled)(out,out.exports);
+const {TurnLatency,latencyLabel}=out.exports;
+const trace=new TurnLatency(1000,{stable_text_unix_ms:9950,vad_to_stable_ms:1200,audio_end_to_stable_ms:2700},10000,true);
+trace.mark('submitted',1200);trace.mark('retrieval_done',1230);trace.mark('request_sent',1250);
+trace.provider({retrieval_ms:25,attempt:1});trace.provider({attempt:2});trace.mark('request_sent',1500);
+trace.observe('听写理解：为什么不能把null和零混用？',1300);
+assert.equal(trace.snapshot().stages_ms.first_useful_text,undefined,'transcript repetition is not an answer');
+trace.observe('建议回答：',1400);assert.equal(trace.snapshot().stages_ms.first_useful_text,undefined);
+trace.observe('建议回答：null',1500);trace.observe('建议回答：null 表示无值，0 是数值。',1800);
+trace.provider({elapsed_ms:600,first_text_ms:100});trace.end('done',1900);
+const record=trace.snapshot();
+assert.deepEqual(record.stages_ms,{stable_text:0,question_audio_end:-2750,submitted:200,retrieval_done:230,request_sent:250,first_model_text:300,first_useful_text:500,first_sentence:800,answer_done:900});
+assert.equal(record.request_attempts,2);assert.ok(latencyLabel(record).includes('说完→首句约 3.5 秒'));
+record.stages_ms.submitted=999;assert.equal(trace.snapshot().stages_ms.submitted,200,'export must not mutate measurement');
+trace.end('cancelled',2000);assert.equal(trace.snapshot().terminal,'done');
+for (const native of [undefined,{stable_text_unix_ms:10001,vad_to_stable_ms:10,audio_end_to_stable_ms:20},{stable_text_unix_ms:9000,vad_to_stable_ms:10,audio_end_to_stable_ms:null}]) {
+  const t=new TurnLatency(0,native,10000,true);assert.equal(t.snapshot().audio_end_basis,'unavailable');assert.equal(t.snapshot().stages_ms.question_audio_end,undefined);
+}
+const manual=new TurnLatency(0);manual.mark('submitted',0);manual.observe('建议回答：。',1);
+assert.equal(manual.snapshot().stages_ms.first_useful_text,undefined);
+manual.observe('建议回答：延迟为 1.5 秒',2);assert.equal(manual.snapshot().stages_ms.first_sentence,undefined);
+manual.end('error',3);assert.equal(manual.snapshot().stages_ms.answer_done,undefined);
+const correction=new TurnLatency(0);correction.observe('听写纠正：企业测试→契约测试。',1);correction.end('done',2);
+assert.equal(correction.snapshot().stages_ms.first_useful_text,undefined);
+assert.ok(latencyLabel(correction.snapshot()).includes('未测得'));
+console.log('PASS: queue/ASR/delivery accounting, retries, useful answer vs heading/correction, sentence boundary, manual/missing/invalid clocks, partial errors, immutable export');

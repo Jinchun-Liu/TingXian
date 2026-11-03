@@ -11,8 +11,9 @@ async fn main() -> Result<()> {
     let dense: Vec<f32> = pcm.chunks(480).filter(|frame|frame.iter().any(|v|v.abs()>0.02)).flatten().copied().collect();
     ensure!(!dense.is_empty(), "silent fixture");
     let (input_tx,input_rx)=mpsc::unbounded_channel();
-    let (output_tx,mut output_rx)=mpsc::unbounded_channel();
     let state=RecordingState::new();
+    let (output_tx,mut output_rx)=app_lib::audio::asr_queue::channel(&state);
+    state.set_utterance_refinement(true);
     let old=state.microphone_gate();
     let pipeline=AudioPipeline::new(input_rx,output_tx,state.clone(),0,48000,"test mic".into(),InputDeviceKind::Unknown,"test system".into(),InputDeviceKind::Unknown)?;
     let task=tokio::spawn(pipeline.run());
@@ -21,7 +22,7 @@ async fn main() -> Result<()> {
         for (id,frame) in data.chunks(1440).enumerate() {
             for source in [DeviceType::System,DeviceType::Microphone] {
                 let microphone_gate=if source==DeviceType::Microphone {Some(gate.clone())}else{None};
-                input_tx.send(AudioChunk{data:frame.to_vec(),sample_rate:48000,timestamp:start+(id+1) as f64*0.03,chunk_id:id as u64,device_type:source,speech_boundary:None,microphone_gate})?;
+                input_tx.send(AudioChunk{data:frame.to_vec(),sample_rate:48000,timestamp:start+(id+1) as f64*0.03,chunk_id:id as u64,device_type:source,speech_boundary:None,microphone_gate,replaces_utterance:false})?;
             }
         }
         Ok(())
@@ -31,7 +32,7 @@ async fn main() -> Result<()> {
     // Wait for an old microphone ASR prefix, proving mute happens after VAD,
     // with both emitted-prefix and buffered-tail cases in play.
     loop {
-        let chunk=tokio::time::timeout(std::time::Duration::from_secs(20),output_rx.recv()).await?.unwrap();
+        let chunk=tokio::time::timeout(std::time::Duration::from_secs(20),output_rx.recv()).await?.unwrap().chunk;
         let mic=chunk.device_type==DeviceType::Microphone;
         queued.push(chunk);
         if mic {break;}
@@ -44,7 +45,7 @@ async fn main() -> Result<()> {
     ensure!(fresh.epoch!=old.epoch && !old.enabled(),"reopen revived revoked audio");
     send(&speech,24.0,fresh.clone())?;
     drop(input_tx);task.await??;
-    while let Some(chunk)=output_rx.recv().await {queued.push(chunk);}
+    while let Some(chunk)=output_rx.recv().await {queued.push(chunk.chunk);}
     let system:Vec<_>=queued.iter().filter(|c|c.device_type==DeviceType::System).collect();
     let mic:Vec<_>=queued.iter().filter(|c|c.device_type==DeviceType::Microphone && allowed(&c.microphone_gate)).collect();
     ensure!(system.iter().map(|c|c.data.len()).sum::<usize>()>30*16000,"mic toggle disrupted system stream");

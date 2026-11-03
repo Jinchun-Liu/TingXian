@@ -2,11 +2,12 @@
  * Storage Service
  *
  * Handles all meeting storage and retrieval Tauri backend calls (SQLite persistence).
- * Pure 1-to-1 wrapper - no error handling changes, exact same behavior as direct invoke calls.
+ * Saves carry the quit generation so delayed work cannot recreate cleared history.
  */
 
 import { invoke } from '@tauri-apps/api/core';
 import { Transcript } from '@/types';
+import { interviewExit } from '@/lib/interview-exit';
 
 export interface SaveMeetingRequest {
   meetingTitle: string;
@@ -39,12 +40,18 @@ export class StorageService {
   async saveMeeting(
     meetingTitle: string,
     transcripts: Transcript[],
-    folderPath: string | null
+    folderPath: string | null,
+    expectedExitGeneration=interviewExit.generation()
   ): Promise<SaveMeetingResponse> {
+    const check=()=>{if(interviewExit.pending() || interviewExit.generation()!==expectedExitGeneration)throw Error('已取消退出清理之前的保存请求，未写回旧记录');};
+    check();
+    const exitGeneration=await invoke<number>('interview_exit_generation');
+    check();
     return invoke<SaveMeetingResponse>('api_save_transcript', {
       meetingTitle,
       transcripts,
       folderPath,
+      exitGeneration,
     });
   }
 

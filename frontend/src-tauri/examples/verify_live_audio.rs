@@ -49,22 +49,23 @@ async fn main() -> Result<()> {
     println!("PASS: 700ms thinking pause stays in one utterance; 2500ms silence closes it; prefixes never finalize");
 
     let (input_tx,input_rx) = mpsc::unbounded_channel();
-    let (output_tx,mut output_rx) = mpsc::unbounded_channel();
     let state = RecordingState::new();
+    let (output_tx,mut output_rx) = app_lib::audio::asr_queue::channel(&state);
     let pipeline = AudioPipeline::new(input_rx,output_tx,state,0,48000,
         "test microphone".into(),InputDeviceKind::Unknown,"test system".into(),InputDeviceKind::Unknown)?;
     let task = tokio::spawn(pipeline.run());
     let stereo_fixture: Vec<f32> = dense.repeat(3).iter().flat_map(|v|[*v,*v,*v]).collect();
     for (id,chunk) in stereo_fixture.chunks(1440).enumerate() {
         for source in [DeviceType::System, DeviceType::Microphone] {
-            input_tx.send(AudioChunk {data:chunk.to_vec(),sample_rate:48000,timestamp:(id+1) as f64 * 0.03,chunk_id:id as u64,device_type:source,speech_boundary:None,microphone_gate:None})?;
+            input_tx.send(AudioChunk {data:chunk.to_vec(),sample_rate:48000,timestamp:(id+1) as f64 * 0.03,chunk_id:id as u64,device_type:source,speech_boundary:None,microphone_gate:None,replaces_utterance:false})?;
         }
     }
     drop(input_tx);
     task.await??;
     let mut system = vec![]; let mut microphone = vec![];
     let mut system_ends = 0; let mut microphone_ends = 0; let mut prefix_count = 0;
-    while let Some(chunk)=output_rx.recv().await {
+    while let Some(accepted)=output_rx.recv().await {
+        let chunk=accepted.chunk;
         let boundary = chunk.speech_boundary.expect("pipeline dropped utterance boundary");
         if !boundary.is_final { prefix_count += 1; }
         match chunk.device_type {

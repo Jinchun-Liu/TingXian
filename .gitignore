@@ -98,3 +98,6 @@ profile-private/
 recordings/
 __pycache__/
 *.pyc
+
+# Public fork optional local tool directory
+.meetily-interview-tools/

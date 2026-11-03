@@ -547,7 +547,6 @@ async fn run_import<R: Runtime>(
 
     // Process each speech segment
     let mut all_transcripts: Vec<(String, f64, f64)> = Vec::new();
-    let mut total_confidence = 0.0f32;
 
     for (i, segment) in processable_segments.iter().enumerate() {
         if IMPORT_CANCELLED.load(Ordering::SeqCst) {
@@ -580,46 +579,39 @@ async fn run_import<R: Runtime>(
         }
 
         // Transcribe
-        let (text, conf) = if use_parakeet {
+        let text = if use_parakeet {
             let engine = parakeet_engine.as_ref().unwrap();
             let text = engine
                 .transcribe_audio(segment.samples.clone())
                 .await
                 .map_err(|e| anyhow!("Parakeet transcription failed on segment {}: {}", i, e))?;
-            (text, 0.9f32)
+            text
         } else {
             let engine = whisper_engine.as_ref().unwrap();
-            let (text, conf, _) = engine
+            let (text, _, _) = engine
                 .transcribe_audio_with_confidence(segment.samples.clone(), language.clone())
                 .await
                 .map_err(|e| anyhow!("Whisper transcription failed on segment {}: {}", i, e))?;
-            (text, conf)
+            text
         };
 
         let trimmed = text.trim();
         if !trimmed.is_empty() {
             debug!(
-                "Segment {}/{}: {:.1}s, conf={:.2}, text='{}'",
-                i + 1, processable_count, segment_duration_sec, conf,
+                "Segment {}/{}: {:.1}s, text='{}'",
+                i + 1, processable_count, segment_duration_sec,
                 if trimmed.len() > 80 { let mut end = 80; while !trimmed.is_char_boundary(end) { end -= 1; } &trimmed[..end] } else { trimmed }
             );
             all_transcripts.push((text, segment.start_timestamp_ms, segment.end_timestamp_ms));
-            total_confidence += conf;
         } else {
             debug!("Segment {}/{}: {:.1}s — empty transcription", i + 1, processable_count, segment_duration_sec);
         }
     }
 
     let transcribed_count = all_transcripts.len();
-    let avg_confidence = if transcribed_count > 0 {
-        total_confidence / transcribed_count as f32
-    } else {
-        0.0
-    };
-
     info!(
-        "Transcription complete: {} segments transcribed out of {}, avg confidence: {:.2}",
-        transcribed_count, processable_count, avg_confidence
+        "Transcription complete: {} segments transcribed out of {}; confidence unavailable",
+        transcribed_count, processable_count
     );
 
     // Check for cancellation
@@ -1118,7 +1110,7 @@ mod tests {
             start_timestamp_ms: 0.0,
             end_timestamp_ms: 1000.0,
             confidence: 0.9,
-            boundary: crate::audio::vad::SpeechBoundary { utterance_id: 0, is_final: true },
+            boundary: crate::audio::vad::SpeechBoundary { utterance_id: 0, is_final: true, last_voice_ms: None, timing: None },
         };
         let result = split_segment_at_silence(&segment, 25 * 16000);
         assert_eq!(result.len(), 1);
@@ -1138,7 +1130,7 @@ mod tests {
             start_timestamp_ms: 0.0,
             end_timestamp_ms: 60_000.0,
             confidence: 0.9,
-            boundary: crate::audio::vad::SpeechBoundary { utterance_id: 0, is_final: true },
+            boundary: crate::audio::vad::SpeechBoundary { utterance_id: 0, is_final: true, last_voice_ms: None, timing: None },
         };
 
         let result = split_segment_at_silence(&segment, 25 * 16000);
@@ -1163,7 +1155,7 @@ mod tests {
             start_timestamp_ms: 0.0,
             end_timestamp_ms: 60_000.0,
             confidence: 0.9,
-            boundary: crate::audio::vad::SpeechBoundary { utterance_id: 0, is_final: true },
+            boundary: crate::audio::vad::SpeechBoundary { utterance_id: 0, is_final: true, last_voice_ms: None, timing: None },
         };
 
         let result = split_segment_at_silence(&segment, 25 * 16000);

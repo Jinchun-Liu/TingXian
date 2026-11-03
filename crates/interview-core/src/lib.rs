@@ -1,5 +1,24 @@
 pub mod index;
 pub mod model;
+pub mod import_control;
+pub mod document_meta;
+pub mod facts;
+pub mod conflicts;
+pub mod structured;
+pub mod credentials;
+pub mod request_config;
+pub use request_config::RequestConfig;
+pub mod connection_probe;
+pub use connection_probe::*;
+pub use credentials::*;
 pub use index::*;
 pub use model::*;
+pub use import_control::*;
+pub use document_meta::*;
+pub use facts::*;
+pub use conflicts::*;
+pub use structured::*;
 pub type Result<T> = std::result::Result<T, String>;
+
+pub mod preferences;
+pub use preferences::InterviewPreferences;

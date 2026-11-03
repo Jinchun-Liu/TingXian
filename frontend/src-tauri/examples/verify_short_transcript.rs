@@ -19,11 +19,12 @@ async fn main() -> Result<()> {
     let language = args.get(4).and_then(|s|s.to_str()).unwrap_or("en");
     engine.load_model(model).await.context("load installed multilingual model")?;
     let start = std::time::Instant::now();
-    let (text, _, is_partial) = engine
+    let (text, confidence, is_partial) = engine
         .transcribe_audio_with_confidence(samples, Some(language.into())).await?;
+    ensure!(confidence.is_none(), "local Whisper invented an utterance confidence");
     ensure!(!text.trim().is_empty(), "spoken fixture produced no transcript");
     ensure!(!is_partial, "completed {:.2}s utterance incorrectly marked partial: {}", seconds, text);
-    println!("PASS: {:.2}s completed utterance is final; inference={}ms; text={}", seconds, start.elapsed().as_millis(), text);
+    println!("PASS: {:.2}s completed utterance is final; confidence=null; inference={}ms; text={}", seconds, start.elapsed().as_millis(), text);
     engine.unload_model().await;
     Ok(())
 }

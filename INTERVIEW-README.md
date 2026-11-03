@@ -10,9 +10,11 @@
 - `frontend/src-tauri/src/interview.rs`：资料索引、会话与模型调用命令。
 - `frontend/src-tauri/src/interview_history.rs`：历史归档和 macOS 废纸篓。
 - `crates/interview-core`：文档抽取、检索、提示词及 DeepSeek 流。
+- `crates/interview-core/src/preferences.rs`：通用场景和语言配置，空白默认值。
+- `frontend/src/components/interview/InterviewPreferences.tsx`：岗位、背景、术语和语言设置。
 - `examples/profile`：虚构的背景、简历与参考答案。
 
-`interview/questions.json` 是通用技术题样例；`selection.example.json` 相对于所选资料根目录。运行离线检索示例：
+`interview/questions.json` 是跨行业题目样例；`selection.example.json` 相对于所选资料根目录。运行离线检索示例：
 
 ```bash
 bash -c 'source scripts/interview-env.sh; cargo run -p interview-core --example validate -- examples/profile "$INTERVIEW_TOOLS/public-validation"'

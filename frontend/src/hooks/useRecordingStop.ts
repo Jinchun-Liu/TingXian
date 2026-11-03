@@ -8,6 +8,7 @@ import { useRecordingState, RecordingStatus } from '@/contexts/RecordingStateCon
 import { storageService } from '@/services/storageService';
 import { transcriptService } from '@/services/transcriptService';
 import Analytics from '@/lib/analytics';
+import { interviewExit } from '@/lib/interview-exit';
 import {
   applyPinnedSummaryLanguageToMeeting,
   detectAndCacheSummaryLanguage,
@@ -119,9 +120,13 @@ export function useRecordingStop(
 
   // Main recording stop handler
   const handleRecordingStop = useCallback(async (isCallApi: boolean) => {
+    const exitGeneration=interviewExit.generation();
+    const interrupted=()=>interviewExit.pending() || interviewExit.generation()!==exitGeneration;
+    if(interrupted())return;
     if (recordingStoppedDataRef.current) {
       await recordingStoppedDataRef.current;
     }
+    if(interrupted())return;
 
     // Guard: prevent duplicate/concurrent stop calls
     if (stopInProgressRef.current) {
@@ -161,7 +166,7 @@ export function useRecordingStop(
       });
 
       // Poll for transcription status
-      while (elapsedTime < MAX_WAIT_TIME && !transcriptionComplete) {
+      while (!interrupted() && elapsedTime < MAX_WAIT_TIME && !transcriptionComplete) {
         try {
           const status = await transcriptService.getTranscriptionStatus();
           console.log('Transcription status:', status);
@@ -198,6 +203,7 @@ export function useRecordingStop(
       // Clean up listener
       console.log('🧹 CLEANUP: Cleaning up transcription-complete listener');
       unlistenComplete();
+      if(interrupted())return;
 
       if (!transcriptionComplete && elapsedTime >= MAX_WAIT_TIME) {
         console.warn('⏰ Transcription wait timeout reached after', elapsedTime, 'ms');
@@ -229,6 +235,7 @@ export function useRecordingStop(
       // Wait a bit more to ensure all transcript state updates have been processed
       console.log('Waiting for transcript state updates to complete...');
       await new Promise(resolve => setTimeout(resolve, 500));
+      if(interrupted())return;
 
       // Save to SQLite
       // NOTE: enabled to save COMPLETE transcripts after frontend receives all updates
@@ -248,16 +255,17 @@ export function useRecordingStop(
           transcript_count: freshTranscripts.length,
           meeting_name: savedMeetingName || meetingTitle,
           folder_path: folderPath,
-          sample_text: freshTranscripts.length > 0 ? freshTranscripts[0].text.substring(0, 50) + '...' : 'none',
-          last_transcript: freshTranscripts.length > 0 ? freshTranscripts[freshTranscripts.length - 1].text.substring(0, 30) + '...' : 'none',
+          total_text_length: freshTranscripts.reduce((count, t) => count + t.text.length, 0),
         });
 
         try {
           const responseData = await storageService.saveMeeting(
             savedMeetingName || meetingTitle || 'New Meeting',  // PREFER savedMeetingName (backend source)
             freshTranscripts,
-            folderPath
+            folderPath,
+            exitGeneration
           );
+          if(interrupted())return;
 
           const meetingId = responseData.meeting_id;
           if (!meetingId) {
@@ -337,6 +345,7 @@ export function useRecordingStop(
 
           // Auto-navigate after a short delay with source parameter
           setTimeout(() => {
+            if(interrupted())return;
             router.push(`/meeting-details?id=${meetingId}&source=recording`);
             clearTranscripts()
             Analytics.trackPageView('meeting_details');
@@ -419,6 +428,7 @@ export function useRecordingStop(
     } finally {
       // Always reset the guard flag when done
       stopInProgressRef.current = false;
+      if(interviewExit.pending()){setStatus(RecordingStatus.IDLE);setIsRecordingDisabled(false);}
     }
   }, [
     setIsRecording,

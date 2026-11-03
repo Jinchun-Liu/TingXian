@@ -1,4 +1,4 @@
-//! Interview assistance only: no tools, no audio upload, no permanent chat memory.
+//! Interview assistance only: no tools, no audio upload, explicit local snapshots, no automatic chat retention.
 use interview_core::{Index, Selection, Turn, DEFAULT_ALIASES};
 use serde_json::{json, Value};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
@@ -32,13 +32,15 @@ pub fn interview_audio_level()->Value { json!({
 pub struct InterviewState {
     index: OnceCell<Index>,
     active: Mutex<Option<CancellationToken>>,
-    pub(crate) lifecycle: Mutex<()>,
+    pub(crate) lifecycle: Arc<Mutex<()>>,
+    imports: Arc<std::sync::Mutex<Option<ProfileImportJob>>>,
     network: Arc<Mutex<()>>,
     session: AtomicBool,
     key: Mutex<Option<String>>,
+    connection: crate::interview_connection::ConnectionState,
 }
 impl InterviewState {
-    async fn index(&self, app:&tauri::AppHandle)->Result<&Index,String> {
+    async fn index<R:tauri::Runtime>(&self, app:&tauri::AppHandle<R>)->Result<&Index,String> {
         self.index.get_or_try_init(||async {
             let dir=app.path().app_data_dir().map_err(|e|e.to_string())?.join("interview");
             tokio::fs::create_dir_all(&dir).await.map_err(|e|e.to_string())?;
@@ -46,30 +48,123 @@ impl InterviewState {
         }).await
     }
     async fn api_key(&self)->String { self.key.lock().await.clone().unwrap_or_else(||std::env::var("DEEPSEEK_API_KEY").unwrap_or_default()) }
-    async fn cancel(&self) { if let Some(token)=self.active.lock().await.take(){token.cancel();} }
+    async fn cancel(&self) { if let Some(token)=self.active.lock().await.take(){token.cancel();} self.connection.cancel(None); }
+    pub(crate) async fn quiesce_for_exit<R:tauri::Runtime>(&self,app:&tauri::AppHandle<R>)->Result<crate::interview_exit::ExitLease,String> {
+        self.cancel().await;
+        {
+            let mut jobs=self.imports.lock().unwrap_or_else(|e|e.into_inner());
+            if let Some(job)=jobs.as_mut().filter(|j|!["completed","cancelled","failed"].contains(&j.latest.phase.as_str())) {
+                if job.control.cancel()==interview_core::ImportCancelStatus::Requested {job.latest.phase="cancelling".into();}
+            }
+        }
+        let wait=std::time::Duration::from_secs(35);
+        let interview=tokio::time::timeout(wait,self.lifecycle.clone().lock_owned()).await.map_err(|_|"资料操作尚未结束，退出已暂停；请等待后重试")?;
+        self.cancel().await;
+        let network=tokio::time::timeout(wait,self.network.clone().lock_owned()).await.map_err(|_|"AI请求尚未退出，未清理记录；请稍后重试")?;
+        if crate::audio::recording_commands::is_recording().await {
+            crate::audio::recording_commands::stop_recording(app.clone(),crate::audio::recording_commands::RecordingArgs{save_path:String::new()}).await?;
+        }
+        let capture=tokio::time::timeout(wait,crate::audio::common::acquire_engine_lifecycle_lock()).await.map_err(|_|"语音引擎尚未空闲，退出已暂停；请等待后重试")?;
+        if crate::audio::recording_commands::is_recording().await {return Err("采集尚未结束，未清理记录".into());}
+        self.session.store(false,Ordering::SeqCst);
+        Ok(crate::interview_exit::ExitLease{_interview:interview,_network:network,_capture:capture})
+    }
 }
 
 #[tauri::command]
 pub async fn interview_status(app:tauri::AppHandle,state:State<'_,InterviewState>)->Result<Value,String> {
     let index=state.index(&app).await?;
     let aliases=index.setting("aliases").await?;
+    let documents:i64=sqlx::query_scalar("SELECT count(*) FROM documents").fetch_one(&index.pool).await.map_err(|e|e.to_string())?;
+    let chunks:i64=sqlx::query_scalar("SELECT count(*) FROM chunks").fetch_one(&index.pool).await.map_err(|e|e.to_string())?;
+    let request_config=index.request_config().await?;
     Ok(json!({"architecture":std::env::consts::ARCH,"os":std::env::consts::OS,
         "memory_bytes":sysinfo::System::new_all().total_memory(),
-        "system_version":sysinfo::System::os_version(),"key_configured":!state.api_key().await.is_empty(),
-        "model":"deepseek-flash","root":index.setting("root").await?,"suggested_root":dirs::home_dir().map(|p|p.join("Documents/InterviewProfile").to_string_lossy().into_owned()),"index_version":index.setting("version").await?,
-        "session_active":state.session.load(Ordering::SeqCst),"aliases":if aliases.is_empty(){DEFAULT_ALIASES}else{&aliases},
-        "facts":index.setting("facts").await?,"whisper_model":crate::whisper_engine::commands::whisper_get_current_model().await.unwrap_or(None),
+        "system_version":sysinfo::System::os_version(),"key_configured":!state.api_key().await.is_empty(),"connection":state.connection.snapshot(),
+        "preferences":index.preferences().await?,"model":request_config.model,"root":index.setting("root").await?,"suggested_root":dirs::home_dir().map(|p|p.join("Documents").to_string_lossy().into_owned()),"index_version":index.setting("version").await?,
+        "session_active":state.session.load(Ordering::SeqCst),"index_documents":documents,"index_chunks":chunks,"documents":index.documents().await?,"aliases":if aliases.is_empty(){DEFAULT_ALIASES}else{&aliases},
+        "facts":index.setting("facts").await?,"fact_card":index.fact_card().await?,"whisper_model":crate::whisper_engine::commands::whisper_get_current_model().await.unwrap_or(None),
         "audio_validation":"未验收；上游混合音频事件不提供可靠说话人身份"}))
 }
 #[tauri::command]
-pub async fn interview_config(app:tauri::AppHandle,state:State<'_,InterviewState>,facts:String,aliases:String,key:Option<String>)->Result<(),String> {
-    if facts.chars().count()>2200 || aliases.chars().count()>4000 {return Err("事实卡或别名过长".into());}
-    let _guard=state.lifecycle.lock().await;
+pub async fn interview_preferences_get<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>)->Result<interview_core::InterviewPreferences,String> {
+    state.index(&app).await?.preferences().await
+}
+#[tauri::command]
+pub async fn interview_preferences_save<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,preferences:interview_core::InterviewPreferences)->Result<interview_core::InterviewPreferences,String> {
+    crate::interview_exit::ensure_not_exiting(&app)?;
+    preferences.validate()?;
+    let _guard=state.lifecycle.try_lock().map_err(|_|"请先完成或取消当前操作")?;
+    crate::interview_exit::ensure_not_exiting(&app)?;
+    if state.session.load(Ordering::SeqCst) || crate::audio::recording_commands::is_recording().await {return Err("请结束当前会话后修改面试场景".into());}
+    state.index(&app).await?.set_preferences(&preferences).await?;Ok(preferences)
+}
+#[tauri::command]
+pub async fn interview_request_config_get<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>)->Result<interview_core::RequestConfig,String> {
+    state.index(&app).await?.request_config().await
+}
+#[tauri::command]
+pub async fn interview_request_config_save<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,config:interview_core::RequestConfig)->Result<interview_core::RequestConfig,String> {
+    crate::interview_exit::ensure_not_exiting(&app)?;
+    config.validate()?;
+    let _guard=state.lifecycle.try_lock().map_err(|_|"请先完成或取消当前操作")?;
+    crate::interview_exit::ensure_not_exiting(&app)?;
+    if state.session.load(Ordering::SeqCst) || crate::audio::recording_commands::is_recording().await {return Err("请结束当前会话后修改回答请求设置".into());}
+    state.index(&app).await?.set_request_config(&config).await?;state.connection.invalidate();Ok(config)
+}
+#[tauri::command]
+pub async fn interview_config<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,facts:Option<String>,aliases:String,key:Option<String>)->Result<(),String> {
+    if aliases.chars().count()>4000 {return Err("别名过长".into());}
+    if interview_core::contains_credential(&aliases) {return Err("别名含API凭证格式，未保存；请将凭证放入专用API Key输入框".into());}
+    let _guard=state.lifecycle.try_lock().map_err(|_|"请先完成或取消当前资料操作")?;
     if state.session.load(Ordering::SeqCst){return Err("请结束本次会话后修改资料配置".into());}
     let index=state.index(&app).await?;
-    index.set("facts",&facts).await?;index.set("aliases",&aliases).await?;
-    if let Some(key)=key {if !key.trim().is_empty(){*state.key.lock().await=Some(key.trim().into());}}
+    if let Some(text)=facts {if text!=index.fact_card().await?.text {return Err("请使用事实更正入口核对来源并确认，普通配置不会覆盖事实卡".into());}}
+    index.set("aliases",&aliases).await?;
+    if let Some(key)=key {if !key.trim().is_empty(){*state.key.lock().await=Some(key.trim().into());state.connection.invalidate();}}
     Ok(())
+}
+#[tauri::command]
+pub fn interview_connection_status(state:State<'_,InterviewState>)->crate::interview_connection::ConnectionReport {state.connection.snapshot()}
+#[tauri::command]
+pub fn interview_connection_cancel(state:State<'_,InterviewState>,check_id:String)->crate::interview_connection::ConnectionReport {state.connection.cancel(Some(&check_id))}
+#[tauri::command]
+pub async fn interview_connection_test<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,check_id:String,confirmed:bool)->Result<crate::interview_connection::ConnectionReport,String> {
+    connection_test_with(&app,&state,check_id,confirmed,|key,config,cancel|async move {interview_core::probe_connection(&key,&config,cancel).await}).await
+}
+async fn connection_test_with<R,F,Fut>(app:&tauri::AppHandle<R>,state:&InterviewState,check_id:String,confirmed:bool,runner:F)->Result<crate::interview_connection::ConnectionReport,String>
+where R:tauri::Runtime,F:FnOnce(String,interview_core::RequestConfig,CancellationToken)->Fut,Fut:std::future::Future<Output=interview_core::ProbeOutcome> {
+    if !confirmed {return Err("请点击连接测试后再发送固定测试文字".into());}
+    crate::interview_exit::ensure_not_exiting(app)?;
+    let _guard=state.lifecycle.try_lock().map_err(|_|"请先完成或取消当前操作")?;
+    crate::interview_exit::ensure_not_exiting(app)?;
+    if state.session.load(Ordering::SeqCst) || crate::audio::recording_commands::is_recording().await {return Err("请结束当前会话后测试连接".into());}
+    let _network=state.network.try_lock().map_err(|_|"模型请求仍在结束，请稍后测试连接")?;
+    let key=state.api_key().await;if key.trim().is_empty(){return Err("尚未配置 API Key；请先在资料与设置中填写".into());}
+    let config=state.index(app).await?.request_config().await?;
+    let cancel=state.connection.begin(&check_id,&config.model)?;
+    if let Err(error)=crate::interview_exit::ensure_not_exiting(app) {
+        state.connection.cancel(Some(&check_id));
+        state.connection.finish(&check_id,interview_core::ProbeOutcome{success:false,message:error.clone(),elapsed_ms:0,attempts:0,total_tokens:None})?;
+        return Err(error);
+    }
+    let mut result=runner(key.clone(),config,cancel).await;
+    result.message=interview_core::redact_credentials(&result.message,Some(&key));
+    state.connection.finish(&check_id,result)
+}
+#[tauri::command]
+pub async fn profile_facts_correct<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,update:interview_core::FactCorrection)->Result<interview_core::FactCard,String> {
+    let _guard=state.lifecycle.try_lock().map_err(|_|"请先完成或取消当前资料操作")?;
+    if state.session.load(Ordering::SeqCst) {return Err("会话期间事实卡已锁定，请先结束会话再更正".into());}
+    state.index(&app).await?.correct_facts(update).await
+}
+#[tauri::command]
+pub async fn profile_facts_current<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>)->Result<interview_core::FactCard,String> {
+    state.index(&app).await?.fact_card().await
+}
+#[tauri::command]
+pub async fn profile_facts_history<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,before:Option<i64>)->Result<interview_core::FactHistory,String> {
+    state.index(&app).await?.fact_history(before).await
 }
 #[tauri::command]
 pub async fn profile_choose(app:tauri::AppHandle)->Result<Option<String>,String> {
@@ -80,26 +175,338 @@ pub async fn profile_scan(root:String)->Result<Vec<interview_core::Candidate>,St
     tauri::async_runtime::spawn_blocking(move||interview_core::scan(&root)).await.map_err(|e|e.to_string())?
 }
 #[tauri::command]
-pub async fn profile_import(app:tauri::AppHandle,state:State<'_,InterviewState>,root:String,selected:Vec<Selection>)->Result<interview_core::ImportReport,String> {
-    let _guard=state.lifecycle.lock().await;
-    if state.session.load(Ordering::SeqCst){return Err("会话期间索引已锁定，请先结束会话".into());}
+pub async fn profile_structured_preview(state:State<'_,InterviewState>,root:String,path:String)->Result<interview_core::StructuredPreview,String> {
+    let _guard=state.lifecycle.try_lock().map_err(|_|"请先完成或取消当前资料操作")?;
+    if state.session.load(Ordering::SeqCst){return Err("请结束会话后预览新的资料文件".into());}
     let python=std::env::var("INTERVIEW_PYTHON").unwrap_or_else(|_|"python3".into());
-    state.index(&app).await?.import(&root,selected,&python).await
+    interview_core::preview_structured(&root,&path,&python).await
+}
+#[derive(Clone, serde::Serialize)]
+pub struct ProfileImportEvent {
+    import_id: String,
+    phase: String,
+    completed: usize,
+    total: usize,
+    path: Option<String>,
+    report: Option<interview_core::ImportReport>,
+    message: Option<String>,
+}
+struct ProfileImportJob { control: interview_core::ImportControl, latest: ProfileImportEvent }
+fn publish_import(app:&tauri::AppHandle, jobs:&std::sync::Mutex<Option<ProfileImportJob>>, event:ProfileImportEvent) {
+    let mut slot=jobs.lock().unwrap_or_else(|e|e.into_inner());
+    if let Some(job)=slot.as_mut().filter(|job|job.latest.import_id==event.import_id) {
+        job.latest=event.clone();
+        let _=app.emit("profile-import",event);
+    }
 }
 #[tauri::command]
-pub async fn rag_search(app:tauri::AppHandle,state:State<'_,InterviewState>,question:String)->Result<Vec<interview_core::Evidence>,String> {
+pub async fn profile_import(app:tauri::AppHandle,state:State<'_,InterviewState>,import_id:String,root:String,selected:Vec<Selection>)->Result<(),String> {
+    crate::interview_exit::ensure_not_exiting(&app)?;
+    if import_id.is_empty() || import_id.len()>100 || !import_id.chars().all(|c|c.is_ascii_alphanumeric() || c=='-') {return Err("导入任务 ID 无效".into());}
+    let guard=state.lifecycle.clone().try_lock_owned().map_err(|_|"另一项操作正在进行，请稍后再导入")?;
+    if state.session.load(Ordering::SeqCst){return Err("会话期间索引已锁定，请先结束会话".into());}
+    let index=state.index(&app).await?.clone();
+    let python=std::env::var("INTERVIEW_PYTHON").unwrap_or_else(|_|"python3".into());
+    let control=interview_core::ImportControl::default();
+    let initial=ProfileImportEvent {import_id:import_id.clone(),phase:"starting".into(),completed:0,total:selected.len(),path:None,report:None,message:None};
+    let jobs=state.imports.clone();
+    *jobs.lock().unwrap_or_else(|e|e.into_inner())=Some(ProfileImportJob {control:control.clone(),latest:initial});
+    tauri::async_runtime::spawn(async move {
+        // Supervise the task so an unexpected parser/tokenizer panic cannot
+        // leave the UI permanently busy or retain the lifecycle lock.
+        let progress_app=app.clone();let progress_jobs=jobs.clone();let progress_id=import_id.clone();
+        let result=tauri::async_runtime::spawn(async move {
+            index.import_controlled(&root,selected,&python,&control,|progress| {
+                publish_import(&progress_app,&progress_jobs,ProfileImportEvent {import_id:progress_id.clone(),phase:progress.phase,completed:progress.completed,total:progress.total,path:progress.path,report:None,message:None});
+            }).await
+        }).await.unwrap_or_else(|_|Err("导入任务异常结束，请检查资料后重试".into()));
+        let (phase,report,message)=match result {
+            Ok(report)=>("completed",Some(report),None),
+            Err(message) if message==interview_core::IMPORT_CANCELLED =>("cancelled",None,Some(message)),
+            Err(message)=>("failed",None,Some(message)),
+        };
+        let total=jobs.lock().unwrap_or_else(|e|e.into_inner()).as_ref().map(|job|job.latest.total).unwrap_or(0);
+        drop(guard);
+        publish_import(&app,&jobs,ProfileImportEvent {import_id,phase:phase.into(),completed:report.as_ref().map(|r|r.included).unwrap_or(0),total,path:None,report,message});
+    });
+    Ok(())
+}
+#[tauri::command]
+pub fn profile_import_cancel(state:State<'_,InterviewState>,import_id:String)->Result<interview_core::ImportCancelStatus,String> {
+    let mut jobs=state.imports.lock().unwrap_or_else(|e|e.into_inner());
+    let job=jobs.as_mut().filter(|job|job.latest.import_id==import_id).ok_or("导入任务已变更，请刷新状态")?;
+    if ["completed","cancelled","failed"].contains(&job.latest.phase.as_str()) {return Ok(interview_core::ImportCancelStatus::Finished);}
+    let status=job.control.cancel();
+    if status==interview_core::ImportCancelStatus::Requested { job.latest.phase="cancelling".into(); }
+    Ok(status)
+}
+#[tauri::command]
+pub fn profile_import_status(state:State<'_,InterviewState>)->Option<ProfileImportEvent> {
+    state.imports.lock().unwrap_or_else(|e|e.into_inner()).as_ref().map(|job|job.latest.clone())
+}
+
+#[tauri::command]
+pub async fn profile_document_update<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,update:interview_core::DocumentUpdate)->Result<(),String> {
+    let _guard=state.lifecycle.try_lock().map_err(|_|"请先完成或取消当前资料操作")?;
+    if state.session.load(Ordering::SeqCst) {return Err("会话期间索引已锁定，请先结束会话再核对资料".into());}
+    state.index(&app).await?.update_document(update).await
+}
+#[tauri::command]
+pub async fn profile_document_segments<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,path:String,expected_root:String,expected_hash:String)->Result<Vec<interview_core::Segment>,String> {
+    state.index(&app).await?.document_segments(&path,&expected_root,&expected_hash).await
+}
+#[tauri::command]
+pub async fn profile_index_clear<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>)->Result<crate::interview_index::IndexClearReport,String> {
+    let _guard=state.lifecycle.try_lock().map_err(|_|"请先完成或取消当前操作，再清除资料索引")?;
+    if state.session.load(Ordering::SeqCst) {return Err("会话期间索引已锁定，请先结束会话再清除索引".into());}
+    let index=state.index(&app).await?;
+    let root=app.path().app_data_dir().map_err(|e|e.to_string())?.join("interview");
+    crate::interview_index::clear_index_with(index,&root,crate::interview_history::move_to_trash).await
+}
+
+#[cfg(test)]
+mod import_command_tests {
+    use super::*;
+    #[tokio::test]
+    async fn connection_checks_require_explicit_action_share_locks_and_cancel_without_touching_interview_history() {
+        use crate::interview_connection::CheckStatus;
+        let state=InterviewState::default();let root=std::env::temp_dir().join(format!("interview-connection-{}",uuid::Uuid::new_v4()));std::fs::create_dir(&root).unwrap();
+        let index=Index::open(&root.join("profile.sqlite")).await.unwrap();
+        index.correct_facts(interview_core::FactCorrection{expected_version:0,text:"SYNTHETIC_PRIVATE_FACT_NEVER_SENT".into(),source_note:"Synthetic fixture".into(),sources:vec![],reason:"Synthetic connection isolation test".into(),confirmed:true}).await.unwrap();
+        assert!(state.index.set(index).is_ok());*state.key.lock().await=Some("synthetic-configured-key".into());
+        let app=tauri::test::mock_builder().manage(state).manage(crate::interview_exit::ExitState::default()).build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let state=app.state::<InterviewState>();let id=uuid::Uuid::new_v4().to_string();
+        let forbidden=|_:String,_:interview_core::RequestConfig,_:CancellationToken|async {panic!("preflight must not invoke a network runner")};
+        assert!(connection_test_with(app.handle(),&state,id.clone(),false,forbidden).await.is_err());
+        state.session.store(true,Ordering::SeqCst);assert!(connection_test_with(app.handle(),&state,id.clone(),true,forbidden).await.is_err());state.session.store(false,Ordering::SeqCst);
+        let started=Arc::new(tokio::sync::Notify::new());let signal=started.clone();
+        let running=connection_test_with(app.handle(),&state,id.clone(),true,move |key,config,cancel|async move {
+            assert_eq!(key,"synthetic-configured-key");assert_eq!(config,interview_core::RequestConfig::default());signal.notify_one();cancel.cancelled().await;
+            interview_core::ProbeOutcome{success:false,message:"已取消".into(),elapsed_ms:10,attempts:1,total_tokens:None}
+        });
+        let control=async {
+            started.notified().await;assert_eq!(state.connection.snapshot().status,CheckStatus::Checking);
+            assert!(state.lifecycle.try_lock().is_err());assert!(state.network.try_lock().is_err());
+            assert!(connection_test_with(app.handle(),&state,uuid::Uuid::new_v4().to_string(),true,forbidden).await.is_err());
+            state.cancel().await;
+        };
+        let (result,())=tokio::join!(running,control);let report=result.unwrap();assert_eq!(report.status,CheckStatus::Cancelled);
+        assert!(state.lifecycle.try_lock().is_ok());assert!(state.network.try_lock().is_ok());assert!(!state.session.load(Ordering::SeqCst));assert!(state.active.lock().await.is_none());
+        let index=state.index.get().unwrap();assert_eq!(index.setting("facts").await.unwrap(),"SYNTHETIC_PRIVATE_FACT_NEVER_SENT");assert!(index.documents().await.unwrap().is_empty());
+        let report=connection_test_with(app.handle(),&state,uuid::Uuid::new_v4().to_string(),true,|key,_,_|async move {interview_core::ProbeOutcome{success:false,message:format!("synthetic failure {key}"),elapsed_ms:2,attempts:1,total_tokens:None}}).await.unwrap();
+        assert!(!report.message.contains("synthetic-configured-key"));assert_eq!(report.status,CheckStatus::Failed);
+    }
+    #[test]
+    fn preferences_ipc_rejects_active_session_and_preserves_valid_configuration() {
+        let state=InterviewState::default();let lifecycle=state.lifecycle.clone();
+        let root=std::env::temp_dir().join(format!("interview-preferences-ipc-{}",uuid::Uuid::new_v4()));std::fs::create_dir(&root).unwrap();
+        assert!(state.index.set(tauri::async_runtime::block_on(Index::open(&root.join("profile.sqlite"))).unwrap()).is_ok());
+        let app=tauri::test::mock_builder().manage(state).manage(crate::interview_exit::ExitState::default())
+            .invoke_handler(tauri::generate_handler![interview_preferences_get,interview_preferences_save])
+            .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let window=tauri::WebviewWindowBuilder::new(&app,"test",Default::default()).build().unwrap();
+        let invoke=|cmd:&str,body:Value|tauri::test::get_ipc_response(&window,tauri::webview::InvokeRequest {cmd:cmd.into(),callback:tauri::ipc::CallbackFn(0),error:tauri::ipc::CallbackFn(1),url:"tauri://localhost".parse().unwrap(),body:tauri::ipc::InvokeBody::Json(body),headers:Default::default(),invoke_key:tauri::test::INVOKE_KEY.to_string()});
+        let mut custom=serde_json::to_value(interview_core::InterviewPreferences::default()).unwrap();custom["role"]="策展助理".into();custom["answer_language"]="en".into();
+        let save=||invoke("interview_preferences_save",json!({"preferences":custom}));
+        let guard=tauri::async_runtime::block_on(lifecycle.lock());assert!(save().is_err());drop(guard);
+        let state=app.state::<InterviewState>();state.session.store(true,Ordering::SeqCst);assert!(save().is_err());state.session.store(false,Ordering::SeqCst);
+        assert_eq!(save().unwrap().deserialize::<Value>().unwrap(),custom);
+        let mut bad=custom.clone();bad["transcription_language"]="invalid".into();assert!(invoke("interview_preferences_save",json!({"preferences":bad})).is_err());
+        assert_eq!(invoke("interview_preferences_get",json!({})).unwrap().deserialize::<Value>().unwrap(),custom);
+    }
+    #[test]
+    fn request_config_ipc_preserves_active_session_and_busy_boundaries() {
+        let state=InterviewState::default();let lifecycle=state.lifecycle.clone();
+        let root=std::env::temp_dir().join(format!("interview-request-config-ipc-{}",uuid::Uuid::new_v4()));std::fs::create_dir(&root).unwrap();
+        assert!(state.index.set(tauri::async_runtime::block_on(Index::open(&root.join("profile.sqlite"))).unwrap()).is_ok());
+        let app=tauri::test::mock_builder().manage(state).manage(crate::interview_exit::ExitState::default())
+            .invoke_handler(tauri::generate_handler![interview_request_config_get,interview_request_config_save,interview_connection_status,interview_connection_cancel,interview_connection_test,crate::interview_exit::interview_exit_request])
+            .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let window=tauri::WebviewWindowBuilder::new(&app,"test",Default::default()).build().unwrap();
+        let invoke=|cmd:&str,body:Value|tauri::test::get_ipc_response(&window,tauri::webview::InvokeRequest {cmd:cmd.into(),callback:tauri::ipc::CallbackFn(0),error:tauri::ipc::CallbackFn(1),url:"tauri://localhost".parse().unwrap(),body:tauri::ipc::InvokeBody::Json(body),headers:Default::default(),invoke_key:tauri::test::INVOKE_KEY.to_string()});
+        let defaults=serde_json::to_value(interview_core::RequestConfig::default()).unwrap();
+        assert_eq!(invoke("interview_request_config_get",json!({})).unwrap().deserialize::<Value>().unwrap(),defaults);
+        assert_eq!(invoke("interview_connection_status",json!({})).unwrap().deserialize::<Value>().unwrap()["status"],"untested");
+        let cancelled_id=uuid::Uuid::new_v4().to_string();
+        assert!(invoke("interview_connection_test",json!({"checkId":cancelled_id,"confirmed":false})).unwrap_err().to_string().contains("请点击连接测试"));
+        assert!(invoke("interview_connection_cancel",json!({"checkId":cancelled_id})).is_ok());
+        assert!(app.state::<InterviewState>().connection.begin(&cancelled_id,"synthetic-model").is_err());
+        let passed_id=uuid::Uuid::new_v4().to_string();app.state::<InterviewState>().connection.begin(&passed_id,"deepseek-flash").unwrap();
+        app.state::<InterviewState>().connection.finish(&passed_id,interview_core::ProbeOutcome{success:true,message:"ok".into(),elapsed_ms:1,attempts:1,total_tokens:Some(9)}).unwrap();
+        let custom=json!({"model":"synthetic-model","connect_timeout_secs":2,"first_answer_warning_secs":3,"total_timeout_secs":10});
+        let save=||invoke("interview_request_config_save",json!({"config":custom}));
+        let guard=tauri::async_runtime::block_on(lifecycle.lock_owned());assert!(save().is_err());drop(guard);
+        app.state::<InterviewState>().session.store(true,Ordering::SeqCst);assert!(save().is_err());
+        app.state::<InterviewState>().session.store(false,Ordering::SeqCst);assert_eq!(save().unwrap().deserialize::<Value>().unwrap(),custom);
+        assert_eq!(invoke("interview_connection_status",json!({})).unwrap().deserialize::<Value>().unwrap()["status"],"untested");
+        let mut bad=custom.clone();bad["total_timeout_secs"]=2.into();assert!(invoke("interview_request_config_save",json!({"config":bad})).is_err());
+        let mut bad=custom.clone();bad["extra"]=true.into();assert!(invoke("interview_request_config_save",json!({"config":bad})).is_err());
+        assert_eq!(invoke("interview_request_config_get",json!({})).unwrap().deserialize::<Value>().unwrap(),custom);
+        assert!(invoke("interview_exit_request",json!({"restart":false})).is_ok());assert!(save().is_err());
+        assert!(!app.state::<InterviewState>().session.load(Ordering::SeqCst));
+        assert!(tauri::async_runtime::block_on(app.state::<InterviewState>().active.lock()).is_none());
+    }
+    #[test]
+    fn structured_preview_ipc_is_read_only_and_rejects_busy_or_active_session() {
+        let state=InterviewState::default();let lifecycle=state.lifecycle.clone();
+        let root=std::env::temp_dir().join(format!("interview-structured-ipc-{}",uuid::Uuid::new_v4()));std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("fields.json"),r#"{"topic":"synthetic preview","zero":0,"empty":"","nil":null}"#).unwrap();
+        let app=tauri::test::mock_builder().manage(state).invoke_handler(tauri::generate_handler![profile_structured_preview])
+            .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let webview=tauri::WebviewWindowBuilder::new(&app,"test",Default::default()).build().unwrap();
+        let invoke=|path:&str|tauri::test::get_ipc_response(&webview,tauri::webview::InvokeRequest {
+            cmd:"profile_structured_preview".into(),callback:tauri::ipc::CallbackFn(0),error:tauri::ipc::CallbackFn(1),url:"tauri://localhost".parse().unwrap(),
+            body:tauri::ipc::InvokeBody::Json(json!({"root":root,"path":path})),headers:Default::default(),invoke_key:tauri::test::INVOKE_KEY.to_string()});
+        let guard=tauri::async_runtime::block_on(lifecycle.lock_owned());assert!(invoke("fields.json").is_err());drop(guard);
+        let state=app.state::<InterviewState>();state.session.store(true,Ordering::SeqCst);assert!(invoke("fields.json").is_err());state.session.store(false,Ordering::SeqCst);
+        assert!(invoke("../fields.json").is_err());
+        let preview=invoke("fields.json").unwrap().deserialize::<Value>().unwrap();
+        assert_eq!(preview["path"],"fields.json");assert_eq!(preview["file_hash"].as_str().unwrap().len(),64);assert_eq!(preview["fields"].as_array().unwrap().len(),5);
+        assert!(state.index.get().is_none(),"preview must not initialize or mutate the real profile database");assert!(tauri::async_runtime::block_on(state.active.lock()).is_none());assert!(!state.session.load(Ordering::SeqCst));
+    }
+    #[test]
+    fn local_search_returns_both_conflicting_sources_without_model_or_fact_mutation() {
+        let state=InterviewState::default();let root=std::env::temp_dir().join(format!("interview-conflicts-ipc-{}",uuid::Uuid::new_v4()));std::fs::create_dir_all(root.join("source")).unwrap();
+        std::fs::write(root.join("source/a.md"),"本科毕业时间：2027年7月。").unwrap();std::fs::write(root.join("source/b.md"),"本科毕业时间：2026年7月。").unwrap();
+        let index=tauri::async_runtime::block_on(Index::open(&root.join("synthetic.sqlite"))).unwrap();
+        let selected=["a.md","b.md"].into_iter().map(|path|Selection {path:path.into(),kind:"personal".into(),allow_external:false,structured:None}).collect();
+        tauri::async_runtime::block_on(index.import(root.join("source").to_str().unwrap(),selected,"unused")).unwrap();assert!(state.index.set(index).is_ok());let lifecycle=state.lifecycle.clone();
+        let app=tauri::test::mock_builder().manage(state).invoke_handler(tauri::generate_handler![rag_search]).build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let webview=tauri::WebviewWindowBuilder::new(&app,"test",Default::default()).build().unwrap();
+        let invoke=||tauri::test::get_ipc_response(&webview,tauri::webview::InvokeRequest {cmd:"rag_search".into(),callback:tauri::ipc::CallbackFn(0),error:tauri::ipc::CallbackFn(1),url:"tauri://localhost".parse().unwrap(),body:tauri::ipc::InvokeBody::Json(json!({"question":"本科毕业时间"})),headers:Default::default(),invoke_key:tauri::test::INVOKE_KEY.to_string()});
+        let guard=tauri::async_runtime::block_on(lifecycle.lock_owned());assert!(invoke().is_err());drop(guard);
+        let review=invoke().unwrap().deserialize::<Value>().unwrap();assert_eq!(review["evidence"].as_array().unwrap().len(),2);assert_eq!(review["conflicts"].as_array().unwrap().len(),1);
+        let state=app.state::<InterviewState>();assert!(!state.session.load(Ordering::SeqCst));assert!(tauri::async_runtime::block_on(state.active.lock()).is_none());assert_eq!(tauri::async_runtime::block_on(state.index.get().unwrap().fact_card()).unwrap().version,0);
+    }
+    #[test]
+    fn fact_commands_require_confirmation_and_cannot_be_bypassed_by_config() {
+        let state=InterviewState::default();let root=std::env::temp_dir().join(format!("interview-facts-ipc-{}",uuid::Uuid::new_v4()));std::fs::create_dir(&root).unwrap();
+        let index=tauri::async_runtime::block_on(Index::open(&root.join("synthetic.sqlite"))).unwrap();
+        tauri::async_runtime::block_on(index.set("aliases","original alias")).unwrap();assert!(state.index.set(index).is_ok());let lifecycle=state.lifecycle.clone();
+        let app=tauri::test::mock_builder().manage(state).invoke_handler(tauri::generate_handler![profile_facts_correct,profile_facts_current,profile_facts_history,interview_config])
+            .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let webview=tauri::WebviewWindowBuilder::new(&app,"test",Default::default()).build().unwrap();
+        let invoke=|cmd:&str,body:Value|tauri::test::get_ipc_response(&webview,tauri::webview::InvokeRequest {cmd:cmd.into(),callback:tauri::ipc::CallbackFn(0),error:tauri::ipc::CallbackFn(1),url:"tauri://localhost".parse().unwrap(),body:tauri::ipc::InvokeBody::Json(body),headers:Default::default(),invoke_key:tauri::test::INVOKE_KEY.to_string()});
+        let update=json!({"update":{"expected_version":0,"text":"synthetic checked fact","source_note":"Synthetic self attestation","sources":[],"reason":"Synthetic correction","confirmed":true}});
+        let guard=tauri::async_runtime::block_on(lifecycle.lock_owned());assert!(invoke("profile_facts_correct",update.clone()).is_err());drop(guard);
+        let state=app.state::<InterviewState>();state.session.store(true,Ordering::SeqCst);
+        assert!(invoke("profile_facts_correct",update.clone()).is_err());assert!(invoke("profile_facts_current",json!({})).is_ok());
+        state.session.store(false,Ordering::SeqCst);
+        let mut unconfirmed=update.clone();unconfirmed["update"]["confirmed"]=json!(false);assert!(invoke("profile_facts_correct",unconfirmed).is_err());
+        let corrected=invoke("profile_facts_correct",update.clone()).unwrap().deserialize::<Value>().unwrap();assert_eq!(corrected["version"],1);
+        assert!(invoke("profile_facts_correct",update).is_err());
+        assert!(invoke("interview_config",json!({"facts":"bypass attempt","aliases":"should not change","key":"synthetic-key-placeholder"})).is_err());
+        assert_eq!(tauri::async_runtime::block_on(state.index.get().unwrap().setting("aliases")).unwrap(),"original alias");assert!(tauri::async_runtime::block_on(state.key.lock()).is_none());
+        assert!(invoke("interview_config",json!({"aliases":"updated alias","key":null})).is_ok());
+        let synthetic=format!("sk-{}","synthetic01234567".repeat(2));
+        assert!(invoke("interview_config",json!({"aliases":format!("值为{synthetic}"),"key":null})).is_err());
+        assert_eq!(tauri::async_runtime::block_on(state.index.get().unwrap().setting("aliases")).unwrap(),"updated alias");
+        let checked=uuid::Uuid::new_v4().to_string();state.connection.begin(&checked,"deepseek-flash").unwrap();
+        state.connection.finish(&checked,interview_core::ProbeOutcome{success:true,message:"ok".into(),elapsed_ms:1,attempts:1,total_tokens:None}).unwrap();
+        assert!(invoke("interview_config",json!({"aliases":"updated alias","key":"synthetic-replacement-key"})).is_ok());
+        assert_eq!(state.connection.snapshot().status,crate::interview_connection::CheckStatus::Untested);
+        let history=invoke("profile_facts_history",json!({"before":null})).unwrap().deserialize::<Value>().unwrap();assert_eq!(history["versions"].as_array().unwrap().len(),2);assert_eq!(history["versions"][0]["text"],"synthetic checked fact");
+    }
+    #[test]
+    fn document_review_ipc_checks_identity_and_session_without_touching_real_profile() {
+        let state=InterviewState::default();
+        let root=std::env::temp_dir().join(format!("interview-document-ipc-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();std::fs::create_dir(root.join("source")).unwrap();
+        std::fs::write(root.join("source/doc.md"),"synthetic review snapshot").unwrap();
+        let index=tauri::async_runtime::block_on(Index::open(&root.join("synthetic.sqlite"))).unwrap();
+        tauri::async_runtime::block_on(index.import(root.join("source").to_str().unwrap(),vec![interview_core::Selection {path:"doc.md".into(),kind:"technical".into(),allow_external:false,structured:None}],"unused")).unwrap();
+        let doc=tauri::async_runtime::block_on(index.documents()).unwrap().remove(0);
+        assert!(state.index.set(index).is_ok());let lifecycle=state.lifecycle.clone();
+        let app=tauri::test::mock_builder().manage(state).invoke_handler(tauri::generate_handler![profile_document_update,profile_document_segments])
+            .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let webview=tauri::WebviewWindowBuilder::new(&app,"test",Default::default()).build().unwrap();
+        let invoke=|cmd:&str,body:Value|tauri::test::get_ipc_response(&webview,tauri::webview::InvokeRequest {
+            cmd:cmd.into(),callback:tauri::ipc::CallbackFn(0),error:tauri::ipc::CallbackFn(1),url:"tauri://localhost".parse().unwrap(),
+            body:tauri::ipc::InvokeBody::Json(body),headers:Default::default(),invoke_key:tauri::test::INVOKE_KEY.to_string(),
+        });
+        let update=json!({"update":{"path":doc.path,"expected_root":doc.root,"expected_hash":doc.hash,"confirmed":true,"valid_from":null,"valid_until":"2026-12-31"}});
+        let preview=json!({"path":doc.path,"expectedRoot":doc.root,"expectedHash":doc.hash});
+        let guard=tauri::async_runtime::block_on(lifecycle.lock_owned());
+        assert!(invoke("profile_document_update",update.clone()).is_err());drop(guard);
+        let state=app.state::<InterviewState>();state.session.store(true,Ordering::SeqCst);
+        assert!(invoke("profile_document_update",update.clone()).is_err());
+        assert!(invoke("profile_document_segments",preview.clone()).is_ok());
+        state.session.store(false,Ordering::SeqCst);
+        let mut stale=update.clone();stale["update"]["expected_hash"]=json!("stale");
+        assert!(invoke("profile_document_update",stale).is_err());
+        assert!(invoke("profile_document_update",update).is_ok());
+        let docs=tauri::async_runtime::block_on(state.index.get().unwrap().documents()).unwrap();
+        assert_eq!(docs[0].metadata.confirmation,interview_core::Confirmation::Confirmed);
+        let segments=invoke("profile_document_segments",preview.clone()).unwrap().deserialize::<Value>().unwrap();
+        assert!(segments[0]["text"].as_str().unwrap().contains("synthetic review snapshot"));
+        let mut stale=preview;stale["expectedRoot"]=json!("/stale/root");
+        assert!(invoke("profile_document_segments",stale).is_err());
+    }
+    #[test]
+    fn cancel_uses_real_ipc_and_remains_available_while_lifecycle_is_locked() {
+        let state=InterviewState::default();
+        let control=interview_core::ImportControl::default();
+        *state.imports.lock().unwrap()=Some(ProfileImportJob {control:control.clone(),latest:ProfileImportEvent {
+            import_id:"synthetic-import-1".into(),phase:"parsing".into(),completed:0,total:1,path:None,report:None,message:None,
+        }});
+        let _lifecycle=tauri::async_runtime::block_on(state.lifecycle.clone().lock_owned());
+        let app=tauri::test::mock_builder().manage(state)
+            .invoke_handler(tauri::generate_handler![profile_import_cancel,profile_import_status])
+            .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let webview=tauri::WebviewWindowBuilder::new(&app,"test",Default::default()).build().unwrap();
+        let invoke=|cmd:&str,body:Value| tauri::test::get_ipc_response(&webview,tauri::webview::InvokeRequest {
+            cmd:cmd.into(),callback:tauri::ipc::CallbackFn(0),error:tauri::ipc::CallbackFn(1),url:"tauri://localhost".parse().unwrap(),
+            body:tauri::ipc::InvokeBody::Json(body),headers:Default::default(),invoke_key:tauri::test::INVOKE_KEY.to_string(),
+        });
+        assert!(invoke("profile_import_cancel",json!({"importId":"stale-job"})).is_err());
+        assert!(control.check().is_ok());
+        let result=invoke("profile_import_cancel",json!({"importId":"synthetic-import-1"})).unwrap().deserialize::<Value>().unwrap();
+        assert_eq!(result,"requested");assert_eq!(control.check().unwrap_err(),interview_core::IMPORT_CANCELLED);
+        let status=invoke("profile_import_status",json!({})).unwrap().deserialize::<Value>().unwrap();
+        assert_eq!(status["phase"],"cancelling");assert_eq!(status["import_id"],"synthetic-import-1");
+    }
+    #[test]
+    fn index_clear_ipc_refuses_live_session_and_busy_lifecycle_then_handles_empty_index() {
+        let state=InterviewState::default();
+        let root=std::env::temp_dir().join(format!("interview-index-ipc-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let index=tauri::async_runtime::block_on(Index::open(&root.join("synthetic.sqlite"))).unwrap();
+        assert!(state.index.set(index).is_ok());
+        let lifecycle=state.lifecycle.clone();
+        let app=tauri::test::mock_builder().manage(state).invoke_handler(tauri::generate_handler![profile_index_clear])
+            .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let webview=tauri::WebviewWindowBuilder::new(&app,"test",Default::default()).build().unwrap();
+        let invoke=||tauri::test::get_ipc_response(&webview,tauri::webview::InvokeRequest {
+            cmd:"profile_index_clear".into(),callback:tauri::ipc::CallbackFn(0),error:tauri::ipc::CallbackFn(1),url:"tauri://localhost".parse().unwrap(),
+            body:tauri::ipc::InvokeBody::Json(json!({})),headers:Default::default(),invoke_key:tauri::test::INVOKE_KEY.to_string(),
+        });
+        let guard=tauri::async_runtime::block_on(lifecycle.lock_owned());
+        assert!(invoke().is_err());drop(guard);
+        let state=app.state::<InterviewState>();state.session.store(true,Ordering::SeqCst);
+        assert!(invoke().is_err());state.session.store(false,Ordering::SeqCst);
+        let report=invoke().unwrap().deserialize::<Value>().unwrap();
+        assert!(report["archive_path"].is_null());assert_eq!(report["version"],0);
+    }
+}
+#[tauri::command]
+pub async fn rag_search<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,question:String)->Result<interview_core::RetrievalReview,String> {
     if question.chars().count()>1500 {return Err("问题超过 1500 字符".into());}
+    let _guard=state.lifecycle.try_lock().map_err(|_|"请先完成或取消当前资料操作")?;
     let index=state.index(&app).await?;let aliases=index.setting("aliases").await?;
-    index.search(&question,if aliases.is_empty(){DEFAULT_ALIASES}else{&aliases}).await
+    let facts=index.fact_card().await?;
+    index.search_review(&question,if aliases.is_empty(){DEFAULT_ALIASES}else{&aliases},Some(&facts)).await
 }
 #[tauri::command]
 pub async fn answer_start(app:tauri::AppHandle,state:State<'_,InterviewState>,question_id:String,revision:u32,question:String,history:Vec<Turn>,dialogue:Option<Vec<interview_core::SpokenTurn>>)->Result<(),String> {
+    crate::interview_exit::ensure_not_exiting(&app)?;
     if question_id.len()>100 || question.trim().is_empty() || question.chars().count()>1500 {return Err("问题或问题 ID 无效".into());}
     let _guard=state.lifecycle.lock().await;
+    crate::interview_exit::ensure_not_exiting(&app)?;
     state.cancel().await;
     let index=state.index(&app).await?.clone();
     let key=state.api_key().await;
     if key.is_empty(){return Err("尚未配置 API Key；可使用本地检索".into());}
+    let request_config=index.request_config().await?;
     state.session.store(true,Ordering::SeqCst);
     let cancel=CancellationToken::new();*state.active.lock().await=Some(cancel.clone());
     let network=state.network.clone();
@@ -109,10 +516,13 @@ pub async fn answer_start(app:tauri::AppHandle,state:State<'_,InterviewState>,qu
             let _slot=tokio::select! {_=cancel.cancelled()=>return Err("已取消".into()),slot=network.lock()=>slot};
             let started=std::time::Instant::now();
             let aliases=index.setting("aliases").await?;
-            let evidence=index.search(&question,if aliases.is_empty(){DEFAULT_ALIASES}else{&aliases}).await?;
-            emit(json!({"type":"sources","evidence":evidence,"retrieval_ms":started.elapsed().as_millis(),"index_version":index.setting("version").await?}));
-            let messages=interview_core::messages_with_dialogue(&question,&index.setting("facts").await?,&history,&evidence,&dialogue.unwrap_or_default())?;
-            interview_core::stream_answer(&key,messages,cancel.clone(),|event|emit(serde_json::to_value(event).unwrap_or_default())).await
+            let facts=index.fact_card().await?;
+            let review=index.search_review(&question,if aliases.is_empty(){DEFAULT_ALIASES}else{&aliases},Some(&facts)).await?;
+            let evidence=review.evidence;
+            emit(json!({"type":"sources","evidence":evidence,"conflicts":review.conflicts,"retrieval_ms":started.elapsed().as_millis(),"index_version":index.setting("version").await?,"fact_version":facts.version}));
+            let preferences=index.preferences().await?;
+            let messages=interview_core::messages_with_preferences(&question,&facts,&history,&evidence,&dialogue.unwrap_or_default(),&preferences)?;
+            interview_core::stream_answer_with_config(&key,messages,cancel.clone(),&request_config,|event|emit(serde_json::to_value(event).unwrap_or_default())).await
         }.await;
         if let Err(message)=result {emit(json!({"type":"error","message":message}));}
     });
@@ -130,6 +540,7 @@ pub async fn interview_history_clear(app:tauri::AppHandle,state:State<'_,Intervi
     let _guard=state.lifecycle.lock().await;
     state.cancel().await;
     let _network=state.network.lock().await;
+    let _capture=crate::audio::common::acquire_engine_lifecycle_lock().await;
     let recording=crate::audio::recording_commands::get_recording_state().await;
     if recording.get("is_recording").and_then(Value::as_bool)==Some(true) {
         return Err("请先停止当前采集，等待转写处理完成后再清理".into());
@@ -144,7 +555,9 @@ pub async fn interview_history_clear(app:tauri::AppHandle,state:State<'_,Intervi
 
 #[tauri::command]
 pub async fn interview_audio_start(app:tauri::AppHandle,state:State<'_,InterviewState>,record_microphone:bool)->Result<crate::audio::recording_commands::MicrophoneStatus,String> {
+    crate::interview_exit::ensure_not_exiting(&app)?;
     let _guard=state.lifecycle.lock().await;
+    crate::interview_exit::ensure_not_exiting(&app)?;
     let existing=crate::api::api::api_get_transcript_config(app.clone(),app.state(),None).await?;
     // Upstream seeds Parakeet on first launch. The interview entry point is
     // explicitly Whisper-only; choose base unless a valid Whisper preference exists.
@@ -153,16 +566,24 @@ pub async fn interview_audio_start(app:tauri::AppHandle,state:State<'_,Interview
     }
     let config=crate::api::api::api_get_transcript_config(app.clone(),app.state(),None).await?
         .ok_or("请先在原生设置中下载并选择 Whisper 多语言模型")?;
-    if config.provider!="localWhisper" || config.model.contains(".en") {
-        return Err("面试辅助只使用本地多语言 Whisper；请在设置中选择 base 或 small，不选择 .en 模型".into());
-    }
+    let preferences=state.index(&app).await?.preferences().await?;
+    if config.provider!="localWhisper" {return Err("面试辅助使用本地 Whisper，请在音频设置中选择本地模型".into());}
+    if config.model.contains(".en") && preferences.transcription_language!="en" {return Err("英文专用模型仅支持英文转写；请选择多语言模型，或将转写语言设为英文".into());}
     let mut prefs=crate::audio::recording_preferences::load_recording_preferences(&app).await.map_err(|e|e.to_string())?;
     prefs.auto_save=false;
     crate::audio::recording_preferences::save_recording_preferences(&app,&prefs).await.map_err(|e|e.to_string())?;
-    crate::set_language_preference("zh".into()).await?;
+    crate::set_language_preference(preferences.transcription_language).await?;
     let mic = if record_microphone { prefs.preferred_mic_device } else { Some("__interview_disabled__".into()) };
-    crate::audio::recording_commands::start_recording_with_devices_and_meeting(app,mic,prefs.preferred_system_device,Some("Interview practice".into())).await?;
-    Ok(crate::audio::recording_commands::microphone_status())
+    crate::audio::recording_commands::start_recording_with_devices_and_meeting(app.clone(),mic,prefs.preferred_system_device,Some("Interview practice".into())).await?;
+    let status=crate::audio::recording_commands::microphone_status();
+    // The generic recorder permits microphone-only capture after a system
+    // stream error. An interview cannot claim to hear the remote participant.
+    if !status.health.as_ref().map_or(false,|h|h.active && h.system_started) {
+        crate::audio::recording_commands::stop_recording(app,crate::audio::recording_commands::RecordingArgs {save_path:String::new()}).await
+            .map_err(|e|format!("系统音频未成功启动，停止采集也失败：{e}；请重启应用"))?;
+        return Err("系统音频未成功启动，采集已停止。请检查系统音频权限和输出设备后重新开始".into());
+    }
+    Ok(status)
 }
 
 #[tauri::command]
@@ -170,4 +591,78 @@ pub async fn interview_microphone_set(app:tauri::AppHandle,state:State<'_,Interv
     let _guard = state.lifecycle.lock().await;
     MICROPHONE_LEVEL.store(0,Ordering::Relaxed);
     crate::audio::recording_commands::set_microphone_enabled(&app,enabled).await
+}
+
+#[tauri::command]
+pub async fn interview_session_save<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,snapshot:crate::interview_sessions::Snapshot,confirmed:bool)->Result<crate::interview_sessions::SavedSession,String> {
+    let _guard=state.lifecycle.lock().await;
+    crate::interview_sessions::save_with_key(app.state::<crate::state::AppState>().db_manager.pool(),snapshot,confirmed,&state.api_key().await).await
+}
+#[tauri::command]
+pub async fn interview_session_export(state:State<'_,InterviewState>,snapshot:Value)->Result<crate::interview_sessions::ExportReport,String> {
+    crate::interview_sessions::export(snapshot,&state.api_key().await)
+}
+#[tauri::command]
+pub async fn interview_session_list<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,before:Option<i64>)->Result<crate::interview_sessions::SessionPage,String> {
+    let _guard=state.lifecycle.lock().await;
+    crate::interview_sessions::list(app.state::<crate::state::AppState>().db_manager.pool(),before).await
+}
+#[tauri::command]
+pub async fn interview_session_load<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,id:i64)->Result<crate::interview_sessions::Snapshot,String> {
+    let _guard=state.lifecycle.lock().await;
+    if crate::audio::recording_commands::is_recording().await || state.session.load(Ordering::SeqCst) {return Err("请先结束当前会话再恢复保存记录".into());}
+    crate::interview_sessions::load(app.state::<crate::state::AppState>().db_manager.pool(),id).await
+}
+
+#[cfg(test)]
+mod interview_session_ipc_tests {
+    use super::*;
+    #[test]
+    fn explicit_snapshot_ipc_roundtrip_and_active_session_guard() {
+        let root=std::env::temp_dir().join(format!("meetily-session-ipc-{}",uuid::Uuid::new_v4()));std::fs::create_dir(&root).unwrap();
+        let db=tauri::async_runtime::block_on(crate::database::manager::DatabaseManager::new(root.join("test.sqlite").to_str().unwrap(),root.join("no-legacy.sqlite").to_str().unwrap())).unwrap();
+        let app=tauri::test::mock_builder().manage(InterviewState::default()).manage(crate::state::AppState{db_manager:db})
+          .invoke_handler(tauri::generate_handler![interview_session_save,interview_session_export,interview_session_list,interview_session_load,interview_residue_status,interview_residue_clear])
+          .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let window=tauri::WebviewWindowBuilder::new(&app,"test",Default::default()).build().unwrap();
+        let invoke=|cmd:&str,body:Value|tauri::test::get_ipc_response(&window,tauri::webview::InvokeRequest {cmd:cmd.into(),callback:tauri::ipc::CallbackFn(0),error:tauri::ipc::CallbackFn(1),url:"tauri://localhost".parse().unwrap(),body:tauri::ipc::InvokeBody::Json(body),headers:Default::default(),invoke_key:tauri::test::INVOKE_KEY.to_string()});
+        let mut snapshot=json!({"version":1,"history":[{"id":"test-r1","role":"remote","question":"synthetic question","suggestion":"synthetic answer","confirmed_answer":null,"status":"done","sources":[],"time":"00:01","timing":""}],"transcripts":[],"spoken_dialogue":[],"current":{"question":"","answer":""},"calls":1,"usage":"unknown"});
+        snapshot["usage_ledger"]=json!({"version":1,"legacy_calls":0,"requests":[{"question_id":"test-r1","revision":0,"accepted":true,"attempts":2,"total_tokens":19,"state":"done"}]});
+        assert!(invoke("interview_session_save",json!({"snapshot":snapshot,"confirmed":false})).is_err());
+        let row=invoke("interview_session_save",json!({"snapshot":snapshot,"confirmed":true})).unwrap().deserialize::<Value>().unwrap();
+        let page=invoke("interview_session_list",json!({"before":null})).unwrap().deserialize::<Value>().unwrap();assert_eq!(page["sessions"][0]["id"],row["id"]);
+        let loaded=invoke("interview_session_load",json!({"id":row["id"]})).unwrap().deserialize::<Value>().unwrap();assert_eq!(loaded,snapshot);
+        let known="synthetic-configured-token";*tauri::async_runtime::block_on(app.state::<InterviewState>().key.lock())=Some(known.into());
+        let mut with_key=snapshot.clone();with_key["current"]["question"]=format!("凭证为{known}；null不等于0").into();
+        let exported=invoke("interview_session_export",json!({"snapshot":with_key})).unwrap().deserialize::<Value>().unwrap();
+        assert_eq!(exported["credentials_redacted"],true);assert!(!exported["content"].as_str().unwrap().contains(known));
+        let saved=invoke("interview_session_save",json!({"snapshot":with_key,"confirmed":true})).unwrap().deserialize::<Value>().unwrap();
+        let restored=invoke("interview_session_load",json!({"id":saved["id"]})).unwrap().deserialize::<Value>().unwrap();
+        assert_eq!(serde_json::from_str::<Value>(exported["content"].as_str().unwrap()).unwrap(),restored);
+        app.state::<InterviewState>().session.store(true,Ordering::SeqCst);
+        assert!(invoke("interview_session_load",json!({"id":row["id"]})).is_err());
+        assert_eq!(invoke("interview_residue_status",json!({})).unwrap().deserialize::<Value>().unwrap()["active"],true);
+        assert!(invoke("interview_residue_clear",json!({"recovery":{}})).is_err(),"cleanup must not cancel an active interview");
+        assert!(app.state::<InterviewState>().index.get().is_none(),"session recovery must not touch the profile or call AI");
+        app.state::<InterviewState>().session.store(false,Ordering::SeqCst);
+        tauri::async_runtime::block_on(app.state::<crate::state::AppState>().db_manager.pool().close());
+    }
+}
+
+#[tauri::command]
+pub async fn interview_residue_status<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>)->Result<Value,String> {
+    let _guard=state.lifecycle.lock().await;
+    if crate::audio::recording_commands::is_recording().await || state.session.load(Ordering::SeqCst) {return Ok(json!({"active":true}));}
+    let prefs=crate::audio::recording_preferences::load_recording_preferences(&app).await.map_err(|e|e.to_string())?;
+    let report=crate::interview_history::residue_status(app.state::<crate::state::AppState>().db_manager.pool(),&prefs.save_folder).await?;
+    Ok(json!({"active":false,"residue":report}))
+}
+#[tauri::command]
+pub async fn interview_residue_clear<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,recovery:Value)->Result<crate::interview_history::ClearReport,String> {
+    let _guard=state.lifecycle.lock().await;
+    let _capture=crate::audio::common::acquire_engine_lifecycle_lock().await;
+    if crate::audio::recording_commands::is_recording().await || state.session.load(Ordering::SeqCst) {return Err("当前会话仍在进行，未清理任何残留；请先结束会话".into());}
+    let _network=state.network.lock().await;
+    let prefs=crate::audio::recording_preferences::load_recording_preferences(&app).await.map_err(|e|e.to_string())?;
+    crate::interview_history::clear_temporary_history_with(app.state::<crate::state::AppState>().db_manager.pool(),&prefs.save_folder,json!({"recovery":recovery}),crate::interview_history::move_to_trash).await
 }

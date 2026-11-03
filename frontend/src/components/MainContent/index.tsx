@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { usePathname } from 'next/navigation';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 
 interface MainContentProps {
@@ -9,6 +10,11 @@ interface MainContentProps {
 
 const MainContent: React.FC<MainContentProps> = ({ children }) => {
   const { isCollapsed } = useSidebar();
+  const pathname = usePathname();
+
+  // Interview owns its 20/80 workspace; the meeting navigation must not
+  // consume a second column or leave its usual padding behind.
+  if (pathname === '/interview') return <div className="min-w-0 w-full">{children}</div>;
 
   return (
     <main

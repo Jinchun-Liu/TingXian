@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { TranscriptInput } from './interview-scheduler';
 
-export interface MicrophoneState { recording: boolean; enabled: boolean; epoch: number | null }
+export interface MicrophoneState { recording: boolean; enabled: boolean; epoch: number | null; health?: import('./interview-health').AudioHealthSnapshot | null }
 
 export const stopInterviewAudio = () => invoke<void>('stop_recording', { args: { save_path: '' } });
 

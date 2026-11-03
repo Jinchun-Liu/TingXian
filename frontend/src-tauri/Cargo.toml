@@ -1,7 +1,7 @@
 [package]
 name = "meetily"
-version = "0.4.1"
-description = "A Tauri App for meeting minutes"
+version = "0.2.0-alpha.1"
+description = "Configurable interview practice assistant with local transcription"
 authors = ["Sujith S"]
 license = "MIT"
 repository = "https://github.com/Zackriya-Solutions/meeting-minutes"

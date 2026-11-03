@@ -17,3 +17,8 @@ anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.32.0", features = ["full"] }
+
+# The locally shipped app is a debug bundle. Keep Rust debuggable, but compile
+# SQLite's FTS/BM25 C loops with optimization for the 20k-chunk retrieval budget.
+[profile.dev.package.libsqlite3-sys]
+opt-level = 2

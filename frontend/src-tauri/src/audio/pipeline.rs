@@ -391,6 +391,7 @@ impl AudioCapture {
     /// Process audio data directly from callback
     pub fn process_audio_data(&self, data: &[f32]) {
         if !super::microphone_gate::allowed(&self.microphone_gate) { return; }
+        if self.state.is_recording() {self.state.health.observe(matches!(self.device_type,DeviceType::System),data);}
         if matches!(self.device_type, DeviceType::System) {
             crate::interview::observe_system_audio(data);
         } else {
@@ -627,6 +628,7 @@ impl AudioCapture {
             device_type: self.device_type.clone(),
             speech_boundary: None,
             microphone_gate: self.microphone_gate.clone(),
+            replaces_utterance: false,
         };
 
         // NOTE: Raw audio is NOT sent to recording saver to prevent echo
@@ -660,6 +662,7 @@ impl AudioCapture {
 
     /// Handle stream errors with enhanced disconnect detection
     pub fn handle_stream_error(&self, error: cpal::StreamError) {
+        if !self.state.is_recording() || !super::microphone_gate::allowed(&self.microphone_gate) {return;}
         error!("Audio stream error for {}: {}", self.device.name, error);
 
         let error_str = error.to_string().to_lowercase();
@@ -687,16 +690,21 @@ impl AudioCapture {
 
         self.state.report_error(audio_error);
     }
+    pub fn report_unexpected_end(&self) {
+        if self.state.is_recording() && super::microphone_gate::allowed(&self.microphone_gate) {self.state.report_error(AudioError::ChannelClosed);}
+    }
 }
 
 /// VAD-driven audio processing pipeline
 /// Uses Voice Activity Detection to segment speech in real-time and send only speech to Whisper
 pub struct AudioPipeline {
     receiver: mpsc::UnboundedReceiver<AudioChunk>,
-    transcription_sender: mpsc::UnboundedSender<AudioChunk>,
+    transcription_sender: super::asr_queue::AsrSender,
     state: Arc<RecordingState>,
     vad_processor: ContinuousVadProcessor,
     microphone_vad: ContinuousVadProcessor,
+    system_refinement: super::utterance_refinement::UtteranceRefinement,
+    microphone_refinement: super::utterance_refinement::UtteranceRefinement,
     microphone_gate: Option<Arc<super::microphone_gate::MicrophoneGate>>,
     system_offset: Option<f64>,
     microphone_offset: Option<f64>,
@@ -717,7 +725,7 @@ pub struct AudioPipeline {
 impl AudioPipeline {
     pub fn new(
         receiver: mpsc::UnboundedReceiver<AudioChunk>,
-        transcription_sender: mpsc::UnboundedSender<AudioChunk>,
+        transcription_sender: super::asr_queue::AsrSender,
         state: Arc<RecordingState>,
         target_chunk_duration_ms: u32,
         sample_rate: u32,
@@ -776,6 +784,8 @@ impl AudioPipeline {
             state,
             vad_processor,
             microphone_vad: ContinuousVadProcessor::new_live(sample_rate, VAD_REDEMPTION_TIME_MS)?,
+            system_refinement: super::utterance_refinement::UtteranceRefinement::new(180 * 16000),
+            microphone_refinement: super::utterance_refinement::UtteranceRefinement::new(180 * 16000),
             microphone_gate: None,
             system_offset: None,
             microphone_offset: None,
@@ -822,6 +832,7 @@ impl AudioPipeline {
                         // Never join speech from before and after a microphone mute.
                         self.microphone_vad = ContinuousVadProcessor::new_live(self.sample_rate, VAD_REDEMPTION_TIME_MS)?;
                         self.microphone_offset = None;
+                        self.microphone_refinement.reset();
                         self.microphone_gate = chunk.microphone_gate.clone();
                         self.ring_buffer.mic_buffer.clear();
                     }
@@ -896,6 +907,7 @@ impl AudioPipeline {
                                     device_type: DeviceType::Microphone,  // Mixed audio
                                     speech_boundary: None,
                                     microphone_gate: None,
+                                    replaces_utterance: false,
                                 };
                                 let _ = sender.send(recording_chunk);
                             }
@@ -923,8 +935,24 @@ impl AudioPipeline {
     fn send_speech_segments(&mut self, segments: Vec<super::vad::SpeechSegment>, source: DeviceType, offset: f64) {
         let gate = if source == DeviceType::Microphone { self.microphone_gate.clone() } else { None };
         if !super::microphone_gate::allowed(&gate) { return; }
-        for segment in segments {
+        for mut segment in segments {
             if segment.samples.len() < 800 && !segment.boundary.is_final { continue; }
+            if segment.boundary.is_final {
+                // Pauses break the continuous channel offset: do not invent an
+                // audio endpoint in that case. Forced flush also has no endpoint.
+                let audio_to_queue_ms = segment.boundary.last_voice_ms.and_then(|end| {
+                    if self.state.is_paused() || self.state.get_total_pause_duration() > 0.0 { return None; }
+                    let age = self.state.get_recording_duration()? * 1000.0 - (offset * 1000.0 + end);
+                    (age.is_finite() && age >= 0.0).then_some(age)
+                });
+                segment.boundary.timing = Some(super::vad::FinalizationTiming { queued_at: std::time::Instant::now(), audio_to_queue_ms });
+            }
+            let (segment, replaces_utterance) = if self.state.refine_utterances() {
+                match source {
+                    DeviceType::System => self.system_refinement.receive(segment),
+                    DeviceType::Microphone => self.microphone_refinement.receive(segment),
+                }
+            } else { (segment, false) };
             let chunk = AudioChunk {
                 data: segment.samples,
                 sample_rate: 16000,
@@ -933,6 +961,7 @@ impl AudioPipeline {
                 device_type: source.clone(),
                 speech_boundary: Some(segment.boundary),
                 microphone_gate: gate.clone(),
+                replaces_utterance,
             };
             if let Err(error) = self.transcription_sender.send(chunk) {
                 warn!("Failed to send channel speech segment: {}", error);
@@ -970,7 +999,7 @@ impl AudioPipelineManager {
     pub fn start(
         &mut self,
         state: Arc<RecordingState>,
-        transcription_sender: mpsc::UnboundedSender<AudioChunk>,
+        transcription_sender: super::asr_queue::AsrSender,
         target_chunk_duration_ms: u32,
         sample_rate: u32,
         recording_sender: Option<mpsc::UnboundedSender<AudioChunk>>,
@@ -1052,6 +1081,7 @@ impl AudioPipelineManager {
                 device_type: super::recording_state::DeviceType::Microphone,
                 speech_boundary: None,
                 microphone_gate: None,
+                replaces_utterance: false,
             };
 
             if let Err(e) = sender.send(flush_chunk) {
@@ -1074,6 +1104,7 @@ impl AudioPipelineManager {
                         device_type: super::recording_state::DeviceType::Microphone,
                         speech_boundary: None,
                         microphone_gate: None,
+                        replaces_utterance: false,
                     };
                     let _ = sender.send(additional_flush);
                 }

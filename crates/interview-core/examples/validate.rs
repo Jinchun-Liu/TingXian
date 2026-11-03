@@ -19,10 +19,12 @@ async fn main()->std::result::Result<(),Box<dyn std::error::Error>> {
     let key=std::env::var("DEEPSEEK_API_KEY").unwrap_or_default();
     for q in questions {
         let question=q["question"].as_str().unwrap();let start=Instant::now();
-        let evidence=index.search(question,DEFAULT_ALIASES).await?;
+        let review=index.search_review(question,DEFAULT_ALIASES,None).await?;
+        let evidence=review.evidence;
         let ms=start.elapsed().as_millis();
         let matched=q["expected"].as_str().map(|needle|evidence.iter().any(|e|e.text.contains(needle)));
-        let mut item=json!({"id":q["id"],"question":question,"expected":q["expected"],"source_ids":evidence.iter().map(|e|&e.source_id).collect::<Vec<_>>(),"keyword_hit_not_human_acceptance":matched,"retrieval_ms":ms});
+        let mut item=json!({"id":q["id"],"question":question,"expected":q["expected"],"source_ids":evidence.iter().map(|e|&e.source_id).collect::<Vec<_>>(),"local_difference_hint_count":review.conflicts.len(),"keyword_hit_not_human_acceptance":matched,"retrieval_ms":ms});
+        item["original_query_terms"]=json!(index.tokens(question));
         let live_id=std::env::var("INTERVIEW_LIVE_ID").ok().and_then(|s|s.parse::<u64>().ok());
         if args.iter().any(|a|a=="--live") && q["id"].as_u64().unwrap()<=10 && live_id.map_or(true,|id|Some(id)==q["id"].as_u64()) {
             let mut text=String::new();let mut timings=Value::Null;

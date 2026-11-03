@@ -75,7 +75,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
     id: string;
     timestamp: number;
     text: string;
-    confidence?: number;
+    confidence?: number | null;
     isStreaming: boolean;
     showConfidence: boolean;
 }) {

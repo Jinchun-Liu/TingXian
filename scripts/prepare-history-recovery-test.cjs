@@ -30,6 +30,13 @@ document.getElementById('run').onclick = async () => {
   await service.saveTranscript('owned',{text:'synthetic old answer',timestamp:'00:01',sequenceId:1,confidence:1});
   await service.saveTranscript('other',{text:'unrelated history',timestamp:'00:01',sequenceId:2,confidence:1});
   await service.markMeetingSaved('owned');
+  const originalGetAll=IDBObjectStore.prototype.getAll;
+  IDBObjectStore.prototype.getAll=function(...args){if(this.name==='transcripts')throw Error('startup inspection read transcript bodies');return originalGetAll.apply(this,args);};
+  let inspected;
+  try{inspected=await service.inspectInterviewHistory();}finally{IDBObjectStore.prototype.getAll=originalGetAll;}
+  verify(inspected.meetings===1 && inspected.transcripts===1,'metadata inspection missed owned or included unrelated records');
+  verify(!JSON.stringify(inspected).includes('synthetic old answer'),'inspection returned speech text');
+  report('PASS: residue inspection uses metadata and index counts only, including saved interview cache');
   const initial = await service.snapshotInterviewHistory();
   verify(initial.meetings.length===1 && initial.transcripts.length===1 && initial.meetings[0].savedToSQLite,'snapshot must also include saved interview recovery');
   report('PASS: snapshot selects only interview recovery records');

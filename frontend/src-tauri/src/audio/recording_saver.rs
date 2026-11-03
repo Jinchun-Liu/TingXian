@@ -20,8 +20,17 @@ pub struct TranscriptSegment {
     pub audio_end_time: f64,   // Seconds from recording start
     pub duration: f64,          // Segment duration in seconds
     pub display_time: String,   // Formatted time for display like "[02:15]"
-    pub confidence: f32,
+    #[serde(default)]
+    pub confidence: Option<f32>,
     pub sequence_id: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub utterance_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub microphone_epoch: Option<u64>,
+    #[serde(default)]
+    pub replaces_utterance: bool,
 }
 
 /// Meeting metadata structure
@@ -67,6 +76,8 @@ impl RecordingSaver {
             is_saving: Arc::new(Mutex::new(false)),
         }
     }
+
+    pub(crate) fn transcript_buffer(&self)->Arc<Mutex<Vec<TranscriptSegment>>> {self.transcript_segments.clone()}
 
     /// Set the meeting name for this recording session
     pub fn set_meeting_name(&mut self, name: Option<String>) {
@@ -125,8 +136,12 @@ impl RecordingSaver {
             audio_end_time: 0.0,
             duration: 0.0,
             display_time: "[00:00]".to_string(),
-            confidence: 1.0,
+            confidence: None,
             sequence_id: 0,
+            source: None,
+            utterance_id: None,
+            microphone_epoch: None,
+            replaces_utterance: false,
         };
         self.add_transcript_segment(segment);
     }
@@ -369,7 +384,8 @@ impl RecordingSaver {
 
         if !should_save_audio {
             info!("⚠️  No audio saver initialized (auto-save was disabled) - skipping audio finalization");
-            info!("✅ Transcripts and metadata already saved incrementally");
+            self.finalize_text_metadata(recording_duration)?;
+            info!("✅ Final transcripts and completed metadata saved without audio");
             return Ok(None);
         }
 
@@ -391,6 +407,31 @@ impl RecordingSaver {
             return Err("No incremental saver initialized".to_string());
         };
 
+        self.finalize_text_metadata(recording_duration)?;
+
+        // Emit save event with audio and transcript paths
+        let save_event = serde_json::json!({
+            "audio_file": final_audio_path.to_string_lossy(),
+            "transcript_file": self.meeting_folder.as_ref()
+                .map(|f| f.join("transcripts.json").to_string_lossy().to_string()),
+            "meeting_name": self.meeting_name,
+            "meeting_folder": self.meeting_folder.as_ref()
+                .map(|f| f.to_string_lossy().to_string())
+        });
+
+        if let Err(e) = app.emit("recording-saved", &save_event) {
+            warn!("Failed to emit recording-saved event: {}", e);
+        }
+
+        // Clean up transcript segments
+        if let Ok(mut segments) = self.transcript_segments.lock() {
+            segments.clear();
+        }
+
+        Ok(Some(final_audio_path.to_string_lossy().to_string()))
+    }
+
+    fn finalize_text_metadata(&mut self, recording_duration: Option<f64>) -> Result<(), String> {
         // Save final transcripts.json with validation
         if let Some(folder) = &self.meeting_folder {
             if let Err(e) = self.write_transcripts_json(folder) {
@@ -428,28 +469,10 @@ impl RecordingSaver {
             }
 
             info!("✅ Metadata updated with duration: {:?}s", metadata.duration_seconds);
+            self.metadata = Some(metadata);
         }
 
-        // Emit save event with audio and transcript paths
-        let save_event = serde_json::json!({
-            "audio_file": final_audio_path.to_string_lossy(),
-            "transcript_file": self.meeting_folder.as_ref()
-                .map(|f| f.join("transcripts.json").to_string_lossy().to_string()),
-            "meeting_name": self.meeting_name,
-            "meeting_folder": self.meeting_folder.as_ref()
-                .map(|f| f.to_string_lossy().to_string())
-        });
-
-        if let Err(e) = app.emit("recording-saved", &save_event) {
-            warn!("Failed to emit recording-saved event: {}", e);
-        }
-
-        // Clean up transcript segments
-        if let Ok(mut segments) = self.transcript_segments.lock() {
-            segments.clear();
-        }
-
-        Ok(Some(final_audio_path.to_string_lossy().to_string()))
+        Ok(())
     }
 
     /// Get the meeting folder path (for passing to backend)
@@ -475,5 +498,48 @@ impl RecordingSaver {
 impl Default for RecordingSaver {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod text_only_stop_tests {
+    use super::*;
+    #[tokio::test]
+    async fn marks_completed_and_preserves_sources_without_creating_audio() {
+        // Retain synthetic artifacts in temp; no permanent deletion fallback.
+        let folder = std::env::temp_dir().join(format!("meetily-text-stop-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&folder).unwrap();
+        let mut saver = RecordingSaver::new();
+        saver.meeting_folder = Some(folder.clone());
+        saver.metadata = Some(MeetingMetadata {
+            version:"1.0".into(), meeting_id:None, meeting_name:Some("synthetic test".into()),
+            created_at:chrono::Utc::now().to_rfc3339(), completed_at:None, duration_seconds:None,
+            devices:DeviceInfo {microphone:None,system_audio:None}, audio_file:String::new(),
+            transcript_file:"transcripts.json".into(), sample_rate:48000, status:"recording".into(),
+        });
+        for (id,source) in [(1,"System"),(2,"Microphone")] {
+            saver.add_transcript_segment(TranscriptSegment {
+                id:format!("test-{id}"), text:"synthetic".into(), audio_start_time:1.0,audio_end_time:2.0,
+                duration:1.0,display_time:"00:01".into(),confidence:None,sequence_id:id,
+                source:Some(source.into()),utterance_id:Some(id),microphone_epoch:if id==2 {Some(42)}else{None},
+                replaces_utterance:false,
+            });
+        }
+        let app = tauri::test::mock_builder().build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        assert!(saver.stop_and_save(app.handle(), Some(7.5)).await.unwrap().is_none());
+        let metadata:MeetingMetadata = serde_json::from_slice(&std::fs::read(folder.join("metadata.json")).unwrap()).unwrap();
+        assert_eq!(metadata.status,"completed");assert!(metadata.completed_at.is_some());
+        assert_eq!(metadata.duration_seconds,Some(7.5));assert!(metadata.audio_file.is_empty());
+        let transcript:serde_json::Value=serde_json::from_slice(&std::fs::read(folder.join("transcripts.json")).unwrap()).unwrap();
+        assert_eq!(transcript["segments"][0]["source"],"System");
+        assert_eq!(transcript["segments"][1]["microphone_epoch"],42);
+        for segment in transcript["segments"].as_array().unwrap() {
+            assert_eq!(segment.get("confidence"),Some(&serde_json::Value::Null),"disk export must retain unknown confidence");
+        }
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(),2);
+        let mut legacy=transcript["segments"][0].clone();
+        for name in ["source","utterance_id","microphone_epoch"] {legacy.as_object_mut().unwrap().remove(name);}
+        let old:TranscriptSegment=serde_json::from_value(legacy).unwrap();assert!(old.source.is_none());
+        assert_eq!(saver.metadata.as_ref().unwrap().status,"completed");
     }
 }

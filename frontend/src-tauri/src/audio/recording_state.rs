@@ -25,6 +25,7 @@ pub struct AudioChunk {
     /// None on raw capture/recording chunks; set by the channel-specific VAD.
     pub speech_boundary: Option<super::vad::SpeechBoundary>,
     pub microphone_gate: Option<Arc<super::microphone_gate::MicrophoneGate>>,
+    pub replaces_utterance: bool,
 }
 
 /// Processed audio chunk (post-VAD) for recording
@@ -43,6 +44,7 @@ pub enum AudioError {
     StreamFailed,
     ProcessingFailed,
     TranscriptionFailed,
+    TranscriptionBacklog,
     ChannelClosed,
     InitializationFailed,
     ConfigurationError,
@@ -60,6 +62,7 @@ impl AudioError {
             AudioError::StreamFailed => true,
             AudioError::ProcessingFailed => true,
             AudioError::TranscriptionFailed => true,
+            AudioError::TranscriptionBacklog => false,
             AudioError::ChannelClosed => false,
             AudioError::InitializationFailed => false,
             AudioError::ConfigurationError => false,
@@ -76,6 +79,7 @@ impl AudioError {
             AudioError::StreamFailed => "Audio stream encountered an error",
             AudioError::ProcessingFailed => "Audio processing failed",
             AudioError::TranscriptionFailed => "Speech transcription failed",
+            AudioError::TranscriptionBacklog => "Speech recognition backlog limit reached; capture stopped and transcription may be incomplete",
             AudioError::ChannelClosed => "Audio channel was closed unexpectedly",
             AudioError::InitializationFailed => "Failed to initialize audio system",
             AudioError::ConfigurationError => "Audio configuration error",
@@ -96,9 +100,12 @@ pub struct RecordingStats {
 
 /// Unified state management for audio recording
 pub struct RecordingState {
+    pub health:Arc<super::interview_health::AudioHealth>,
+    pub transcription_control:Arc<super::transcription::control::TranscriptionControl>,
     // Core recording state
     is_recording: AtomicBool,
     is_paused: AtomicBool,
+    refine_utterances: AtomicBool,
     microphone_gate: Mutex<Arc<super::microphone_gate::MicrophoneGate>>,
 
     // Audio devices
@@ -128,6 +135,8 @@ pub struct RecordingState {
 }
 
 impl RecordingState {
+    pub fn set_utterance_refinement(&self, enabled: bool) { self.refine_utterances.store(enabled, Ordering::SeqCst); }
+    pub fn refine_utterances(&self) -> bool { self.refine_utterances.load(Ordering::SeqCst) }
     pub fn microphone_gate(&self) -> Arc<super::microphone_gate::MicrophoneGate> {
         self.microphone_gate.lock().unwrap().clone()
     }
@@ -140,8 +149,11 @@ impl RecordingState {
 
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
+            health:super::interview_health::AudioHealth::new(),
+            transcription_control:super::transcription::control::TranscriptionControl::new(),
             is_recording: AtomicBool::new(false),
             is_paused: AtomicBool::new(false),
+            refine_utterances: AtomicBool::new(false),
             microphone_gate: Mutex::new(super::microphone_gate::MicrophoneGate::new()),
             microphone_device: Mutex::new(None),
             system_device: Mutex::new(None),
@@ -160,6 +172,7 @@ impl RecordingState {
 
     // Recording control
     pub fn start_recording(&self) -> Result<()> {
+        self.health.resumed();
         self.is_recording.store(true, Ordering::SeqCst);
         *self.recording_start.lock().unwrap() = Some(Instant::now());
         self.error_count.store(0, Ordering::SeqCst);
@@ -213,6 +226,7 @@ impl RecordingState {
         }
 
         self.is_paused.store(false, Ordering::SeqCst);
+        self.health.resumed();
         Ok(())
     }
 
@@ -403,8 +417,11 @@ impl RecordingState {
 impl Default for RecordingState {
     fn default() -> Self {
         Self {
+            health: super::interview_health::AudioHealth::new(),
+            transcription_control:super::transcription::control::TranscriptionControl::new(),
             is_recording: AtomicBool::new(false),
             is_paused: AtomicBool::new(false),
+            refine_utterances: AtomicBool::new(false),
             microphone_gate: Mutex::new(super::microphone_gate::MicrophoneGate::new()),
             microphone_device: Mutex::new(None),
             system_device: Mutex::new(None),

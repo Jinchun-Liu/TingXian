@@ -548,7 +548,12 @@ impl WhisperEngine {
     }
     
     /// Transcribe one completed audio segment with adaptive quality.
-    pub async fn transcribe_audio_with_confidence(&self, audio_data: Vec<f32>, language: Option<String>) -> Result<(String, f32, bool)> {
+    pub async fn transcribe_audio_with_confidence(&self, audio_data: Vec<f32>, language: Option<String>) -> Result<(String, Option<f32>, bool)> {
+        self.transcribe_audio_cancellable(audio_data,language,None).await
+    }
+
+    pub async fn transcribe_audio_cancellable(&self, audio_data: Vec<f32>, language: Option<String>, cancelled:Option<std::sync::Arc<std::sync::atomic::AtomicBool>>) -> Result<(String, Option<f32>, bool)> {
+        if cancelled.as_ref().map_or(false,|flag|flag.load(std::sync::atomic::Ordering::SeqCst)) {return Err(anyhow!("Transcription cancelled"));}
         let ctx_lock = self.current_context.read().await;
         let ctx = ctx_lock.as_ref()
             .ok_or_else(|| anyhow!("No model loaded. Please load a model first."))?;
@@ -563,6 +568,21 @@ impl WhisperEngine {
             patience: 1.0
         });
 
+        if let Some(flag)=cancelled.as_ref() {
+            unsafe extern "C" fn should_abort(data:*mut std::ffi::c_void)->bool {
+                // Arc owner below outlives synchronous state.full; the callback
+                // only reads an atomic and never touches Whisper state.
+                unsafe {(&*(data as *const std::sync::atomic::AtomicBool)).load(std::sync::atomic::Ordering::SeqCst)}
+            }
+            // Use the raw callback API with explicit ownership. In the pinned
+            // whisper-rs 0.13.2, set_abort_callback_safe boxes a trait object
+            // then casts it as the concrete closure and leaks its allocation.
+            unsafe {
+                params.set_abort_callback(Some(should_abort));
+                params.set_abort_callback_user_data(std::sync::Arc::as_ptr(flag) as *mut std::ffi::c_void);
+            }
+        }
+
         // Configure with adaptive settings
         // If language is "auto" or None, use automatic language detection (pass None)
         // If language is "auto-translate", enable translation to English
@@ -574,11 +594,7 @@ impl WhisperEngine {
         };
         params.set_language(language_code);
         params.set_translate(should_translate);
-        if language_code == Some("zh") {
-            // Domain vocabulary, not a desired transcript. The original ASR
-            // output is retained separately from any contextual AI correction.
-            params.set_initial_prompt("面试术语：契约测试，null，零值，schema，JSON Schema，Playwright，GitHub Actions，SQL，SLA，幂等键，扩缩容。");
-        }
+        // No fixed company, project or vocabulary is injected into recognition.
 
         // CRITICAL: Disable timestamp tokens to prevent whisper.cpp chunking heuristics
         // The "single timestamp ending - skip entire chunk" optimization incorrectly discards
@@ -620,14 +636,13 @@ impl WhisperEngine {
 
             let mut state = ctx.create_state()?;
             state.full(params, &audio_data)?;
+            if cancelled.as_ref().map_or(false,|flag|flag.load(std::sync::atomic::Ordering::SeqCst)) {return Err(anyhow!("Transcription cancelled"));}
             let num_segments = state.full_n_segments();
 
             (num_segments, state)
             // Suppressor dropped here, stderr restored
         };
         let mut result = String::new();
-        let mut total_confidence = 0.0;
-        let mut segment_count = 0;
 
         let num_segments = num_segments?;
         for i in 0..num_segments {
@@ -635,16 +650,6 @@ impl WhisperEngine {
                 Ok(text) => text,
                 Err(_) => continue,
             };
-
-            // Calculate confidence based on segment length and duration (simplified approach)
-            let segment_length = segment_text.len() as f32;
-            let segment_confidence = if segment_length > 0.0 {
-                (segment_length / 100.0).min(0.9) + 0.1 // 0.1 to 1.0 confidence based on text length
-            } else {
-                0.1
-            };
-            total_confidence += segment_confidence;
-            segment_count += 1;
 
             let cleaned_text = segment_text.trim();
             if !cleaned_text.is_empty() {
@@ -658,17 +663,13 @@ impl WhisperEngine {
         let final_result = result.trim().to_string();
         let cleaned_result = Self::clean_repetitive_text(&final_result);
 
-        let avg_confidence = if segment_count > 0 {
-            total_confidence / segment_count as f32
-        } else {
-            0.0
-        };
-
         // `state.full` has finished decoding the supplied VAD segment. There is
         // no later revision/final event for this segment, even when it is short.
         // Duration is not a completion signal: marking <15s as partial caused
         // stable-only consumers to silently discard ordinary short questions.
-        Ok((cleaned_result, avg_confidence, false))
+        // This decoder does not supply a calibrated utterance confidence.
+        // Text length and token probabilities are not recognition accuracy.
+        Ok((cleaned_result, None, false))
     }
 
     pub async fn transcribe_audio(&self, audio_data: Vec<f32>, language: Option<String>) -> Result<String> {
@@ -830,14 +831,14 @@ impl WhisperEngine {
             }
         } else {
             if cleaned_result != final_result {
-                log::info!("Cleaned repetitive transcription #{}: '{}' -> '{}'", transcription_count, final_result, cleaned_result);
+                log::info!("Cleaned repetitive transcription #{}: {} -> {} chars", transcription_count, final_result.chars().count(), cleaned_result.chars().count());
             }
             // Reduce successful transcription logging frequency
             // Only log every 5th result or significant results (>50 chars) to reduce I/O overhead
             if transcription_count % 5 == 0 || cleaned_result.len() > 50 || duration_seconds > 10.0 {
-                log::info!("Transcription #{} result: '{}'", transcription_count, cleaned_result);
+                log::info!("Transcription #{} result: {} chars", transcription_count, cleaned_result.chars().count());
             } else {
-                perf_debug!("Transcription #{} result: '{}'", transcription_count, cleaned_result);
+                perf_debug!("Transcription #{} result: {} chars", transcription_count, cleaned_result.chars().count());
             }
         }
 

@@ -442,6 +442,7 @@ mod tests {
                 device_type: DeviceType::Microphone,
                 speech_boundary: None,
                 microphone_gate: None,
+                replaces_utterance: false,
             };
             saver.add_chunk(chunk).unwrap();
         }

@@ -7,12 +7,23 @@ use std::time::Duration;
 /// Silero VAD only operates at 16kHz; input is resampled to this rate, and every
 /// sample count and timestamp inside this module is expressed in it.
 const VAD_SAMPLE_RATE: u32 = 16000;
+const POST_SPEECH_PAD_MS: u64 = 400;
+
+/// Internal monotonic timing; never contains speech or audio data.
+#[derive(Debug, Clone, Copy)]
+pub struct FinalizationTiming {
+    pub queued_at: std::time::Instant,
+    pub audio_to_queue_ms: Option<f64>,
+}
 
 /// Identity is local to one capture channel and recording session.
 #[derive(Debug, Clone, Copy)]
 pub struct SpeechBoundary {
     pub utterance_id: u64,
     pub is_final: bool,
+    /// Silero's last voiced frame, without post padding. None for forced flush.
+    pub last_voice_ms: Option<f64>,
+    pub timing: Option<FinalizationTiming>,
 }
 
 /// Represents a complete speech segment detected by VAD
@@ -63,7 +74,7 @@ impl ContinuousVadProcessor {
         // this silence threshold; only SpeechEnd closes the speaker's turn.
         config.redemption_time = Duration::from_millis(redemption_time_ms as u64);
         config.pre_speech_pad = Duration::from_millis(300);   // Pre-speech padding for context
-        config.post_speech_pad = Duration::from_millis(400);  // Increased: more context at end
+        config.post_speech_pad = Duration::from_millis(POST_SPEECH_PAD_MS);
 
         // CRITICAL FIX: Increased min_speech_time to prevent tiny 40ms fragments
         // Previous: 100ms allowed too-short segments that Whisper rejects
@@ -245,7 +256,7 @@ impl ContinuousVadProcessor {
                 start_timestamp_ms: start_ms,
                 end_timestamp_ms: end_ms,
                 confidence: 0.8, // Estimated confidence for forced end
-                boundary: SpeechBoundary { utterance_id: self.speech_start_sample as u64, is_final: true },
+                boundary: SpeechBoundary { utterance_id: self.speech_start_sample as u64, is_final: true, last_voice_ms: None, timing: None },
             };
 
             self.speech_segments.push_back(segment);
@@ -327,7 +338,8 @@ impl ContinuousVadProcessor {
                             start_timestamp_ms: start_timestamp_ms as f64 + self.emitted_speech_samples as f64 * 1000.0 / VAD_SAMPLE_RATE as f64,
                             end_timestamp_ms: end_timestamp_ms as f64,
                             confidence: 0.9, // VAD confidence
-                            boundary: SpeechBoundary { utterance_id: self.speech_start_sample as u64, is_final: true },
+                            boundary: SpeechBoundary { utterance_id: self.speech_start_sample as u64, is_final: true,
+                                last_voice_ms: end_timestamp_ms.checked_sub(POST_SPEECH_PAD_MS as usize).map(|ms| ms as f64), timing: None },
                         };
 
                         info!("VAD: Completed speech segment: {:.1}ms duration, {} samples",
@@ -358,7 +370,7 @@ impl ContinuousVadProcessor {
                         start_timestamp_ms: (self.speech_start_sample + begin) as f64 * 1000.0 / VAD_SAMPLE_RATE as f64,
                         end_timestamp_ms: (self.speech_start_sample + begin + limit) as f64 * 1000.0 / VAD_SAMPLE_RATE as f64,
                         confidence: 0.0,
-                        boundary: SpeechBoundary { utterance_id: self.speech_start_sample as u64, is_final: false },
+                        boundary: SpeechBoundary { utterance_id: self.speech_start_sample as u64, is_final: false, last_voice_ms: None, timing: None },
                     });
                     self.emitted_speech_samples += limit;
                 }

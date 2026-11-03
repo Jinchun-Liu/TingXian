@@ -1,10 +1,23 @@
 export interface TranscriptInput {
   sequence_id: number; text: string; is_partial: boolean; source: string;
+  confidence?: number | null; // Not a correctness or completion signal.
   audio_start_time: number; audio_end_time: number; timestamp: string;
   utterance_id?: number | null;
   microphone_epoch?: number | null;
+  replaces_utterance?: boolean;
+  capture_session?: number;
+  native_session_id?: number | null;
 }
-export interface UtteranceEnd { source: string; utterance_id: number; success: boolean }
+
+export function sameCapturedUtterance(a: Pick<TranscriptInput, 'source' | 'utterance_id' | 'microphone_epoch' | 'capture_session'>, b: TranscriptInput) {
+  return a.utterance_id !== undefined && a.utterance_id !== null && a.capture_session !== undefined
+    && a.source === b.source && a.utterance_id === b.utterance_id && a.capture_session === b.capture_session
+    && (a.source !== 'Microphone' || a.microphone_epoch === b.microphone_epoch);
+}
+export function mergeSpokenTranscript(previous: TranscriptInput[], event: TranscriptInput) {
+  return [...previous.filter(t => (t.sequence_id !== event.sequence_id || t.capture_session !== event.capture_session) && !(event.replaces_utterance && sameCapturedUtterance(t, event))), event].slice(-120);
+}
+export interface UtteranceEnd { source: string; utterance_id: number; success: boolean; native_session_id?: number | null; timing?: import('./interview-latency').NativeSpeechTiming | null }
 export interface RemoteUtterance { id: string; text: string; time: string }
 
 /** Capture prefixes update the conversation, but only an explicit System
@@ -24,7 +37,7 @@ export class RemoteUtteranceQueue {
     this.seen.add(event.sequence_id);
     if (this.seen.size > 2000) this.seen.delete(this.seen.values().next().value!);
     const draft = this.drafts.get(id) || { id: `remote-${this.generation}-${id}`, text: '', time: event.timestamp, suppressed: false };
-    draft.text = [draft.text, event.text.trim()].filter(Boolean).join(' ');
+    draft.text = event.replaces_utterance ? event.text.trim() : [draft.text, event.text.trim()].filter(Boolean).join(' ');
     this.drafts.set(id, draft);
     return { id: draft.id, text: draft.text, time: draft.time };
   }

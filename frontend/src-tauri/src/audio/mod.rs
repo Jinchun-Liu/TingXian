@@ -18,6 +18,9 @@ pub mod ffmpeg_mixer;  // NEW: FFmpeg-style adaptive audio mixer
 // New simplified audio system
 pub mod recording_state;
 pub mod microphone_gate;
+pub mod interview_health;
+pub mod asr_queue;
+pub mod utterance_refinement;
 pub mod pipeline;
 pub mod stream;
 pub mod recording_manager;
