@@ -21,4 +21,4 @@ pub use structured::*;
 pub type Result<T> = std::result::Result<T, String>;
 
 pub mod preferences;
-pub use preferences::InterviewPreferences;
+pub use preferences::{InterviewPreferences, ConversationScenario};

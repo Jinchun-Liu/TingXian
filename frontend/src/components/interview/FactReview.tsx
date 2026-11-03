@@ -41,10 +41,10 @@ export function FactReview({card,candidates,locked,onSave,onRefresh,onBusyChange
     finally{if(generation===historyGeneration.current)setHistoryBusy(false);}
   };
   return <section className="rounded border p-3 space-y-3 text-sm">
-    <h3 className="font-medium">个人事实更正 · 当前 v{card.version}</h3>
+    <h3 className="font-medium">已确认事实更正 · 当前 v{card.version}</h3>
     <p className="text-xs text-slate-500">更正只写入独立版本，保留旧值、来源和确认时间，不修改原文件。语音、练习答案和 AI 建议不会自动写入事实卡。清空正文也会保存为空的新版本，旧版本仍可查看。</p>
     <div className="grid md:grid-cols-2 gap-3">
-      <details className="rounded bg-slate-50 p-3" open><summary>当前事实卡 v{card.version} · {card.confirmed_at?'本人已确认':'沿用旧版，尚未重新确认'}</summary><p className="whitespace-pre-wrap mt-2">{card.text || '尚无个人事实'}</p><p className="text-xs text-slate-500 mt-2">来源：{card.source_note}</p>{card.confirmed_at && <p className="text-xs text-slate-500">确认：{new Date(card.confirmed_at).toLocaleString('zh-CN')}</p>}<Sources sources={card.sources}/></details>
+      <details className="rounded bg-slate-50 p-3" open><summary>当前事实卡 v{card.version} · {card.confirmed_at?'本人已确认':'沿用旧版，尚未重新确认'}</summary><p className="whitespace-pre-wrap mt-2">{card.text || '尚无已确认事实'}</p><p className="text-xs text-slate-500 mt-2">来源：{card.source_note}</p>{card.confirmed_at && <p className="text-xs text-slate-500">确认：{new Date(card.confirmed_at).toLocaleString('zh-CN')}</p>}<Sources sources={card.sources}/></details>
       <label>本人确认的事实卡（可留空）<textarea className="w-full border rounded p-2 mt-1 h-40 text-sm" maxLength={2200} value={text} disabled={locked || saving} onChange={e=>edit(setText,e.target.value)} placeholder="只填写本人核对过的事实与来源，不粘贴 AI 建议。" /></label>
     </div>
     {stale && <p role="alert" className="text-amber-700">事实卡已更新到 v{card.version}，当前编辑稿仍基于 v{base}，不能直接覆盖。请比较上方最新事实卡。</p>}

@@ -6,6 +6,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { Button } from '@/components/ui/button';
 import { ResidueNotice } from '@/components/interview/ResidueNotice';
+import { automaticAtStart, scenarioNames, scenarioOf, recentDiscussionRequest, learningExplanationRequest } from '@/lib/conversation-scenarios';
 import { InterviewPreferences, type InterviewContext } from '@/components/interview/InterviewPreferences';
 import { RequestSettings } from '@/components/interview/RequestSettings';
 import { ConnectionCheck } from '@/components/interview/ConnectionCheck';
@@ -43,7 +44,7 @@ const importPhaseNames: Record<string,string> = { starting: '正在准备导入'
 type Stream = { question_id: string; revision: number; event: { type: string; attempt?: number; text?: string; message?: string; evidence?: Source[]; conflicts?: SourceConflict[]; retrieval_ms?: number; fact_version?: number; first_text_ms?: number; elapsed_ms?: number; usage?: { total_tokens?: number } | null } };
 const DEFAULT_REQUEST_LIMIT = 80;
 const REQUEST_LIMIT_WARNING = 5;
-const kindNames: Record<string, string> = { personal: '个人事实汇总', evidence: '原始证据', practice: '练习参考', job: '岗位信息', technical: '技术笔记' };
+const kindNames: Record<string, string> = { personal: '个人事实汇总', evidence: '原始证据', practice: '练习参考', job: '岗位 / 角色信息', technical: '知识与背景资料' };
 
 export default function InterviewPage() {
   const recording = useRecordingState();
@@ -68,10 +69,13 @@ export default function InterviewPage() {
   const busy=operationBusy||connectionChecking;
   const [generating, setGenerating] = useState(false);
   const [frozen, setFrozen] = useState(false);
+  const scenario=scenarioOf(status?.preferences);
+  const resumeAutomatic=useRef(false);
   const [automatic, setAutomatic] = useState(false);
   const [queued, setQueued] = useState(0);
   const [audioAllowed, setAudioAllowed] = useState(false);
   const [cloudAllowed, setCloudAllowed] = useState(false);
+  const autoOnStart=automaticAtStart(scenario,cloudAllowed,!!status?.key_configured);
   const [transcripts, setTranscripts] = useState<TranscriptInput[]>([]);
   const [root, setRoot] = useState('');
   const [files, setFiles] = useState<File[]>([]);
@@ -114,6 +118,7 @@ export default function InterviewPage() {
   const audioHealth = useRef(new InterviewAudioHealth());
   const [healthView, setHealthView] = useState(() => audioHealth.current.view());
   const healthPauseApplied = useRef(false);
+  const healthResumeAutomatic = useRef(false);
   const [confirmedAnswer, setConfirmedAnswer] = useState('');
   const active = useRef<string | null>(null);
   const activeRevision=useRef(-1);
@@ -131,6 +136,7 @@ export default function InterviewPage() {
       && previous.canResume === view.canResume && previous.advisory === view.advisory ? previous : view);
     if (view.paused) {
       // Synchronous guard closes the timer race before React renders.
+      if (!healthPauseApplied.current) healthResumeAutomatic.current=live.current.automatic;
       live.current.automatic = false; setAutomatic(false);
       if (!healthPauseApplied.current) {
         const pending = new Set(utterances.current.list().map(t => t.id));
@@ -220,7 +226,8 @@ export default function InterviewPage() {
       setHistory(h => h.map(t => t.id === editingSelfId ? { ...t, question: q } : t));
       selfEditBase.current=null;setEditingSelfId(null); setQuestion('');setNotice('本人回答已修正，未调用 AI。');return;
     }
-    if (!cloudAllowed) { setNotice('请先勾选允许将对方发言、双方近期对话与选定证据发送给 DeepSeek。'); return; }
+    if (!cloudAllowed) { setNotice('请先允许将发言、近期对话、场景、事实卡与选定证据发送给 DeepSeek。'); return; }
+    if (!status?.key_configured) { setNotice('请先在资料与设置中配置自己的 DeepSeek API Key；本地转写不需要 Key。'); return; }
     if (calls >= limit) { setNotice('已达到本次会话请求软上限，可在下方手动增加 20 次。'); return; }
     inFlight.current = true; setFrozen(false);
     const previousId = active.current;
@@ -233,14 +240,14 @@ export default function InterviewPage() {
     trace.mark('submitted'); latencies.current.set(id, trace);
     current.current = { question: q, answer: '' };
     setHistory(h => {
-      const next: Turn = { role: automated ? 'remote' : 'manual', id, question: q, suggestion: '', confirmed_answer: null, status: 'generating', sources: [], time: new Date().toLocaleTimeString('zh-CN'), timing: latencyLabel(trace.snapshot()), latency: trace.snapshot() };
+      const next: Turn = { scenario, role: automated ? 'remote' : 'manual', id, question: q, suggestion: '', confirmed_answer: null, status: 'generating', sources: [], time: new Date().toLocaleTimeString('zh-CN'), timing: latencyLabel(trace.snapshot()), latency: trace.snapshot() };
       const updated = h.map(t => t.id === previousId && t.status === 'generating' ? { ...t, status: 'cancelled' as const, latency: latencies.current.get(t.id)?.snapshot() || t.latency } : t);
       return updated.some(t => t.id === id) ? updated.map(t => t.id === id ? { ...next, time: t.time } : t) : [...updated, next];
     });
     if (!automated) setQuestion('');
     setAnswer(''); setSources([]); setConflicts([]); setNotice(''); setAnswerWarning(''); setTiming(''); setUsage('未知'); setGenerating(true); setPhase('检索与生成中');
     try {
-      await invoke('answer_start', { questionId: id, revision, question: q, history: history.filter(t => t.status === 'done' && t.role !== 'self').slice(-3).map(t => ({ question: t.question, confirmed_answer: t.confirmed_answer })), dialogue: spoken.current.slice(-12).map(t => ({ source: t.source, text: t.text })) });
+      await invoke('answer_start', { questionId: id, revision, question: q, history: history.filter(t => t.status === 'done' && t.role !== 'self').slice(-3).map(t => ({ question: t.question, confirmed_answer: t.confirmed_answer, suggested_answer: t.suggestion })), dialogue: spoken.current.slice(-12).map(t => ({ source: t.source, text: t.text })) });
       if(usageLedger.current.accept(id,revision)){setCalls(n=>n+1);setUsageVersion(v=>v+1);}
       if (active.current === id && activeRevision.current===revision) setStatus(s => s ? { ...s, session_active: true } : s);
     } catch (e) { if(usageLedger.current.finish(id,revision,'error'))setUsageVersion(v=>v+1);if (active.current === id && activeRevision.current===revision) { trace.end('error'); setHistory(h => h.map(t => t.id === id ? { ...t, latency: trace.snapshot() } : t)); inFlight.current = false; setAutomatic(false); setHistory(h => h.map(t => t.id === id ? { ...t, status: 'error' } : t)); error(e); setGenerating(false); setPhase('请求失败 · 自动队列已暂停，可重试当前句'); } }
@@ -467,7 +474,7 @@ export default function InterviewPage() {
       setTiming(''); setUsage('未知'); setGenerating(false); setFrozen(false); setLevel(0); setMicLevel(0);
       setFeedGeneration(v=>v+1);
       setPhase('历史已清空 · 可重新开始');
-      setNotice(`历史已移入废纸篓：${report.recording_folders} 个录音记录目录、${report.database_meetings} 条已保存会议、${report.saved_sessions || 0} 份会话快照，以及本次对话和恢复缓存。个人资料库已保留。点击“开始持续聆听与回答”开始新会话。`);
+      setNotice(`历史已移入废纸篓：${report.recording_folders} 个录音记录目录、${report.database_meetings} 条已保存会议、${report.saved_sessions || 0} 份会话快照，以及本次对话和恢复缓存。个人资料库已保留。现在可以开始新会话。`);
       await refresh();
     } catch (e) {
       setPhase('清理未完成 · 已停止自动回答');
@@ -508,12 +515,12 @@ export default function InterviewPage() {
     } finally { microphoneChanging.current = false; }
   });
   const toggleFile = (file: File, on: boolean) => setSelected(s => {
-    const next = { ...s }; if (on) next[file.path] = { path: file.path, kind: isStructuredPath(file.path) ? 'technical' : /面试资料|面试准备|练习/.test(file.path) ? 'practice' : 'personal', allow_external: true }; else delete next[file.path]; return next;
+    const next = { ...s }; if (on) next[file.path] = { path: file.path, kind: isStructuredPath(file.path) ? 'technical' : /练习|参考答案/.test(file.path) ? 'practice' : /简历|履历/.test(file.path) ? 'personal' : 'technical', allow_external: true }; else delete next[file.path]; return next;
   });
 
-  return <main aria-label="面试辅助工作区" className="grid h-dvh w-full min-w-0 gap-4 overflow-y-auto p-4 text-slate-800 md:grid-cols-[minmax(0,1fr)_minmax(0,4fr)] md:overflow-hidden">
-    <aside aria-label="面试操作区" className="min-w-0 space-y-4 break-words rounded-xl border bg-white p-3 md:min-h-0 md:overflow-y-auto [&_button]:h-auto [&_button]:min-h-9 [&_button]:max-w-full [&_button]:whitespace-normal [&_button]:py-2 [&_svg]:shrink-0">
-      <header className="space-y-2 border-b pb-3"><p className="text-[10px] tracking-widest text-slate-500">MEETILY INTERVIEW</p><h1 className="text-xl font-semibold">面试辅助</h1><p className="text-xs text-slate-500">{[status?.preferences?.organization,status?.preferences?.role].filter(Boolean).join(' · ') || '适用于不同行业与岗位'}</p><Button className="w-full" variant="outline" aria-expanded={settings} onClick={() => setSettings(!settings)}><Settings2 className="mr-2 h-4 w-4" />资料与设置</Button></header>
+  return <main aria-label="对话助手工作区" className="grid h-dvh w-full min-w-0 gap-4 overflow-y-auto p-4 text-slate-800 md:grid-cols-[minmax(0,1fr)_minmax(0,4fr)] md:overflow-hidden">
+    <aside aria-label="对话操作区" className="min-w-0 space-y-4 break-words rounded-xl border bg-white p-3 md:min-h-0 md:overflow-y-auto [&_button]:h-auto [&_button]:min-h-9 [&_button]:max-w-full [&_button]:whitespace-normal [&_button]:py-2 [&_svg]:shrink-0">
+      <header className="space-y-2 border-b pb-3"><p className="text-[10px] tracking-widest text-slate-500">MEETILY DIALOGUE</p><h1 className="text-xl font-semibold">对话助手</h1><p className="text-xs text-slate-500">{scenarioNames[scenario]}{status?.preferences?.role ? ` · ${status.preferences.role}` : ''}</p><Button className="w-full" variant="outline" aria-expanded={settings} onClick={() => setSettings(!settings)}><Settings2 className="mr-2 h-4 w-4" />资料与设置</Button></header>
       <div className="rounded-lg bg-slate-100 px-3 py-2 text-xs space-y-1"><p role="status">{phase}</p><p>本次调用 {calls} / {limit} · 待处理 {queued} 段</p></div>
     {limit-calls <= REQUEST_LIMIT_WARNING && <p role="status" className="text-xs text-amber-800">
       {calls < limit ? `本轮还可请求 ${limit-calls} 次建议回答，可提前点击“继续 20 次”增加额度。` : '已达到本轮请求上限；正在生成的回答会继续完成，采集仍可继续。点击“继续 20 次”后可重新开启自动回答。'}
@@ -521,23 +528,23 @@ export default function InterviewPage() {
     <section aria-label="采集与回答操作" className="space-y-3">
       <div className="space-y-2 text-xs [&_label]:block"><label><input type="checkbox" checked={audioAllowed} onChange={e => setAudioAllowed(e.target.checked)} /> 已获允许使用转写</label><label><input type="checkbox" checked={cloudAllowed} onChange={e => { setCloudAllowed(e.target.checked); if (!e.target.checked) { setAutomatic(false); void cancel().catch(error); } }} /> 允许向 DeepSeek 发送发言、近期对话、场景、事实卡与选定证据</label></div>
       <div className="grid gap-2">
-        <Button disabled={!audioAllowed || !cloudAllowed || recording.isRecording || busy} onClick={() => run(async () => {
+        <Button disabled={!status || !audioAllowed || recording.isRecording || busy} onClick={() => run(async () => {
           audioHealth.current.prepareStart(); syncHealth();
-          utterances.current.reset(); setQueued(0); setFrozen(false); setAutomatic(true);
+          utterances.current.reset(); setQueued(0); setFrozen(false); setAutomatic(autoOnStart); resumeAutomatic.current=false;
           captureSession.current++;
           acceptTranscripts.current = true;
-          live.current.automatic = true;
+          live.current.automatic = autoOnStart;
           microphoneChanging.current = true;
           microphoneVersion.current++;
           try {
             applyMicrophoneState(await invoke<MicrophoneState>('interview_audio_start', { recordMicrophone }));
-            setPhase('监听中 · 对方说完后回答');
+            setPhase(autoOnStart?'监听中 · 对方说完后回答':'持续转写中 · AI 按需请求');
           } catch (e) { setAutomatic(false); live.current.automatic = false; audioHealth.current.close(); syncHealth(); throw e; }
           finally { microphoneChanging.current = false; }
-        })}><Play className="h-4 w-4 mr-1" />开始持续聆听与回答</Button>
+        })}><Play className="h-4 w-4 mr-1" />{autoOnStart ? '开始持续聆听与回答' : '开始持续转写'}</Button>
         <Button variant="outline" disabled={!recording.isRecording || busy} onClick={() => run(async () => {
-          if (recording.isPaused) { await invoke('resume_recording'); const enable = cloudAllowed && !audioHealth.current.paused; live.current.automatic = enable; setAutomatic(enable); }
-          else { live.current.automatic = false; setAutomatic(false); await cancel(); await invoke('pause_recording'); }
+          if (recording.isPaused) { await invoke('resume_recording'); const enable = resumeAutomatic.current && cloudAllowed && !!status?.key_configured && !audioHealth.current.paused; live.current.automatic = enable; setAutomatic(enable); }
+          else { resumeAutomatic.current=live.current.automatic; live.current.automatic = false; setAutomatic(false); await cancel(); await invoke('pause_recording'); }
         })}><Pause className="h-4 w-4 mr-1" />{recording.isPaused ? '恢复' : '暂停'}</Button>
         <Button variant="outline" disabled={!recording.isRecording || busy} onClick={() => run(async () => {
           live.current.automatic = false; setAutomatic(false); await cancel(); await stopInterviewAudio();
@@ -546,19 +553,20 @@ export default function InterviewPage() {
         <Button variant="outline" disabled={busy} onClick={clearHistory}><Trash2 className="h-4 w-4 mr-1" />清空历史，重新开始</Button>
         <span className="text-xs text-slate-500">{recording.isRecording ? recording.isPaused ? '采集已暂停' : recordMicrophone ? '正在采集系统输出和麦克风' : '仅采集对方系统音频 · 我的麦克风已关闭' : '采集未开始'} · 系统 {Math.round(level * 100)} · 麦克风 {Math.round(micLevel * 100)} · 按采集通道区分</span>
       </div>
-      {healthView.paused && <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm space-y-2"><p>{healthView.message}</p><Button size="sm" variant="outline" disabled={busy || !cloudAllowed || !recording.isActive || !healthView.canResume} onClick={() => {
-        if (!cloudAllowed || !recording.isActive || !audioHealth.current.resume()) return;
+      {healthView.paused && <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm space-y-2"><p>{healthView.message}</p><Button size="sm" variant="outline" disabled={busy || !recording.isActive || !healthView.canResume} onClick={() => {
+        if (!recording.isActive || !audioHealth.current.resume()) return;
         utterances.current.clear(); setQueued(0); syncHealth();
-        live.current.automatic = true; setAutomatic(true); setPhase('监听已恢复 · 故障期间的发言可手动重问');
-      }}>确认声音恢复，继续自动回答</Button><p className="text-xs">请确认音量和字幕已恢复。故障前排队及故障期间的发言不会自动补发；可编辑后重问。仍异常时点击“停止采集”再开始。</p></div>}
+        const enable=healthResumeAutomatic.current && cloudAllowed && !!status?.key_configured;
+        live.current.automatic = enable; setAutomatic(enable); setPhase(enable?'监听已恢复 · 故障期间的发言可手动重问':'本地转写已恢复 · AI 未开启');
+      }}>{healthResumeAutomatic.current && cloudAllowed && status?.key_configured ? '确认声音恢复，继续自动回答' : '确认声音恢复，继续转写'}</Button><p className="text-xs">请确认音量和字幕已恢复。故障前排队及故障期间的发言不会自动补发；可编辑后重问。仍异常时点击“停止采集”再开始。</p></div>}
       {healthView.advisory && <p role="status" className="text-xs text-amber-800">{healthView.advisory}</p>}
       <div className="text-sm space-y-1"><label><input type="checkbox" checked={recordMicrophone} disabled={busy || recording.isStopping} onChange={e => void toggleMicrophone(e.target.checked)} /> 记录我的声音（本软件麦克风）</label><p className="text-xs text-slate-500">与会议软件静音独立。可在采集中切换；关闭后释放本软件麦克风，丢弃未完成的麦克风转写，已显示的记录保留。建议使用耳机，减少重复收音。</p></div>
-      <div className="flex flex-wrap gap-4 text-xs"><label><input type="checkbox" disabled={!cloudAllowed || !recording.isActive || healthView.paused} checked={automatic} onChange={e => { const enable = e.target.checked && !audioHealth.current.paused; live.current.automatic = enable; setAutomatic(enable); }} /> 对方说完后自动回答；我的发言只作为上下文</label><span>待处理 {queued} 段 · 依次回答 · 完整记录在右侧会话中</span></div>
-      <div className="grid gap-2"><Button size="sm" variant={frozen ? 'default' : 'outline'} onClick={() => { const next = !frozen; setFrozen(next); if (next) { void cancel().catch(error); setPhase('我在回答 · 已冻结'); } }}>{frozen ? '解除冻结' : '我在回答 / 冻结'}</Button><Button size="sm" variant="outline" disabled={!generating && !queued} onClick={() => cancel().catch(error)}>取消当前与队列</Button></div>
+      <div className="flex flex-wrap gap-4 text-xs"><label><input type="checkbox" disabled={!cloudAllowed || !status?.key_configured || !recording.isActive || healthView.paused} checked={automatic} onChange={e => { const enable = e.target.checked && !audioHealth.current.paused; live.current.automatic = enable; setAutomatic(enable); }} /> 对方说完后自动回答；我的发言只作为上下文</label><span>待处理 {queued} 段 · 依次回答 · 完整记录在右侧会话中</span></div>
+      <div className="grid gap-2"><Button size="sm" variant={frozen ? 'default' : 'outline'} onClick={() => { const next = !frozen; setFrozen(next); if (next) { void cancel().catch(error); setPhase('自动回答已冻结'); } }}>{frozen ? '解除冻结' : '冻结自动回答'}</Button><Button size="sm" variant="outline" disabled={!generating && !queued} onClick={() => cancel().catch(error)}>取消当前与队列</Button></div>
       <details className="text-xs text-slate-500 space-y-2"><summary className="cursor-pointer">采集与转写说明</summary><div className="space-y-2 mt-2">
       <p className="text-xs text-slate-500">关闭无关系统声音。当前不保存原始录音；转写会留存，可通过“清空历史，重新开始”移入废纸篓。</p>
       <p className="text-xs text-slate-500">停止时给剩余转写约 5 秒收尾，超时会取消未完成部分并保留已有文字；若识别未能退出会明确报错，请稍后再次停止。</p>
-      <p className="text-xs text-slate-500">对方说话期间持续转写，停顿约 1.5 秒后合并整段生成一次回答；我的发言只转写并供后续追问参考，不单独请求 AI。请使用耳机，减少串音。</p>
+      <p className="text-xs text-slate-500">双方发言持续转写。开启自动回答后，对方停顿约 1.5 秒会合并整段请求 AI；本人发言只作上下文。未开启自动回答时，可手动提问或整理最近讨论。请使用耳机，减少串音。</p>
       <p className="text-xs text-slate-500">使用 small 模型时，长发言在说完后再做一次本地整段复核，并更新字幕后回答。复核最多覆盖连续 3 分钟；更长发言保留分段转写。原始片段可在右侧展开查看。</p>
       </div></details>
     </section>
@@ -620,12 +628,12 @@ export default function InterviewPage() {
     </section>}
     {savedSessions !== null && <section className="shrink-0 max-h-[35vh] overflow-y-auto border rounded-lg p-4 text-sm space-y-2"><Button variant="outline" size="sm" onClick={()=>setSavedSessions(null)}>收起已保存会话</Button><p>本机保存的会话 · 恢复只替换当前显示，不会自动开始采集或回答</p>{(history.length>0 || question || confirmedAnswer) && <label className="block"><input type="checkbox" disabled={busy || recording.isRecording || generating} checked={allowReplaceSession} onChange={e=>setAllowReplaceSession(e.target.checked)} /> 我已保存需要的内容，允许替换当前显示（未保存内容会丢失）</label>}{!savedSessions.length && <p>暂无已保存会话</p>}{savedSessions.map(s=><div key={s.id} className="flex justify-between items-center gap-3"><span>{new Date(s.saved_at).toLocaleString('zh-CN')} · {s.turns} 条发言 · {s.calls} 次调用</span><Button size="sm" variant="outline" disabled={busy || recording.isRecording || generating || (!!(history.length || question || confirmedAnswer) && !allowReplaceSession)} onClick={()=>restoreSession(s.id)}>恢复这份会话</Button></div>)}{savedBefore!==null && <Button variant="outline" disabled={busy} onClick={()=>listSessions(true)}>更早的保存记录</Button>}</section>}
     <section aria-label="转写与对话" className="flex min-h-0 flex-1 flex-col rounded-xl border bg-white overflow-hidden">
-      <div className="shrink-0 border-b px-4 py-3"><h2 className="font-semibold">面试对话</h2><p className="text-xs text-slate-500">持续转写到结束 · {history.length} 条记录 · 待处理 {queued} 段</p></div>
+      <div className="shrink-0 border-b px-4 py-3"><h2 className="font-semibold">对话记录</h2><p className="text-xs text-slate-500">持续转写到结束 · {history.length} 条记录 · 待处理 {queued} 段</p></div>
       <ConversationFeed key={feedGeneration} revision={history} fill>
-        {!history.length && <div className="py-16 text-center text-slate-400"><p className="text-lg">在面试开始前开启，之后持续聆听</p><p className="text-sm mt-2">双方发言持续保留；对方说完后回答，简单题简答，复杂题逐点展开。</p></div>}
+        {!history.length && <div className="py-16 text-center text-slate-400"><p className="text-lg">选择场景，开始转写或直接输入问题</p><p className="text-sm mt-2">面试、学习问答、会议共用对话历史；本地转写无需 API Key，AI 功能按需启用。</p></div>}
         {history.map(turn => <article key={turn.id} className="space-y-3">
-          <div className="ml-auto max-w-[90%] rounded-xl bg-slate-800 text-white px-4 py-3"><p className="text-xs text-slate-300 mb-1">{turn.role === 'self' ? '我的回答 · 麦克风转写' : turn.role === 'remote' ? '对端所在的系统音频' : '手动输入'} · {turn.time}</p><p className="whitespace-pre-wrap break-words">{turn.question}</p><button className="text-xs text-slate-300 underline mt-2" onClick={() => { setQuestion(turn.question); selfEditBase.current=turn.role==='self'?{id:turn.id,text:turn.question}:null;setEditingSelfId(turn.role === 'self' ? turn.id : null); }}>{turn.role === 'self' ? '纠正我的回答' : '编辑后重问'}</button></div>
-          {turn.role !== 'self' && !['recorded', 'listening', 'queued'].includes(turn.status) && <div className="mr-auto max-w-[95%] rounded-xl border bg-white px-5 py-4"><p className="text-xs text-slate-500 mb-2">AI · 结合背景理解与回答 {turn.fact_version !== undefined ? `· 事实卡 v${turn.fact_version} ` : ''}{turn.status === 'generating' ? '· 正在生成' : turn.status === 'error' ? '· 请求失败' : turn.status === 'cancelled' ? '· 已取消' : ''}</p><div className="whitespace-pre-wrap break-words text-base leading-7">{turn.suggestion || (turn.status === 'generating' ? '正在检索资料并理解整段发言…' : '未生成完整回答，可编辑后重试。')}</div>
+          <div className="ml-auto max-w-[90%] rounded-xl bg-slate-800 text-white px-4 py-3"><p className="text-xs text-slate-300 mb-1">{turn.role === 'self' ? '我的发言 · 麦克风转写' : turn.role === 'remote' ? '对端所在的系统音频' : '手动输入'} · {turn.time}</p><p className="whitespace-pre-wrap break-words">{turn.question}</p><button className="text-xs text-slate-300 underline mt-2" onClick={() => { setQuestion(turn.question); selfEditBase.current=turn.role==='self'?{id:turn.id,text:turn.question}:null;setEditingSelfId(turn.role === 'self' ? turn.id : null); }}>{turn.role === 'self' ? '纠正我的回答' : '编辑后重问'}</button>{turn.role==='self' && <button className="text-xs text-slate-300 underline ml-3 mt-2" onClick={()=>{selfEditBase.current=null;setEditingSelfId(null);setQuestion(turn.question);}}>用这句提问</button>}</div>
+          {turn.role !== 'self' && !['recorded', 'listening', 'queued'].includes(turn.status) && <div className="mr-auto max-w-[95%] rounded-xl border bg-white px-5 py-4"><p className="text-xs text-slate-500 mb-2">AI · {turn.scenario ? scenarioNames[turn.scenario] : '历史建议'} {turn.fact_version !== undefined ? `· 事实卡 v${turn.fact_version} ` : ''}{turn.status === 'generating' ? '· 正在生成' : turn.status === 'error' ? '· 请求失败' : turn.status === 'cancelled' ? '· 已取消' : ''}</p><div className="whitespace-pre-wrap break-words text-base leading-7">{turn.suggestion || (turn.status === 'generating' ? '正在检索资料并理解整段发言…' : '未生成完整回答，可编辑后重试。')}</div>
             <ConflictNotice conflicts={turn.conflicts || []} onReview={()=>setSettings(true)} />
             {turn.restored_from && <p className="text-xs text-slate-500 mt-2">已恢复的历史建议 · 来源核对状态与事实版本为保存时记录</p>}
             {turn.sources.length > 0 && <details className="border-t mt-4 pt-2"><summary className="text-xs text-slate-500 cursor-pointer">参考来源 · {turn.sources.length} 个片段</summary><div className="space-y-2 mt-2">{turn.sources.map(source => <details key={source.source_id} className="rounded bg-slate-50 p-2"><summary className="text-xs break-all cursor-pointer">{kindNames[source.kind]} · {source.path} · {source.location}</summary><p className="text-xs text-slate-500 mt-1">{source.source_id} · {sourceStatusLabel(source.metadata)}</p><p className="whitespace-pre-wrap text-sm mt-2">{source.text}</p></details>)}</div></details>}
@@ -637,7 +645,9 @@ export default function InterviewPage() {
           {turn.role === 'self' && <p className="text-xs text-right text-slate-500">只加入后续上下文 · 不触发 AI 回答 · 转写可纠正</p>}
         </article>)}
       </ConversationFeed>
-      <div className="shrink-0 border-t p-3 space-y-2 max-h-[35vh] overflow-y-auto"><QuestionComposer value={question} editingSelf={!!editingSelfId} busy={busy} cloudAllowed={cloudAllowed} onChange={setQuestion} onSubmit={()=>void submit(question)} onLocalSearch={localSearch} onCancelEdit={()=>{selfEditBase.current=null;setEditingSelfId(null);setQuestion('');setNotice('已取消修改，原记录保留。');}} />
+      <div className="shrink-0 border-t p-3 space-y-2 max-h-[35vh] overflow-y-auto">
+      {(scenario==='meeting' || scenario==='learning') && <div className="space-y-1"><Button size="sm" variant="outline" disabled={busy || generating || !cloudAllowed || !status?.key_configured || !history.length || !!editingSelfId} onClick={()=>void submit(scenario==='meeting'?recentDiscussionRequest:learningExplanationRequest)}>{scenario==='meeting'?'整理最近讨论':'解释最近内容'}</Button><p className="text-xs text-slate-500">按需调用 AI；仅使用有限的近期上下文，不代表完整会议纪要或完整课程。也可在下方直接输入问题。</p></div>}
+      <QuestionComposer value={question} editingSelf={!!editingSelfId} busy={busy} cloudAllowed={cloudAllowed} onChange={setQuestion} onSubmit={()=>void submit(question)} onLocalSearch={localSearch} onCancelEdit={()=>{selfEditBase.current=null;setEditingSelfId(null);setQuestion('');setNotice('已取消修改，原记录保留。');}} />
         {phase.startsWith('仅本地') && <div className="text-xs space-y-2"><ConflictNotice conflicts={conflicts} onReview={()=>setSettings(true)} />{sources.map(source => <details key={source.source_id}><summary>{source.path} · {source.location} · {sourceStatusLabel(source.metadata)}</summary><p className="whitespace-pre-wrap">{source.text}</p></details>)}</div>}
       </div>
     </section>

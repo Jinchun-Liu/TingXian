@@ -722,8 +722,8 @@ const Sidebar: React.FC = () => {
 
         {/* Main content - scrollable area */}
         <div className="flex-1 flex flex-col min-h-0">
-          <button onClick={() => router.push('/interview')} className="m-3 rounded-lg bg-slate-900 text-white p-3 text-sm font-medium" title="面试辅助">
-            {isCollapsed ? '问' : '面试辅助'}
+          <button onClick={() => router.push('/interview')} className="m-3 rounded-lg bg-slate-900 text-white p-3 text-sm font-medium" title="对话助手">
+            {isCollapsed ? '问' : '对话助手'}
           </button>
           {/* Fixed navigation items */}
           <div className="flex-shrink-0">

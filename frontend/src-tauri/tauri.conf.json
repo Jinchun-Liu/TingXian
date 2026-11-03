@@ -1,7 +1,7 @@
 {
     "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-    "productName": "Meetily Interview",
-    "version": "0.2.0-alpha.1",
+    "productName": "Meetily Dialogue",
+    "version": "0.3.0-alpha.1",
     "identifier": "io.github.jinchunliu.meetilyinterview",
     "build": {
         "frontendDist": "../out",
@@ -12,7 +12,7 @@
     "app": {
         "windows": [
             {
-                "title": "Meetily Interview · 通用面试助手",
+                "title": "Meetily Dialogue · 通用对话助手",
                 "width": 1440,
                 "height": 920,
                 "resizable": true,

@@ -10,6 +10,7 @@ const calls = [], listeners = new Map(), timers = [];
 const conflict={id:'C-synthetic',topic:'本科 · 毕业日期',category:'date_difference',reason:'同一主题出现不同日期，请核对',left:{source_id:'S1',fact_version:null,path:'first.md',location:'段落1',quote:'本科毕业时间：2027年7月',value:'2027-07'},right:{source_id:'S2',fact_version:null,path:'second.md',location:'段落2',quote:'本科毕业时间：2026年7月',value:'2026-07'}};
 let failStop=false, cancelOnStop=false;
 let savedRows=[], savedId=0, failSave=false, corruptLoad=false;
+let scene='interview',configuredKey=true,paused=false;
 let requestConfig={model:'deepseek-flash',connect_timeout_secs:5,first_answer_warning_secs:8,total_timeout_secs:20};
 const untestedConnection=()=>({check_id:null,status:'untested',model:null,started_at:null,finished_at:null,elapsed_ms:null,attempts:0,total_tokens:null,message:'尚未测试连接'});
 let connection=untestedConnection(),holdConnection=false,releaseConnection=null;
@@ -26,7 +27,10 @@ const healthy=()=>({session_id:++nativeSession,recording:true,active:true,paused
 let native = { recording: false, enabled: false, epoch: 0 }, failClear = false, failIndexClear = false, indexDocuments = 2;
 const invoke = async (name, args) => {
   calls.push({ name, args });
-  if(name==='interview_preferences_get')return {role:'',organization:'',context:'',terminology:'',answer_language:'auto',transcription_language:'auto'};
+  if(name==='interview_preferences_save'){scene=args.preferences.scenario;return {...args.preferences};}
+  if(name==='interview_preferences_get')return {scenario:scene,role:'',organization:'',context:'',terminology:'',answer_language:'auto',transcription_language:'auto'};
+  if(name==='pause_recording'){paused=true;return;}
+  if(name==='resume_recording'){paused=false;return;}
   if (name === 'profile_import_status') return null;
   if(name==='interview_request_config_get')return {...requestConfig};
   if(name==='interview_request_config_save'){requestConfig={...args.config};connection=untestedConnection();return {...requestConfig};}
@@ -45,7 +49,7 @@ const invoke = async (name, args) => {
 
   if (name === 'rag_search') {assert.ok(args.question);return {evidence:[],conflicts:[conflict]};}
   if (name === 'interview_config') {assert.equal(Object.hasOwn(args,'facts'),false,'ordinary config must not submit or confirm a fact draft');return;}
-  if (name === 'interview_status') return { root:'', suggested_root:'', model:requestConfig.model, aliases:'kept aliases', facts:'kept confirmed fact', key_configured:true, index_version:indexDocuments ? '1' : '2', index_documents:indexDocuments, index_chunks:indexDocuments ? 3 : 0, session_active:false };
+  if (name === 'interview_status') return { preferences:{scenario:scene}, root:'', suggested_root:'', model:requestConfig.model, aliases:'kept aliases', facts:'kept confirmed fact', key_configured:configuredKey, index_version:indexDocuments ? '1' : '2', index_documents:indexDocuments, index_chunks:indexDocuments ? 3 : 0, session_active:false };
   if (name === 'interview_audio_start') {
     assert.equal(typeof args?.recordMicrophone, 'boolean');
     assert.equal(native.recording, false, 'start while native capture still active');
@@ -100,7 +104,7 @@ function load(relative) {
   const requireMock = name => {
     if (name === '@tauri-apps/api/core') return { invoke, isTauri:()=>true };
     if (name === '@tauri-apps/api/event') return {listen:async (event,callback)=>{listeners.set(event,callback);return ()=>listeners.delete(event);}};
-    if (name === '@/contexts/RecordingStateContext') return {useRecordingState:()=>({isRecording:native.recording,isActive:native.recording,isPaused:false,isStopping:false})};
+    if (name === '@/contexts/RecordingStateContext') return {useRecordingState:()=>({isRecording:native.recording,isActive:native.recording && !paused,isPaused:paused,isStopping:false})};
     if (name === '@/contexts/TranscriptContext') return {useTranscripts:()=>({resetAfterHistoryClear:()=>{}})};
     if (name === '@/services/indexedDBService') return {indexedDBService:{suspendRecordingWrites(){cacheSuspended=true;},resumeRecordingWrites(){cacheSuspended=false;},recordingWritesSuspended:()=>cacheSuspended,inspectInterviewHistory:async()=>({meetings:recoveryFixture.meetings.length,transcripts:recoveryFixture.transcripts.length}),snapshotInterviewHistory:async()=>JSON.parse(JSON.stringify(recoveryFixture)),removeArchivedInterviewHistory:async()=>{if(failCacheRemove)throw Error('synthetic changed cache');recoveryFixture={meetings:[],transcripts:[]};}}};
     if (name === '@/components/ui/button') return {Button:props=>React.createElement('button',props)};
@@ -158,7 +162,7 @@ function text(node) { return typeof node === 'string' ? node : (node?.children||
   await act(async()=>tree.root.findByProps({id:'question'}).props.onChange({target:{value:'本科毕业时间'}}));
   await click('本地检索');
   assert.ok(text(tree.toJSON()).includes('本科毕业时间：2027年7月'));assert.ok(text(tree.toJSON()).includes('本科毕业时间：2026年7月'));
-  await click('打开资料与事实核对');assert.ok(text(tree.toJSON()).includes('个人事实更正'));
+  await click('打开资料与事实核对');assert.ok(text(tree.toJSON()).includes('已确认事实更正'));
   assert.equal(calls.filter(c=>c.name==='profile_facts_correct'||c.name==='answer_start').length,0,'reviewing a difference must not confirm facts or invoke AI');
   await click('资料与设置');
   await check('已获允许使用转写',true);await check('允许向 DeepSeek',true);
@@ -449,6 +453,46 @@ function text(node) { return typeof node === 'string' ? node : (node?.children||
   assert.ok(answers().at(-1).args.dialogue.some(t=>t.text==='额度已满时仍可本地纠正'));
   assert.ok(text(tree.toJSON()).includes('本次调用 81 / 100'));await finish();
   await click('停止采集');await act(async()=>tree.unmount());
+  // Each new scene records without cloud consent; pause/resume must not opt into AI.
+  for(const mode of ['general','learning','meeting']) {
+    scene=mode;configuredKey=false;await act(async()=>{tree=create(React.createElement(load('app/interview/page.tsx').default));});
+    await check('已获允许使用转写',true);assert.equal(button('开始持续转写').props.disabled,false);
+    const before=calls.filter(c=>c.name==='answer_start').length;
+    await click('开始持续转写');await scoped(9100,'这是一段用于测试离线记录的讨论');await latestTick();
+    assert.equal(calls.filter(c=>c.name==='answer_start').length,before);
+    await click('暂停');await click('恢复');await scoped(9101,'恢复后继续记录而不调用模型');await latestTick();
+    assert.equal(calls.filter(c=>c.name==='answer_start').length,before,'resume silently enabled AI');
+    if(mode==='meeting') {
+      const fault={session_id:healthSnapshot.session_id,sequence:1,code:'capture_error'};
+      healthSnapshot={...healthSnapshot,fault,system_frame_age_ms:null};
+      await act(async()=>listeners.get('interview-audio-fault')({payload:fault}));
+      healthSnapshot={...healthSnapshot,system_frame_age_ms:0};await act(async()=>timers.filter(t=>t.delay===500).at(-1).callback());
+      await click('确认声音恢复，继续转写');await scoped(9102,'无 Key 的本地记录可在故障后恢复');await latestTick();
+      assert.equal(answers().length,before);assert.ok(text(tree.toJSON()).includes('无 Key 的本地记录可在故障后恢复'));
+    }
+    await click('停止采集');await act(async()=>tree.unmount());
+  }
+  // Meeting summary is explicit and uses actual speech context; learning preserves AI context.
+  for(const mode of ['learning','meeting']) {
+    scene=mode;configuredKey=true;await act(async()=>{tree=create(React.createElement(load('app/interview/page.tsx').default));});
+    await check('已获允许使用转写',true);await check('允许向 DeepSeek',true);await click('开始持续转写');
+    const before=answers().length;await scoped(9200,'先讨论参与者的需求，再整理待确认事项');await latestTick();assert.equal(answers().length,before);
+    await click(mode==='meeting'?'整理最近讨论':'解释最近内容');assert.equal(answers().length,before+1);
+    assert.ok(answers().at(-1).args.dialogue.some(t=>t.text.includes('参与者的需求')));
+    const first=answers().at(-1);await act(async()=>listeners.get('interview-answer')({payload:{question_id:first.args.questionId,revision:first.args.revision,event:{type:'delta',text:'建议回答：第一步澄清需求，第二步整理约束。'}}}));await finish();
+    await act(async()=>tree.root.findByProps({id:'question'}).props.onChange({target:{value:'请展开上一轮解释'}}));await click('发送');
+    assert.equal(answers().at(-1).args.history.at(-1).suggested_answer,'建议回答：第一步澄清需求，第二步整理约束。');await finish();
+    if(mode==='learning') {
+      const beforeSelf=answers().length;
+      await emit({...own(9300,native.epoch,'请用一个日常例子解释临界点'),native_session_id:healthSnapshot.session_id});await latestTick();
+      assert.equal(answers().length,beforeSelf);await click('用这句提问');
+      assert.equal(tree.root.findByProps({id:'question'}).props.value,'请用一个日常例子解释临界点');assert.equal(answers().length,beforeSelf);
+      await click('发送');assert.equal(answers().length,beforeSelf+1);await finish();
+    }
+
+    await click('停止采集');await act(async()=>tree.unmount());
+  }
+  console.log('PASS: all general scenes capture without Key/consent, resume stays local, and learning/meeting actions are explicit with labelled AI history');
   console.log('PASS: default/clear limit 80, restore counts, warning at 75, advance +20, in-flight completion, manual/auto block, continued capture/local self editing, retained queue and explicit resume');
   console.log('PASS: actual page fault/timer race, queue suppression, manual/local fallback, latched recovery, own speech, and old-session events');
   console.log('PASS: actual Stop/End/Clear controls pass native args; stop/start and clear/start work without remount; failed Trash keeps history');

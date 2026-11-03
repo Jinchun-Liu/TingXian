@@ -96,7 +96,7 @@ pub async fn interview_preferences_save<R:tauri::Runtime>(app:tauri::AppHandle<R
     preferences.validate()?;
     let _guard=state.lifecycle.try_lock().map_err(|_|"请先完成或取消当前操作")?;
     crate::interview_exit::ensure_not_exiting(&app)?;
-    if state.session.load(Ordering::SeqCst) || crate::audio::recording_commands::is_recording().await {return Err("请结束当前会话后修改面试场景".into());}
+    if state.session.load(Ordering::SeqCst) || crate::audio::recording_commands::is_recording().await {return Err("请结束当前会话后修改对话场景".into());}
     state.index(&app).await?.set_preferences(&preferences).await?;Ok(preferences)
 }
 #[tauri::command]
@@ -567,14 +567,14 @@ pub async fn interview_audio_start(app:tauri::AppHandle,state:State<'_,Interview
     let config=crate::api::api::api_get_transcript_config(app.clone(),app.state(),None).await?
         .ok_or("请先在原生设置中下载并选择 Whisper 多语言模型")?;
     let preferences=state.index(&app).await?.preferences().await?;
-    if config.provider!="localWhisper" {return Err("面试辅助使用本地 Whisper，请在音频设置中选择本地模型".into());}
+    if config.provider!="localWhisper" {return Err("对话助手使用本地 Whisper，请在音频设置中选择本地模型".into());}
     if config.model.contains(".en") && preferences.transcription_language!="en" {return Err("英文专用模型仅支持英文转写；请选择多语言模型，或将转写语言设为英文".into());}
     let mut prefs=crate::audio::recording_preferences::load_recording_preferences(&app).await.map_err(|e|e.to_string())?;
     prefs.auto_save=false;
     crate::audio::recording_preferences::save_recording_preferences(&app,&prefs).await.map_err(|e|e.to_string())?;
     crate::set_language_preference(preferences.transcription_language).await?;
     let mic = if record_microphone { prefs.preferred_mic_device } else { Some("__interview_disabled__".into()) };
-    crate::audio::recording_commands::start_recording_with_devices_and_meeting(app.clone(),mic,prefs.preferred_system_device,Some("Interview practice".into())).await?;
+    crate::audio::recording_commands::start_recording_with_devices_and_meeting(app.clone(),mic,prefs.preferred_system_device,Some("Dialogue session".into())).await?;
     let status=crate::audio::recording_commands::microphone_status();
     // The generic recorder permits microphone-only capture after a system
     // stream error. An interview cannot claim to hear the remote participant.
