@@ -548,6 +548,8 @@ pub fn run() {
 
             log::info!("Application setup complete");
 
+            #[cfg(target_os="macos")]
+            tray::application_menu(_app.handle())?;
             // Initialize system tray
             if let Err(e) = tray::create_tray(_app.handle()) {
                 log::error!("Failed to create system tray: {}", e);
@@ -581,46 +583,10 @@ pub fn run() {
                 }
             });
 
-            // Set Parakeet models directory
-            parakeet_engine::commands::set_models_directory(&_app.handle());
-
-            // Initialize Parakeet engine on startup
-            tauri::async_runtime::spawn(async {
-                if let Err(e) = parakeet_engine::commands::parakeet_init().await {
-                    log::error!("Failed to initialize Parakeet engine on startup: {}", e);
-                }
-            });
-
-            // Interview build: local summary model manager is initialized only on explicit use.
-
-            // Trigger system audio permission request on startup (similar to microphone permission)
-            // #[cfg(target_os = "macos")]
-            // {
-            //     tauri::async_runtime::spawn(async {
-            //         if let Err(e) = audio::permissions::trigger_system_audio_permission() {
-            //             log::warn!("Failed to trigger system audio permission: {}", e);
-            //         }
-            //     });
-            // }
-
-            // Initialize database (handles first launch detection and conditional setup)
-            tauri::async_runtime::block_on(async {
-                database::setup::initialize_database_on_startup(&_app.handle()).await
-            })
-            .expect("Failed to initialize database");
-
-            // Initialize bundled templates directory for dynamic template discovery
-            log::info!("Initializing bundled templates directory...");
-            if let Ok(resource_path) = _app.handle().path().resource_dir() {
-                let templates_dir = resource_path.join("templates");
-                log::info!("Setting bundled templates directory to: {:?}", templates_dir);
-                summary::templates::set_bundled_templates_dir(templates_dir);
-            } else {
-                log::warn!("Failed to resolve resource directory for templates");
-            }
-
+            // The workspace initializes its database before mounting the session owner.
             Ok(())
         })
+        .on_menu_event(|app,event|tray::handle_menu_event(app,event.id.as_ref()))
         .on_window_event(|window, event| {
             if window.label()=="interview-conversation" && matches!(event,tauri::WindowEvent::Destroyed) {interview_windows::restore_main(window.app_handle());}
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -637,7 +603,9 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler({
+          let handle: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+            database::setup::tingxian_storage_ready,
             interview::interview_status,
             interview_windows::interview_presentation_publish,
             interview_windows::interview_presentation_get,
@@ -687,6 +655,7 @@ pub fn run() {
             interview::interview_session_export,
             interview::interview_session_list,
             interview::interview_session_load,
+            interview::tingxian_session_preview,
             interview::interview_history_clear,
             interview::interview_residue_status,
             interview::interview_residue_clear,
@@ -923,13 +892,20 @@ pub fn run() {
             audio::import::start_import_audio_command,
             audio::import::cancel_import_command,
             audio::import::is_import_in_progress_command,
-        ])
+        ];
+          move |invoke: tauri::ipc::Invoke<tauri::Wry>| {
+            if invoke.message.webview_ref().label()!="main" && invoke.message.command()!="interview_presentation_get" {
+                invoke.resolver.reject("展示窗仅可读取对话");return true;
+            }
+            handle(invoke)
+          }
+        })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app_handle, event| {
             match event {
                 tauri::RunEvent::ExitRequested { api, code, .. } if code != Some(tauri::RESTART_EXIT_CODE) => {
-                    if !_app_handle.state::<interview_exit::ExitState>().approved() {
+                    if _app_handle.try_state::<state::AppState>().is_some() && !_app_handle.state::<interview_exit::ExitState>().approved() {
                         api.prevent_exit();
                         interview_exit::request_exit(_app_handle,false);
                     }

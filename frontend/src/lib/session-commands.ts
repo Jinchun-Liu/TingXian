@@ -13,12 +13,7 @@ export function useSessionCommands(dispatch:(command:SessionCommand)=>Promise<vo
   useEffect(()=>{
     let alive=true;
     const off=listen<SessionCommand>('tingxian-session-command',e=>{if(alive)void send(e.payload);});
-    function key(e:KeyboardEvent){
-      if(e.repeat||e.isComposing||e.altKey||!(e.metaKey||e.ctrlKey)||!e.shiftKey||e.code!=='KeyR')return;
-      e.preventDefault();void send('toggle');
-    }
-    if(typeof window!=='undefined')window.addEventListener('keydown',key);
-    return()=>{alive=false;void off.then(f=>f()).catch(()=>{});if(typeof window!=='undefined')window.removeEventListener('keydown',key);};
+    return()=>{alive=false;void off.then(f=>f()).catch(()=>{});};
   },[send]);
   return send;
 }

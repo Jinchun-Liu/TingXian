@@ -1,5 +1,6 @@
 'use client';
 
+import {SavedSessionPreview} from '@/components/interview/SavedSessionPreview';
 import {useSessionCommands} from '@/lib/session-commands';
 import {PreviousMeetings} from '@/components/interview/PreviousMeetings';
 import {AudioSettings} from '@/components/interview/AudioSettings';
@@ -794,7 +795,7 @@ export default function InterviewPage() {
       <div hidden={settingsTab!=='模型接口'}><ProviderSettings openVision={openVision} openBackground={openBackground} locked={busy || !!status?.session_active || recording.isRecording || generating} onBusyChange={setBusy} onSaved={refresh} /></div>
       </div>
     </section>}
-    {savedSessions !== null && <section className="desk-panel desk-saved space-y-3"><Button variant="outline" size="sm" onClick={()=>setSavedSessions(null)}>收起已保存会话</Button><p>已保存会话</p>{(history.length>0 || question || confirmedAnswer) && <label className="block"><input type="checkbox" disabled={busy || recording.isRecording || generating} checked={allowReplaceSession} onChange={e=>setAllowReplaceSession(e.target.checked)} /> 我已保存需要的内容，允许替换当前显示（未保存内容会丢失）</label>}{!savedSessions.length && <p>暂无已保存会话</p>}{savedSessions.map(s=><div key={s.id} className="flex justify-between items-center gap-3"><span>{new Date(s.saved_at).toLocaleString('zh-CN')} · {s.turns} 条发言 · {s.calls} 次调用</span><Button size="sm" variant="outline" disabled={busy || recording.isRecording || generating || (!!(history.length || question || confirmedAnswer) && !allowReplaceSession)} onClick={()=>restoreSession(s.id)}>恢复这份会话</Button></div>)}{savedBefore!==null && <Button variant="outline" disabled={busy} onClick={()=>listSessions(true)}>更早的保存记录</Button>}<PreviousMeetings initialId={initialMeetingId}/></section>}
+    {savedSessions !== null && <section className="desk-panel desk-saved space-y-3"><Button variant="outline" size="sm" onClick={()=>setSavedSessions(null)}>收起已保存会话</Button><p>已保存会话</p>{(history.length>0 || question || confirmedAnswer) && <label className="block"><input type="checkbox" disabled={busy || recording.isRecording || generating} checked={allowReplaceSession} onChange={e=>setAllowReplaceSession(e.target.checked)} /> 我已保存需要的内容，允许替换当前显示（未保存内容会丢失）</label>}{!savedSessions.length && <p>暂无已保存会话</p>}{savedSessions.map(s=><div key={s.id} className="flex justify-between items-center gap-3"><span>{new Date(s.saved_at).toLocaleString('zh-CN')} · {s.turns} 条发言 · {s.calls} 次调用</span><Button size="sm" variant="outline" disabled={busy || recording.isRecording || generating || (!!(history.length || question || confirmedAnswer) && !allowReplaceSession)} onClick={()=>restoreSession(s.id)}>恢复这份会话</Button><SavedSessionPreview id={s.id}/></div>)}{savedBefore!==null && <Button variant="outline" disabled={busy} onClick={()=>listSessions(true)}>更早的保存记录</Button>}<PreviousMeetings initialId={initialMeetingId}/></section>}
     {!split && <div className="desk-reading" hidden={panelOpen}>
       <AnswerConversation key={feedGeneration} history={history} preferences={preferences} selectedId={selectedQuestion} onSelect={setSelectedQuestion} onEdit={editTurn} />
       <div className="desk-compose-dock">{composer}

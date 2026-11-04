@@ -25,7 +25,6 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         .menu(&menu)
         .tooltip("听弦")
         .icon(app.default_window_icon().unwrap().clone())
-        .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
         .build(app)?;
 
     // Update tray menu with actual recording state after creation
@@ -34,15 +33,33 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     Ok(())
 }
 
-fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
-    if id == "quit" { app.exit(0); return; }
-    focus_main_window(app);
+#[cfg(target_os = "macos")]
+pub fn application_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+    use tauri::menu::SubmenuBuilder;
+    let product = SubmenuBuilder::new(app, "听弦")
+        .text("settings", "音频设置").separator().hide_with_text("隐藏听弦")
+        .quit_with_text("退出听弦").build()?;
+    let toggle = MenuItemBuilder::with_id("tx_toggle","开始或停止采集")
+        .accelerator("CmdOrCtrl+Shift+R").build(app)?;
+    let session = SubmenuBuilder::new(app,"会话").item(&toggle)
+        .text("history","会议记录").text("cancel_answers","取消回答与队列").build()?;
+    let edit = SubmenuBuilder::new(app,"编辑").undo_with_text("撤销").redo_with_text("重做")
+        .separator().cut_with_text("剪切").copy_with_text("复制").paste_with_text("粘贴").select_all_with_text("全选").build()?;
+    let window = SubmenuBuilder::new(app,"窗口").text("open_window","打开听弦")
+        .minimize_with_text("最小化").close_window_with_text("关闭窗口").build()?;
+    app.set_menu(MenuBuilder::new(app).items(&[&product,&session,&edit,&window]).build()?)?;
+    Ok(())
+}
+pub fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
     let command = match id {
-        "toggle_recording" => "start", "stop_recording" => "stop",
+        "quit" => { app.exit(0); return; }
+        "open_window" => {focus_main_window(app);return;}
+        "tx_toggle" => "toggle", "toggle_recording" => "start", "stop_recording" => "stop",
         "pause_recording" => "pause", "resume_recording" => "resume",
         "settings" => "audio", "history" => "history", "cancel_answers" => "cancel",
         _ => return,
     };
+    focus_main_window(app);
     if let Err(error) = app.emit_to("main", "tingxian-session-command", command) {
         log::warn!("未能将托盘操作交给主窗口：{error}");
     }

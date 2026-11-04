@@ -49,6 +49,7 @@ const invoke = async (name, args) => {
 
   if (name === 'rag_search') {assert.ok(args.question);return {evidence:[],conflicts:[conflict]};}
   if (name === 'interview_config') {assert.equal(Object.hasOwn(args,'facts'),false,'ordinary config must not submit or confirm a fact draft');return;}
+  if(name==='api_get_meetings')return [];
   if (name === 'interview_status') return { preferences:{scenario:scene}, root:'', suggested_root:'', model:requestConfig.model, aliases:'kept aliases', facts:'kept confirmed fact', key_configured:configuredKey, index_version:indexDocuments ? '1' : '2', index_documents:indexDocuments, index_chunks:indexDocuments ? 3 : 0, session_active:false };
   if (name === 'interview_audio_start') {
     assert.equal(typeof args?.recordMicrophone, 'boolean');
@@ -106,7 +107,7 @@ function load(relative) {
     if (name === '@tauri-apps/api/event') return {listen:async (event,callback)=>{listeners.set(event,callback);return ()=>listeners.delete(event);}};
     if (name === '@/contexts/RecordingStateContext') return {useRecordingState:()=>({isRecording:native.recording,isActive:native.recording && !paused,isPaused:paused,isStopping:false})};
     if (name === '@/contexts/TranscriptContext') return {useTranscripts:()=>({resetAfterHistoryClear:()=>{}})};
-    if (name === '@/services/indexedDBService') return {indexedDBService:{suspendRecordingWrites(){cacheSuspended=true;},resumeRecordingWrites(){cacheSuspended=false;},recordingWritesSuspended:()=>cacheSuspended,inspectInterviewHistory:async()=>({meetings:recoveryFixture.meetings.length,transcripts:recoveryFixture.transcripts.length}),snapshotInterviewHistory:async()=>JSON.parse(JSON.stringify(recoveryFixture)),removeArchivedInterviewHistory:async()=>{if(failCacheRemove)throw Error('synthetic changed cache');recoveryFixture={meetings:[],transcripts:[]};}}};
+    if (name === '@/services/indexedDBService') return {indexedDBService:{getAllMeetings:async()=>[],suspendRecordingWrites(){cacheSuspended=true;},resumeRecordingWrites(){cacheSuspended=false;},recordingWritesSuspended:()=>cacheSuspended,inspectInterviewHistory:async()=>({meetings:recoveryFixture.meetings.length,transcripts:recoveryFixture.transcripts.length}),snapshotInterviewHistory:async()=>JSON.parse(JSON.stringify(recoveryFixture)),removeArchivedInterviewHistory:async()=>{if(failCacheRemove)throw Error('synthetic changed cache');recoveryFixture={meetings:[],transcripts:[]};}}};
     if (name === '@/components/ui/choice-menu') return {ChoiceMenu:'choice-menu',ChoiceOption:'choice-option'};
     if (name === '@/components/ui/button') return {Button:props=>React.createElement('button',props)};
     if (name === '@/components/ui/input') return {Input:props=>React.createElement('input',props)};

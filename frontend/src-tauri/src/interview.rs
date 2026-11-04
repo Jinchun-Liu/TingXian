@@ -741,6 +741,10 @@ pub async fn interview_session_list<R:tauri::Runtime>(app:tauri::AppHandle<R>,st
     crate::interview_sessions::list(app.state::<crate::state::AppState>().db_manager.pool(),before).await
 }
 #[tauri::command]
+pub async fn tingxian_session_preview<R:tauri::Runtime>(app:tauri::AppHandle<R>,id:i64)->Result<crate::interview_sessions::Snapshot,String> {
+    crate::interview_sessions::load(app.state::<crate::state::AppState>().db_manager.pool(),id).await
+}
+#[tauri::command]
 pub async fn interview_session_load<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,id:i64)->Result<crate::interview_sessions::Snapshot,String> {
     let _guard=state.lifecycle.lock().await;
     if crate::audio::recording_commands::is_recording().await || state.session.load(Ordering::SeqCst) {return Err("请先结束当前会话再恢复保存记录".into());}
