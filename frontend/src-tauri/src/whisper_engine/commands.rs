@@ -453,9 +453,14 @@ pub async fn whisper_download_model(
                 Ok(())
             }
             Err(e) if is_download_cancelled(&e) => {
-                // Cancellation is handled by the existing cancel command/UI path. Do not
-                // emit a terminal event or reject the original request, which would
-                // otherwise overwrite that path's Missing state with an error.
+                // The settings panel may have reopened since the request started.
+                // Notify it only after the worker has finished cancellation cleanup.
+                if let Err(error) = app_handle.emit(
+                    "model-download-cancelled",
+                    serde_json::json!({ "modelName": model_name }),
+                ) {
+                    log::warn!("Failed to emit cancellation for {}: {}", model_name, error);
+                }
                 log::info!("Download cancelled for {}", model_name);
                 Ok(())
             }
