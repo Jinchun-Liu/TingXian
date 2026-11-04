@@ -31,8 +31,8 @@ export function PreviousMeetings({initialId}:{initialId?:string}){
   return <section aria-label="以往会议" className="space-y-2 border-t pt-3">
     <h3>以往会议</h3>{message&&<p role="alert">{message} <button onClick={()=>setRevision(n=>n+1)}>重试</button></p>}
     {loading?<p>正在读取…</p>:!rows.length&&!message?<p>暂无旧会议</p>:null}
-    {rows.map(r=><button type="button" key={r.kind+r.id} className="block text-left underline" onClick={()=>void open(r)}>{r.title}{r.kind==='recovery'?' · 未保存转写':''}</button>)}
-    {detail&&<article className="space-y-2"><h4>{detail.title}</h4>{detail.transcripts.map((t,i)=><p key={i}><time>{t.timestamp}</time> {t.text}</p>)}{!detail.transcripts.length&&<p>这次会议没有转写</p>}
+    {rows.map(r=><button type="button" key={r.kind+r.id} className="block text-left underline" onClick={()=>void open(r)}>{['Interview practice','Dialogue session'].includes(r.title)?'听弦会话':r.title}{r.kind==='recovery'?' · 未保存转写':''}</button>)}
+    {detail&&<article className="space-y-2"><h4>{['Interview practice','Dialogue session'].includes(detail.title)?'听弦会话':detail.title}</h4>{detail.transcripts.map((t,i)=><p key={i}><time>{t.timestamp}</time> {t.text}</p>)}{!detail.transcripts.length&&<p>这次会议没有转写</p>}
       <Button variant="outline" size="sm" onClick={()=>{
         const url=URL.createObjectURL(new Blob([JSON.stringify(detail,null,2)],{type:'application/json'}));const a=document.createElement('a');
         a.href=url;a.download='听弦-旧会议.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);

@@ -22,7 +22,7 @@ export function ExitCleanup(){
   },[]);
   return <Dialog open={view.requestId!==null} onOpenChange={()=>{}}>
     <DialogContent className="[&>button]:hidden" onEscapeKeyDown={event=>event.preventDefault()} onPointerDownOutside={event=>event.preventDefault()}>
-      <DialogHeader><DialogTitle>退出面试辅助</DialogTitle><DialogDescription>退出前停止采集，将临时记录移入废纸篓。已保存会话、资料和模型保留；未保存的AI答案随退出清除。</DialogDescription></DialogHeader>
+      <DialogHeader><DialogTitle>退出听弦</DialogTitle><DialogDescription>退出前停止采集，将临时记录移入废纸篓。已保存会话、资料和模型保留；未保存的AI答案随退出清除。</DialogDescription></DialogHeader>
       <p role="status">{view.phase}</p>
       {view.error && <p role="alert" className="text-sm text-amber-800 break-words">{view.error}</p>}
       {!view.busy && <div className="flex gap-2"><Button onClick={()=>void interviewExit.retry()}>重试清理并退出</Button><Button variant="outline" onClick={()=>void interviewExit.cancel()}>取消退出，返回应用</Button></div>}
