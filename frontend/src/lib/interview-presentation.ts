@@ -5,7 +5,7 @@ export type FontSize = 'small' | 'medium' | 'large';
 export type PresentationPreferences = {fontSize:FontSize;showSelf:boolean;focus:boolean};
 export const presentationDefaults:PresentationPreferences = {fontSize:'medium',showSelf:false,focus:true};
 export const fontPixels:Record<FontSize,number> = {small:16,medium:20,large:24};
-export type DisplayTurn = Pick<Turn,'id'|'role'|'question'|'suggestion'|'status'|'time'>;
+export type DisplayTurn = Pick<Turn,'id'|'role'|'question'|'suggestion'|'status'|'time'|'passive'>;
 
 /** Keep the protocol tail out of the streaming answer, including when the
  * delimiter or heading arrives one character at a time. Older saved answers

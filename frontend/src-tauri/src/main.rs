@@ -7,6 +7,13 @@ use log;
 use env_logger;
 
 fn main() {
+    if std::env::args().nth(1).as_deref()==Some("--installation-check") {
+        if let Err(e)=app_lib::tingxian_runtime::installation_check() {
+            eprintln!("{e}");std::process::exit(1);
+        }
+        println!("OK: bundled Whisper small, document runtime and FFmpeg");
+        return;
+    }
     if std::env::var_os("RUST_LOG").is_none() {
         std::env::set_var("RUST_LOG", "warn");
     }

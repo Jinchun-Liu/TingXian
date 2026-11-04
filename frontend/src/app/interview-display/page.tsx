@@ -4,7 +4,7 @@ import {invoke} from '@tauri-apps/api/core';
 import {listen,UnlistenFn} from '@tauri-apps/api/event';
 import {AnswerConversation} from '@/components/interview/AnswerConversation';
 import type {DisplayTurn,PresentationPreferences} from '@/lib/interview-presentation';
-type Snapshot={epoch:string;version:number;history:DisplayTurn[];preferences:PresentationPreferences;selected_id:string|null};
+type Snapshot={epoch:string;version:number;history:DisplayTurn[];preferences:PresentationPreferences;selected_id:string|null;call_notice?:string};
 export default function InterviewDisplay(){
   const [snapshot,setSnapshot]=useState<Snapshot|null>(null),[message,setMessage]=useState('');
   const latest=useRef<Snapshot|null>(null);
@@ -23,6 +23,7 @@ export default function InterviewDisplay(){
   },[]);
   const action=(value:unknown)=>void invoke('interview_presentation_action',{action:value}).catch(e=>setMessage(String(e)));
   return <main className="interview-display">
+    <div aria-live="assertive" className={snapshot?.call_notice ? "meeting-call" : "sr-only"}>{snapshot?.call_notice}</div>
     {message&&<p role="alert">{message}</p>}
     {snapshot?<AnswerConversation history={snapshot.history} preferences={snapshot.preferences} selectedId={snapshot.selected_id} onSelect={id=>action({type:'select',id})} onEdit={id=>action({type:'edit',id})}/>:<p className="m-auto text-slate-400">等待主窗口同步对话…</p>}
   </main>;

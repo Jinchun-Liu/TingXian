@@ -7,16 +7,16 @@ use tauri::{Emitter,Manager,State,WebviewWindow,WebviewWindowBuilder,WebviewUrl}
 const DISPLAY:&str="interview-conversation";
 #[derive(Clone,Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct DisplayTurn {id:String,role:String,question:String,suggestion:String,status:String,time:String}
+pub struct DisplayTurn {id:String,role:String,question:String,suggestion:String,status:String,time:String,#[serde(default)] passive:bool}
 #[derive(Clone,Serialize,Deserialize)]
 #[serde(deny_unknown_fields,rename_all="camelCase")]
 pub struct Preferences {font_size:String,show_self:bool,focus:bool}
 #[derive(Clone,Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Presentation {epoch:String,version:u64,history:Vec<DisplayTurn>,preferences:Preferences,selected_id:Option<String>}
+pub struct Presentation {epoch:String,version:u64,history:Vec<DisplayTurn>,preferences:Preferences,selected_id:Option<String>,#[serde(default)] call_notice:String}
 impl Presentation {
     fn validate(&self)->Result<(),String>{
-        if self.epoch.len()>100 || self.history.len()>10000 || !["small","medium","large"].contains(&self.preferences.font_size.as_str()) {return Err("对话展示数据无效".into());}
+        if self.call_notice.chars().count()>100 || self.epoch.len()>100 || self.history.len()>10000 || !["small","medium","large"].contains(&self.preferences.font_size.as_str()) {return Err("对话展示数据无效".into());}
         if self.history.iter().any(|t|t.id.len()>1000 || t.question.len()>64000 || t.suggestion.len()>128000 || !["remote","self","manual"].contains(&t.role.as_str())) {return Err("对话展示记录超过限制".into());}
         Ok(())
     }
@@ -68,7 +68,7 @@ pub async fn interview_window_mode<R:tauri::Runtime>(window:WebviewWindow<R>,sta
     let scale=window.scale_factor().map_err(|e|e.to_string())?;
     let height=(size.height as f64/scale).max(400.);
     let display=WebviewWindowBuilder::new(app,DISPLAY,WebviewUrl::App("interview-display".into()))
-        .title("Meetily · 对话").resizable(true).decorations(true)
+        .title("听弦 · 对话").resizable(true).decorations(true)
         .inner_size((size.width as f64/scale-336.).max(600.),height).min_inner_size(380.,280.)
         .position(position.x as f64/scale+336.,position.y as f64/scale).build().map_err(|e|e.to_string())?;
     *state.original.lock().unwrap_or_else(|e|e.into_inner())=Some(Bounds{position,size});

@@ -41,7 +41,7 @@ export class RemoteUtteranceQueue {
     this.drafts.set(id, draft);
     return { id: draft.id, text: draft.text, time: draft.time };
   }
-  finish(event: UtteranceEnd, allowAnswer = true): { status: 'ignored' | 'recorded' | 'failed' | 'full' | 'queued'; turn?: RemoteUtterance } {
+  finish(event: UtteranceEnd, allowAnswer = true, route?: (text:string)=>boolean): { status: 'ignored' | 'recorded' | 'failed' | 'full' | 'queued'; turn?: RemoteUtterance } {
     if (event.source !== 'System' || this.ended.has(event.utterance_id)) return { status: 'ignored' };
     this.ended.add(event.utterance_id);
     if (this.ended.size > 2000) this.ended.delete(this.ended.values().next().value!);
@@ -50,7 +50,7 @@ export class RemoteUtteranceQueue {
     const turn = draft && { id: draft.id, text: draft.text, time: draft.time };
     if (!event.success) return { status: 'failed', turn };
     if (!turn || !draft) return { status: 'ignored' };
-    if (!allowAnswer || draft.suppressed) return { status: 'recorded', turn };
+    if (draft.suppressed || (route && !route(turn.text)) || !allowAnswer) return { status: 'recorded', turn };
     if (this.pending.length >= this.capacity || turn.text.length > this.maxLength) return { status: 'full', turn };
     this.pending.push(turn);
     return { status: 'queued', turn };

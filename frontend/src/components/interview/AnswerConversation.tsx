@@ -13,7 +13,7 @@ type Props = {
 
 export function AnswerConversation({history, preferences, selectedId, onSelect, onEdit}: Props) {
   const [search, setSearch] = useState('');
-  const turns = useMemo(() => visibleTurns(history, preferences.showSelf), [history, preferences.showSelf]);
+  const turns = useMemo(() => visibleTurns(history, preferences.showSelf).filter(t=>!preferences.focus || !t.passive), [history, preferences.showSelf, preferences.focus]);
   const rows = useMemo(() => turns.map((turn, index) => {
     const result = answerPresentation(turn.suggestion, ['done','recorded'].includes(turn.status), turn.question);
     return {turn, index, result, title: result.question || turn.question};
@@ -30,7 +30,7 @@ export function AnswerConversation({history, preferences, selectedId, onSelect, 
   };
   return <section className="answer-workspace" aria-label="转写与对话">
     <header className="answer-nav">
-      <h2>面试对话</h2>
+      <h2>对话</h2>
       {rows.length > 0 && <div className="answer-history-controls">
         <input type="search" aria-label="搜索历史问题" placeholder="搜索历史" value={search} onChange={e=>setSearch(e.target.value)}/>
         <select aria-label="选择历史问题" value={selected?.turn.id || ''} onChange={e=>jumpTo(e.target.value)}>
@@ -52,7 +52,7 @@ export function AnswerConversation({history, preferences, selectedId, onSelect, 
       {shown.map(({turn,index,result}) => <article key={turn.id} id={'turn-'+turn.id} data-turn-id={turn.id}
         className="answer-sheet" style={{fontSize:fontPixels[preferences.fontSize]}}
         onPointerDown={()=>{if(preferences.focus)onSelect(turn.id);}}>
-        {turn.role==='self' ? <p className="answer-self"><span>我</span>{turn.question}</p> : <>
+        {turn.passive ? <p className="answer-source">{turn.question}</p> : turn.role==='self' ? <p className="answer-self"><span>我</span>{turn.question}</p> : <>
           <div className="answer-body" aria-label="回答正文">{result.answer || <span className="answer-pending">{
             turn.status==='listening' ? '对方仍在说话…' : turn.status==='queued' ? '等待回答通道…' : turn.status==='generating' ? '正在回答…' : '尚无回答'
           }</span>}</div>

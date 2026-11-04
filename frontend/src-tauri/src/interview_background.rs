@@ -46,7 +46,7 @@ pub async fn background_choose(window:Window,app:AppHandle,state:State<'_,Interv
     let paths=tauri::async_runtime::spawn_blocking(move||{
         let f=picker.dialog().file();
         let list=if folder{f.blocking_pick_folder().map(|v|vec![v])}
-            else if is_pack{f.add_filter("Meetily 资料包",&["json"]).blocking_pick_file().map(|v|vec![v])}
+            else if is_pack{f.add_filter("听弦资料包",&["json"]).blocking_pick_file().map(|v|vec![v])}
             else{f.add_filter("背景资料",&["md","txt","pdf","docx","json","yaml","yml"]).blocking_pick_files()};
         list.unwrap_or_default().into_iter().map(|p|p.into_path().map_err(|e|e.to_string())).collect::<Result<Vec<_>,_>>()
     }).await.map_err(|e|e.to_string())??;
@@ -57,7 +57,7 @@ pub async fn background_choose(window:Window,app:AppHandle,state:State<'_,Interv
         if !meta.is_file()||meta.len()>LIMIT as u64{return Err("请选择不超过 16 MiB 的普通 JSON 文件".into())}
         let bytes=tokio::fs::read(f).await.map_err(|e|e.to_string())?;
         if bytes.len()>LIMIT{return Err("资料包过大".into())}
-        let bundle:Bundle=serde_json::from_slice(&bytes).map_err(|_|"不是有效的 Meetily 背景资料包")?;bundle.validate()?;
+        let bundle:Bundle=serde_json::from_slice(&bytes).map_err(|_|"不是有效的 听弦背景资料包")?;bundle.validate()?;
         let version=state.index(&app).await?.setting("version").await?;
         state.background.0.lock().unwrap().draft=Some(Draft{id,version,bundle,metrics:Value::Null,failures:json!([])});
         return Ok(json!({"draft":true}))
@@ -115,8 +115,8 @@ pub async fn background_generate(window:Window,app:AppHandle,state:State<'_,Inte
 }
 async fn worker(req:&Value,work:&Work)->Result<Value,String>{
     use std::process::Stdio;
-    let python=std::env::var("INTERVIEW_PYTHON").unwrap_or_else(|_|"python3".into());
-    let mut child=tokio::process::Command::new(python).args(["-I","-u","-c",HARNESS,"desktop"]).env_remove("DEEPSEEK_API_KEY")
+    let python=crate::tingxian_runtime::document_python();
+    let mut child=tokio::process::Command::new(python).arg("-B").args(["-I","-u","-c",HARNESS,"desktop"]).env_remove("DEEPSEEK_API_KEY")
         .kill_on_drop(true).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e|e.to_string())?;
     let mut input=child.stdin.take().ok_or("资料输入不可用")?;
     input.write_all(&serde_json::to_vec(req).map_err(|e|e.to_string())?).await.map_err(|e|e.to_string())?;drop(input);

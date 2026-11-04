@@ -170,7 +170,7 @@ impl Index {
                 }
                 let plain = matches!(path.extension().and_then(|s|s.to_str()).map(str::to_lowercase).as_deref(), Some("md"|"txt"));
                 let bytes = if let (Some(format),Some(pointers))=(format,&pointers) {crate::structured::structured_segments(bytes,format,python,pointers).await?} else if plain { bytes } else {
-                    let output = tokio::time::timeout(Duration::from_secs(30), tokio::process::Command::new(python)
+                    let output = tokio::time::timeout(Duration::from_secs(30), tokio::process::Command::new(python).arg("-B")
                         .arg("-c").arg(include_str!("extract.py")).arg(&path).kill_on_drop(true).output()).await
                         .map_err(|_|"解析超时（30 秒）")?.map_err(|e| format!("解析工具不可用：{e}"))?;
                     if !output.status.success() { return Err(format!("抽取失败：{}",String::from_utf8_lossy(&output.stderr).chars().take(300).collect::<String>())); }

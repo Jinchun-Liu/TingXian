@@ -479,6 +479,7 @@ mod interview_windows;
 pub mod interview_sessions;
 pub mod interview_connection;
 pub mod interview_index;
+pub mod tingxian_runtime;
 pub mod interview_background;
 
 pub fn run() {

@@ -24,6 +24,8 @@ import { DocumentMetadata, DocumentRecord, sourceStatusLabel } from '@/lib/inter
 import { Source, Turn, SessionSnapshot, SessionPage, SavedSession, parseSessionSnapshot, recoverSessionSnapshot } from '@/lib/interview-session';
 import {InterviewUsage,usageLabel} from '@/lib/interview-usage';
 import { Input } from '@/components/ui/input';
+import {MeetingControls, CallNotice, useMeetingMode} from '@/components/interview/MeetingMode';
+import {addressedOnly} from '@/lib/meeting-mode';
 import { RemoteUtteranceQueue, RemoteUtterance, TranscriptInput, UtteranceEnd, mergeSpokenTranscript, sameCapturedUtterance } from '@/lib/interview-scheduler';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { useTranscripts } from '@/contexts/TranscriptContext';
@@ -137,6 +139,11 @@ export default function InterviewPage() {
   const changePreferences=(next:PresentationPreferences)=>{setPreferences(next);localStorage.setItem('interview-presentation',JSON.stringify(next));};
   const current = useRef({ question: '', answer: '' });
   const utterances = useRef(new RemoteUtteranceQueue());
+  const meeting = useMeetingMode(()=>{
+    const pending=new Set(utterances.current.list().map(turn=>turn.id));
+    utterances.current.clear();setQueued(0);
+    setHistory(rows=>rows.map(row=>pending.has(row.id)?{...row,status:'recorded'}:row));
+  });
   const latencies = useRef(new Map<string, TurnLatency>());
   const live = useRef({ automatic, frozen, cloudAllowed, calls, limit });
   live.current = { automatic, frozen, cloudAllowed, calls, limit };
@@ -257,13 +264,13 @@ export default function InterviewPage() {
     trace.mark('submitted'); latencies.current.set(id, trace);
     current.current = { question: q, answer: '' };
     setHistory(h => {
-      const next: Turn = { role: automated ? 'remote' : 'manual', id, question: q, suggestion: '', confirmed_answer: null, status: 'generating', sources: [], time: new Date().toLocaleTimeString('zh-CN'), timing: latencyLabel(trace.snapshot()), latency: trace.snapshot() };
+      const next: Turn = { meeting_mode:meeting.current.current.mode, role: automated ? 'remote' : 'manual', id, question: q, suggestion: '', confirmed_answer: null, status: 'generating', sources: [], time: new Date().toLocaleTimeString('zh-CN'), timing: latencyLabel(trace.snapshot()), latency: trace.snapshot() };
       return h.some(t=>t.id===id)?h.map(t=>t.id===id?{...next,time:t.time}:t):[...h,next];
     });
     if (!automated) setQuestion('');
     setAnswer(''); setSources([]); setConflicts([]); setNotice(''); setAnswerWarning(''); setTiming(''); setUsage('未知'); setGenerating(true); setPhase('检索与生成中');
     try {
-      await invoke(screenshot?'interview_screenshot_answer_start':'answer_start', { answerFirst:true, questionId: id, revision, question: q, history: historyRef.current.filter(t => t.status === 'done' && t.role !== 'self').slice(-3).map(t => ({ question: answerPresentation(t.suggestion,true,t.question).question.slice(0,1500), confirmed_answer: t.confirmed_answer })), dialogue: spoken.current.slice(-12).map(t => ({ source: t.source, text: t.text })),...(screenshot?{displayId:screenId}:{}) });
+      await invoke(screenshot?'interview_screenshot_answer_start':'answer_start', { answerFirst:true, questionId: id, revision, meetingMode:meeting.current.current.mode, question: q, history: historyRef.current.filter(t => t.status === 'done' && t.role !== 'self').slice(-3).map(t => ({ question: answerPresentation(t.suggestion,true,t.question).question.slice(0,1500), confirmed_answer: t.confirmed_answer })), dialogue: spoken.current.slice(-12).map(t => ({ source: t.source, text: t.text })),...(screenshot?{displayId:screenId}:{}) });
       if(usageLedger.current.accept(id,revision)){setCalls(n=>n+1);setUsageVersion(v=>v+1);}
       if (requests.current.get(id,revision)) setStatus(s => s ? { ...s, session_active: true } : s);
     } catch (e) {
@@ -284,9 +291,9 @@ export default function InterviewPage() {
   useEffect(()=>{
     if(!presentationEpoch.current)presentationEpoch.current=crypto.randomUUID();
     presentationRef.current={epoch:presentationEpoch.current,version:++presentationVersion.current,
-      history:history.map(({id,role,question,suggestion,status,time})=>({id,role,question,suggestion,status,time})),preferences,selected_id:selectedQuestion};
+      call_notice:meeting.notice,history:history.map(({id,role,question,suggestion,status,time,passive})=>({id,role,question,suggestion,status,time,passive})),preferences,selected_id:selectedQuestion};
     presentationDirty.current=true;
-  },[history,preferences,selectedQuestion]);
+  },[history,preferences,selectedQuestion,meeting.notice]);
   useEffect(()=>{
     if(!isTauri())return;
     let disposed=false;const stops:UnlistenFn[]=[];
@@ -322,7 +329,7 @@ export default function InterviewPage() {
   },[cancel,error]);
 
   useEffect(() => {
-    if (!isTauri()) { setNotice('此页面需在 Meetily 桌面应用运行。浏览器预览不能调用本地资料、音频或 API。'); return; }
+    if (!isTauri()) { setNotice('此页面需在听弦桌面应用运行。浏览器预览不能调用本地资料、音频或 API。'); return; }
     void refresh().catch(error);
     let disposed = false; const unlisten: UnlistenFn[] = [];
     const add = async <T,>(name: string, fn: (payload: T) => void) => {
@@ -378,25 +385,26 @@ export default function InterviewPage() {
       setTranscripts(previous => [...previous.filter(t => t.sequence_id !== event.sequence_id || t.capture_session !== event.capture_session), event].slice(-60));
       spoken.current = mergeSpokenTranscript(spoken.current, event);
       if (event.source === 'Microphone') {
+        meeting.interrupt();
         setHistory(h => [...h.filter(t => t.id !== `mic-${event.sequence_id}` && !(event.replaces_utterance && t.role === 'self' && sameCapturedUtterance({ ...t, source: 'Microphone' }, event))), { role: 'self', sequence_id: event.sequence_id, utterance_id: event.utterance_id, microphone_epoch: event.microphone_epoch, capture_session: event.capture_session, id: `mic-${event.sequence_id}`, question: event.text, suggestion: '', confirmed_answer: null, status: 'done', sources: [], time: event.timestamp, timing: event.replaces_utterance ? '已用整段语音复核' : '' }]);
         return;
       }
       audioHealth.current.transcript();
       const draft = utterances.current.receive(event);
       if (draft) setHistory(h => {
-        const row: Turn = { role: 'remote', id: draft.id, question: draft.text, suggestion: '', confirmed_answer: null, status: audioHealth.current.paused ? 'recorded' : 'listening', sources: [], time: draft.time, timing: '' };
+        const row: Turn = { passive:addressedOnly(meeting.current.current.mode), meeting_mode:meeting.current.current.mode, role: 'remote', id: draft.id, question: draft.text, suggestion: '', confirmed_answer: null, status: audioHealth.current.paused ? 'recorded' : 'listening', sources: [], time: draft.time, timing: '' };
         return h.some(t => t.id === row.id) ? h.map(t => t.id === row.id ? row : t) : [...h, row];
       });
     }).catch(error);
     void add<UtteranceEnd>('interview-utterance-end', event => {
       if (clearingHistory.current || !acceptTranscripts.current || !audioHealth.current.accepts(event.native_session_id)) return;
       const l = live.current;
-      const result = utterances.current.finish(event, l.automatic && !l.frozen && l.cloudAllowed && !audioHealth.current.paused);
+      const result = utterances.current.finish(event, l.automatic && !l.frozen && l.cloudAllowed && !audioHealth.current.paused, meeting.decide);
       if (result.turn) {
         const trace = new TurnLatency(performance.now(), event.success ? event.timing : null, Date.now(), event.success);
         latencies.current.set(result.turn.id, trace);
         if (result.status === 'failed') trace.end('error');
-        setHistory(h => h.map(t => t.id === result.turn!.id ? { ...t, latency: trace.snapshot(), status: result.status === 'queued' ? 'queued' : 'recorded' } : t));
+        setHistory(h => h.map(t => t.id === result.turn!.id ? { ...t, passive: t.passive && result.status!=='queued', latency: trace.snapshot(), status: result.status === 'queued' ? 'queued' : 'recorded' } : t));
       }
       if (result.status === 'full' || result.status === 'failed') {
         live.current.automatic = false; setAutomatic(false);
@@ -453,7 +461,7 @@ export default function InterviewPage() {
     await stopInterviewAudio();
     microphoneGate.current.close(); audioHealth.current.close(); syncHealth(); setHistory(h => h.map(t => t.status === 'listening' ? {...t,status:'recorded'} : t)); setMicLevel(0); setLevel(0);
     await invoke('session_clear');
-    setQuestion(''); setConfirmedAnswer(''); utterances.current.reset(); setQueued(0);
+    setQuestion(''); setConfirmedAnswer(''); meeting.reset(); utterances.current.reset(); setQueued(0);
     await saveSessionSnapshot();
     current.current = { question: '', answer: '' }; setPhase('会话已结束 · 已保存到本机，可恢复'); await refresh();
   });
@@ -477,7 +485,7 @@ export default function InterviewPage() {
       if (historyRef.current !== previousHistory) throw Error('当前内容发生变化，未替换；请重新选择恢复');
       setAllowReplaceSession(false);
       live.current.automatic=false;setAutomatic(false);setAudioAllowed(false);setCloudAllowed(false);setFrozen(false);
-      requests.current.clear();utterances.current.reset();latencies.current.clear();setQueued(0);setGenerating(false);
+      requests.current.clear();meeting.reset(); utterances.current.reset();latencies.current.clear();setQueued(0);setGenerating(false);
       microphoneGate.current.close();audioHealth.current.close();syncHealth();
       captureSession.current=Math.max(0,...saved.spoken_dialogue.map(t=>t.capture_session || 0),...saved.history.map(t=>t.capture_session || 0))+1;
       historyRef.current=saved.history;setHistory(saved.history);setTranscripts(saved.transcripts);spoken.current=saved.spoken_dialogue;
@@ -528,7 +536,7 @@ export default function InterviewPage() {
       archivePath = report.archive_path;
       await indexedDBService.removeArchivedInterviewHistory(recovery);
       resetAfterHistoryClear();
-      utterances.current.reset(); latencies.current.clear(); spoken.current = []; historyRef.current = [];
+      meeting.reset(); utterances.current.reset(); latencies.current.clear(); spoken.current = []; historyRef.current = [];
       requests.current.clear(); current.current = { question:'', answer:'' };
       setSavedSessions(null);setSavedBefore(null);
       setHistory([]); setTranscripts([]); setQuestion(''); setAnswer(''); setSources([]); setConflicts([]);
@@ -597,21 +605,19 @@ export default function InterviewPage() {
   return <main aria-label="面试辅助工作区" className={`interview-desk${split ? ' desk-split' : ''}`}>
     <aside aria-label="面试操作区" className="desk-rail">
       <header className="desk-brand">
-        <svg viewBox="0 0 28 28" aria-hidden="true" width="26" height="26">
-          <path d="M4 12v4m5-9v14m5-18v22m5-17v12m5-8v4" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round"/>
-        </svg>
-        <h1>高级对话工作区</h1>
+        <img alt="" src="/tingxian.png" width="34" height="34"/><h1>听弦</h1>
       </header>
       <section aria-label="采集与回答操作" className="desk-controls">
         <div className="desk-state" data-listening={recording.isRecording && !recording.isPaused}>
           <span aria-hidden="true" className="desk-state-dot"/><span role="status">{phase}</span>
         </div>
+      <MeetingControls setup={meeting.setup} change={meeting.change}/>
       <div className="desk-permissions"><label><input type="checkbox" checked={audioAllowed} onChange={e => setAudioAllowed(e.target.checked)} /> 已获允许使用转写</label><label><input type="checkbox" checked={cloudAllowed} onChange={e => { setCloudAllowed(e.target.checked); if (!e.target.checked) { setAutomatic(false); void cancel().catch(error); } }} /> 允许向已启用的 AI 发送对方发言、近期对话和选定资料</label></div>
 
         <div className="desk-transport">
         <Button hidden={recording.isRecording} disabled={!audioAllowed || recording.isRecording || busy} onClick={() => run(async () => {
           audioHealth.current.prepareStart(); syncHealth();
-          utterances.current.reset(); setQueued(0); setFrozen(false); setAutomatic(cloudAllowed && !!status?.key_configured);
+          meeting.reset(); utterances.current.reset(); setQueued(0); setFrozen(false); setAutomatic(cloudAllowed && !!status?.key_configured);
           captureSession.current++;
           acceptTranscripts.current = true;
           live.current.automatic = cloudAllowed && !!status?.key_configured;
@@ -619,7 +625,7 @@ export default function InterviewPage() {
           microphoneVersion.current++;
           try {
             applyMicrophoneState(await invoke<MicrophoneState>('interview_audio_start', { recordMicrophone }));
-            setPhase(live.current.automatic?'监听中 · 对方说完后回答':'监听中 · 本地转写');
+            setPhase(live.current.automatic?(addressedOnly(meeting.current.current.mode)?'监听中 · 等待点名':'监听中 · 对方说完后回答'):'监听中 · 本地转写');
           } catch (e) { setAutomatic(false); live.current.automatic = false; audioHealth.current.close(); syncHealth(); throw e; }
           finally { microphoneChanging.current = false; }
         })}><Play className="h-4 w-4 mr-1" />开始持续聆听</Button>
@@ -638,7 +644,7 @@ export default function InterviewPage() {
         </label>
         <label className="desk-check">
           <input type="checkbox" checked={automatic} disabled={!cloudAllowed || !recording.isActive || healthView.paused}
-            onChange={e=>{const enable=e.target.checked&&!audioHealth.current.paused;live.current.automatic=enable;setAutomatic(enable);}}/> 对方说完后自动回答
+            onChange={e=>{const enable=e.target.checked&&!audioHealth.current.paused;live.current.automatic=enable;setAutomatic(enable);}}/> {addressedOnly(meeting.setup.mode)?'点到我时自动回答':'对方说完后自动回答'}
         </label>
       {healthView.paused && <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm space-y-2"><p>{healthView.message}</p><Button size="sm" variant="outline" disabled={busy || !cloudAllowed || !recording.isActive || !healthView.canResume} onClick={() => {
         if (!cloudAllowed || !recording.isActive || !audioHealth.current.resume()) return;
@@ -650,7 +656,7 @@ export default function InterviewPage() {
         <Button className="w-full" variant="outline" title={status?.vision_ready ? `向 ${status.vision_model} 发送所选整屏和近期对话` : "打开视觉模型配置"} disabled={busy||!!editingSelfId} onClick={()=>void submit(question.trim()||'请识别屏幕中的完整题目，并结合本次双方对话提供答案。',false,undefined,true)}>截屏并回答</Button>
 
       </section>
-      <div className="desk-tools">
+      <CallNotice text={split ? meeting.notice : null}/><div className="desk-tools">
         <details className="desk-fold"><summary>屏幕与显示</summary><div>
         <Button variant="outline" className="w-full" disabled={windowChanging} onClick={async()=>{
           setWindowChanging(true);try{setSplit(await invoke<boolean>('interview_window_mode',{enabled:!split}));}catch(e){error(e);}finally{setWindowChanging(false);}
@@ -702,6 +708,7 @@ export default function InterviewPage() {
       </div>}
     </aside>
     <div aria-label="识别与对话区" className={`desk-stage${split && panelOpen ? ' desk-stage-overlay' : ''}`} hidden={split&&!panelOpen}>
+    <CallNotice text={meeting.notice}/>
     {notice && <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm break-words">{notice}</div>}
     {generating && answerWarning && <div role="status" className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm break-words">{answerWarning}</div>}
     {importJob && <section role="status" aria-live="polite" className="rounded-lg border bg-slate-50 p-3 text-sm flex items-center justify-between gap-3">

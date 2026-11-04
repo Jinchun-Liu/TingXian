@@ -24,6 +24,8 @@ import { DocumentMetadata, DocumentRecord, sourceStatusLabel } from '@/lib/inter
 import { Source, Turn, SessionSnapshot, SessionPage, SavedSession, parseSessionSnapshot, recoverSessionSnapshot } from '@/lib/interview-session';
 import {InterviewUsage,usageLabel} from '@/lib/interview-usage';
 import { Input } from '@/components/ui/input';
+import {MeetingControls, CallNotice, useMeetingMode} from '@/components/interview/MeetingMode';
+import {addressedOnly} from '@/lib/meeting-mode';
 import { RemoteUtteranceQueue, RemoteUtterance, TranscriptInput, UtteranceEnd, mergeSpokenTranscript, sameCapturedUtterance } from '@/lib/interview-scheduler';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { useTranscripts } from '@/contexts/TranscriptContext';
@@ -75,7 +77,7 @@ export default function InterviewPage() {
   const [queued, setQueued] = useState(0);
   const [audioAllowed, setAudioAllowed] = useState(false);
   const [cloudAllowed, setCloudAllowed] = useState(false);
-  const autoOnStart=automaticAtStart(scenario,cloudAllowed,!!status?.key_configured);
+
   const [transcripts, setTranscripts] = useState<TranscriptInput[]>([]);
   const [root, setRoot] = useState('');
   const [files, setFiles] = useState<File[]>([]);
@@ -124,6 +126,12 @@ export default function InterviewPage() {
   const activeRevision=useRef(-1);
   const current = useRef({ question: '', answer: '' });
   const utterances = useRef(new RemoteUtteranceQueue());
+  const meeting = useMeetingMode(()=>{
+    const pending=new Set(utterances.current.list().map(turn=>turn.id));
+    utterances.current.clear();setQueued(0);
+    setHistory(rows=>rows.map(row=>pending.has(row.id)?{...row,status:'recorded'}:row));
+  });
+  const autoOnStart=automaticAtStart(scenario,cloudAllowed,!!status?.key_configured) || (addressedOnly(meeting.setup.mode) && cloudAllowed && !!status?.key_configured);
   const latencies = useRef(new Map<string, TurnLatency>());
   const inFlight = useRef(false);
   const live = useRef({ automatic, frozen, cloudAllowed, calls, limit });
@@ -240,14 +248,14 @@ export default function InterviewPage() {
     trace.mark('submitted'); latencies.current.set(id, trace);
     current.current = { question: q, answer: '' };
     setHistory(h => {
-      const next: Turn = { scenario, role: automated ? 'remote' : 'manual', id, question: q, suggestion: '', confirmed_answer: null, status: 'generating', sources: [], time: new Date().toLocaleTimeString('zh-CN'), timing: latencyLabel(trace.snapshot()), latency: trace.snapshot() };
+      const next: Turn = { meeting_mode:meeting.current.current.mode, scenario, role: automated ? 'remote' : 'manual', id, question: q, suggestion: '', confirmed_answer: null, status: 'generating', sources: [], time: new Date().toLocaleTimeString('zh-CN'), timing: latencyLabel(trace.snapshot()), latency: trace.snapshot() };
       const updated = h.map(t => t.id === previousId && t.status === 'generating' ? { ...t, status: 'cancelled' as const, latency: latencies.current.get(t.id)?.snapshot() || t.latency } : t);
       return updated.some(t => t.id === id) ? updated.map(t => t.id === id ? { ...next, time: t.time } : t) : [...updated, next];
     });
     if (!automated) setQuestion('');
     setAnswer(''); setSources([]); setConflicts([]); setNotice(''); setAnswerWarning(''); setTiming(''); setUsage('未知'); setGenerating(true); setPhase('检索与生成中');
     try {
-      await invoke('answer_start', { questionId: id, revision, question: q, history: history.filter(t => t.status === 'done' && t.role !== 'self').slice(-3).map(t => ({ question: t.question, confirmed_answer: t.confirmed_answer, suggested_answer: t.suggestion })), dialogue: spoken.current.slice(-12).map(t => ({ source: t.source, text: t.text })) });
+      await invoke('answer_start', { questionId: id, revision, meetingMode:meeting.current.current.mode, question: q, history: history.filter(t => t.status === 'done' && t.role !== 'self').slice(-3).map(t => ({ question: t.question, confirmed_answer: t.confirmed_answer, suggested_answer: t.suggestion })), dialogue: spoken.current.slice(-12).map(t => ({ source: t.source, text: t.text })) });
       if(usageLedger.current.accept(id,revision)){setCalls(n=>n+1);setUsageVersion(v=>v+1);}
       if (active.current === id && activeRevision.current===revision) setStatus(s => s ? { ...s, session_active: true } : s);
     } catch (e) { if(usageLedger.current.finish(id,revision,'error'))setUsageVersion(v=>v+1);if (active.current === id && activeRevision.current===revision) { trace.end('error'); setHistory(h => h.map(t => t.id === id ? { ...t, latency: trace.snapshot() } : t)); inFlight.current = false; setAutomatic(false); setHistory(h => h.map(t => t.id === id ? { ...t, status: 'error' } : t)); error(e); setGenerating(false); setPhase('请求失败 · 自动队列已暂停，可重试当前句'); } }
@@ -267,7 +275,7 @@ export default function InterviewPage() {
   },[cancel,error]);
 
   useEffect(() => {
-    if (!isTauri()) { setNotice('此页面需在 Meetily 桌面应用运行。浏览器预览不能调用本地资料、音频或 API。'); return; }
+    if (!isTauri()) { setNotice('此页面需在听弦桌面应用运行。浏览器预览不能调用本地资料、音频或 API。'); return; }
     void refresh().catch(error);
     let disposed = false; const unlisten: UnlistenFn[] = [];
     const add = async <T,>(name: string, fn: (payload: T) => void) => {
@@ -315,25 +323,26 @@ export default function InterviewPage() {
       setTranscripts(previous => [...previous.filter(t => t.sequence_id !== event.sequence_id || t.capture_session !== event.capture_session), event].slice(-60));
       spoken.current = mergeSpokenTranscript(spoken.current, event);
       if (event.source === 'Microphone') {
+        meeting.interrupt();
         setHistory(h => [...h.filter(t => t.id !== `mic-${event.sequence_id}` && !(event.replaces_utterance && t.role === 'self' && sameCapturedUtterance({ ...t, source: 'Microphone' }, event))), { role: 'self', sequence_id: event.sequence_id, utterance_id: event.utterance_id, microphone_epoch: event.microphone_epoch, capture_session: event.capture_session, id: `mic-${event.sequence_id}`, question: event.text, suggestion: '', confirmed_answer: null, status: 'done', sources: [], time: event.timestamp, timing: event.replaces_utterance ? '已用整段语音复核' : '' }]);
         return;
       }
       audioHealth.current.transcript();
       const draft = utterances.current.receive(event);
       if (draft) setHistory(h => {
-        const row: Turn = { role: 'remote', id: draft.id, question: draft.text, suggestion: '', confirmed_answer: null, status: audioHealth.current.paused ? 'recorded' : 'listening', sources: [], time: draft.time, timing: '' };
+        const row: Turn = { passive:addressedOnly(meeting.current.current.mode), meeting_mode:meeting.current.current.mode, role: 'remote', id: draft.id, question: draft.text, suggestion: '', confirmed_answer: null, status: audioHealth.current.paused ? 'recorded' : 'listening', sources: [], time: draft.time, timing: '' };
         return h.some(t => t.id === row.id) ? h.map(t => t.id === row.id ? row : t) : [...h, row];
       });
     }).catch(error);
     void add<UtteranceEnd>('interview-utterance-end', event => {
       if (clearingHistory.current || !acceptTranscripts.current || !audioHealth.current.accepts(event.native_session_id)) return;
       const l = live.current;
-      const result = utterances.current.finish(event, l.automatic && !l.frozen && l.cloudAllowed && !audioHealth.current.paused);
+      const result = utterances.current.finish(event, l.automatic && !l.frozen && l.cloudAllowed && !audioHealth.current.paused, meeting.decide);
       if (result.turn) {
         const trace = new TurnLatency(performance.now(), event.success ? event.timing : null, Date.now(), event.success);
         latencies.current.set(result.turn.id, trace);
         if (result.status === 'failed') trace.end('error');
-        setHistory(h => h.map(t => t.id === result.turn!.id ? { ...t, latency: trace.snapshot(), status: result.status === 'queued' ? 'queued' : 'recorded' } : t));
+        setHistory(h => h.map(t => t.id === result.turn!.id ? { ...t, passive: t.passive && result.status!=='queued', latency: trace.snapshot(), status: result.status === 'queued' ? 'queued' : 'recorded' } : t));
       }
       if (result.status === 'full' || result.status === 'failed') {
         live.current.automatic = false; setAutomatic(false);
@@ -389,7 +398,7 @@ export default function InterviewPage() {
     await stopInterviewAudio();
     microphoneGate.current.close(); audioHealth.current.close(); syncHealth(); setHistory(h => h.map(t => t.status === 'listening' ? {...t,status:'recorded'} : t)); setMicLevel(0); setLevel(0);
     await invoke('session_clear');
-    setQuestion(''); setConfirmedAnswer(''); utterances.current.reset(); setQueued(0);
+    setQuestion(''); setConfirmedAnswer(''); meeting.reset(); utterances.current.reset(); setQueued(0);
     await saveSessionSnapshot();
     current.current = { question: '', answer: '' }; setPhase('会话已结束 · 已保存到本机，可恢复'); await refresh();
   });
@@ -413,7 +422,7 @@ export default function InterviewPage() {
       if (historyRef.current !== previousHistory) throw Error('当前内容发生变化，未替换；请重新选择恢复');
       setAllowReplaceSession(false);
       live.current.automatic=false;setAutomatic(false);setAudioAllowed(false);setCloudAllowed(false);setFrozen(false);
-      active.current=null;inFlight.current=false;utterances.current.reset();latencies.current.clear();setQueued(0);setGenerating(false);
+      active.current=null;inFlight.current=false;meeting.reset(); utterances.current.reset();latencies.current.clear();setQueued(0);setGenerating(false);
       microphoneGate.current.close();audioHealth.current.close();syncHealth();
       captureSession.current=Math.max(0,...saved.spoken_dialogue.map(t=>t.capture_session || 0),...saved.history.map(t=>t.capture_session || 0))+1;
       historyRef.current=saved.history;setHistory(saved.history);setTranscripts(saved.transcripts);spoken.current=saved.spoken_dialogue;
@@ -464,7 +473,7 @@ export default function InterviewPage() {
       archivePath = report.archive_path;
       await indexedDBService.removeArchivedInterviewHistory(recovery);
       resetAfterHistoryClear();
-      utterances.current.reset(); latencies.current.clear(); spoken.current = []; historyRef.current = [];
+      meeting.reset(); utterances.current.reset(); latencies.current.clear(); spoken.current = []; historyRef.current = [];
       active.current = null; inFlight.current = false; current.current = { question:'', answer:'' };
       setSavedSessions(null);setSavedBefore(null);
       setHistory([]); setTranscripts([]); setQuestion(''); setAnswer(''); setSources([]); setConflicts([]);
@@ -520,7 +529,7 @@ export default function InterviewPage() {
 
   return <main aria-label="对话助手工作区" className="grid h-dvh w-full min-w-0 gap-4 overflow-y-auto p-4 text-slate-800 md:grid-cols-[minmax(0,1fr)_minmax(0,4fr)] md:overflow-hidden">
     <aside aria-label="对话操作区" className="min-w-0 space-y-4 break-words rounded-xl border bg-white p-3 md:min-h-0 md:overflow-y-auto [&_button]:h-auto [&_button]:min-h-9 [&_button]:max-w-full [&_button]:whitespace-normal [&_button]:py-2 [&_svg]:shrink-0">
-      <header className="space-y-2 border-b pb-3"><p className="text-[10px] tracking-widest text-slate-500">MEETILY DIALOGUE</p><h1 className="text-xl font-semibold">对话助手</h1><p className="text-xs text-slate-500">{scenarioNames[scenario]}{status?.preferences?.role ? ` · ${status.preferences.role}` : ''}</p><Button className="w-full" variant="outline" aria-expanded={settings} onClick={() => setSettings(!settings)}><Settings2 className="mr-2 h-4 w-4" />资料与设置</Button></header>
+      <header className="space-y-2 border-b pb-3"><h1 className="desk-brand"><img src="/tingxian.png" alt="" width="32" height="32"/>听弦</h1><p className="text-xs text-slate-500">{scenarioNames[scenario]}{status?.preferences?.role ? ` · ${status.preferences.role}` : ''}</p><Button className="w-full" variant="outline" aria-expanded={settings} onClick={() => setSettings(!settings)}><Settings2 className="mr-2 h-4 w-4" />资料与设置</Button></header><MeetingControls setup={meeting.setup} change={meeting.change}/><CallNotice text={meeting.notice}/>
       <div className="rounded-lg bg-slate-100 px-3 py-2 text-xs space-y-1"><p role="status">{phase}</p><p>本次调用 {calls} / {limit} · 待处理 {queued} 段</p></div>
     {limit-calls <= REQUEST_LIMIT_WARNING && <p role="status" className="text-xs text-amber-800">
       {calls < limit ? `本轮还可请求 ${limit-calls} 次建议回答，可提前点击“继续 20 次”增加额度。` : '已达到本轮请求上限；正在生成的回答会继续完成，采集仍可继续。点击“继续 20 次”后可重新开启自动回答。'}
@@ -530,7 +539,7 @@ export default function InterviewPage() {
       <div className="grid gap-2">
         <Button disabled={!status || !audioAllowed || recording.isRecording || busy} onClick={() => run(async () => {
           audioHealth.current.prepareStart(); syncHealth();
-          utterances.current.reset(); setQueued(0); setFrozen(false); setAutomatic(autoOnStart); resumeAutomatic.current=false;
+          meeting.reset(); utterances.current.reset(); setQueued(0); setFrozen(false); setAutomatic(autoOnStart); resumeAutomatic.current=false;
           captureSession.current++;
           acceptTranscripts.current = true;
           live.current.automatic = autoOnStart;
@@ -538,7 +547,7 @@ export default function InterviewPage() {
           microphoneVersion.current++;
           try {
             applyMicrophoneState(await invoke<MicrophoneState>('interview_audio_start', { recordMicrophone }));
-            setPhase(autoOnStart?'监听中 · 对方说完后回答':'持续转写中 · AI 按需请求');
+            setPhase(autoOnStart?(addressedOnly(meeting.current.current.mode)?'监听中 · 等待点名':'监听中 · 对方说完后回答'):'持续转写中 · AI 按需请求');
           } catch (e) { setAutomatic(false); live.current.automatic = false; audioHealth.current.close(); syncHealth(); throw e; }
           finally { microphoneChanging.current = false; }
         })}><Play className="h-4 w-4 mr-1" />{autoOnStart ? '开始持续聆听与回答' : '开始持续转写'}</Button>

@@ -492,6 +492,22 @@ function text(node) { return typeof node === 'string' ? node : (node?.children||
 
     await click('停止采集');await act(async()=>tree.unmount());
   }
+  scene='interview';configuredKey=true;
+  await act(async()=>{tree=create(React.createElement(load('app/interview/page.tsx').default));});
+  const choose=async(label,value)=>act(async()=>tree.root.findByProps({'aria-label':label}).props.onChange({target:{value}}));
+  await choose('参会模式','groups');await choose('点名称呼','小林、Alex');
+  await check('已获允许使用转写',true);await check('允许向 DeepSeek',true);await click('开始持续聆听与回答');
+  const previous=answers().length;
+  await scoped(9500,'其他同事在讨论预算');await latestTick();assert.equal(answers().length,previous);
+  await scoped(9501,'小林。');await latestTick();assert.equal(answers().length,previous);
+  assert(text(tree.toJSON()).includes('正在叫你 · 小林'));
+  await scoped(9502,'你怎么看这次预算？');await latestTick();assert.equal(answers().length,previous+1);
+  assert.equal(answers().at(-1).args.meetingMode,'groups');
+  assert(answers().at(-1).args.dialogue.some(t=>t.text==='其他同事在讨论预算'));
+  await finish();
+  await choose('参会模式','pair');await scoped(9503,'下一题，不点名');await latestTick();assert.equal(answers().length,previous+2);
+  await finish();await click('停止采集');await act(async()=>tree.unmount());
+  console.log('PASS: actual page records group context, alerts before answering, dispatches only addressed speech, and switches back to pairs');
   console.log('PASS: all general scenes capture without Key/consent, resume stays local, and learning/meeting actions are explicit with labelled AI history');
   console.log('PASS: default/clear limit 80, restore counts, warning at 75, advance +20, in-flight completion, manual/auto block, continued capture/local self editing, retained queue and explicit resume');
   console.log('PASS: actual page fault/timer race, queue suppression, manual/local fallback, latched recovery, own speech, and old-session events');

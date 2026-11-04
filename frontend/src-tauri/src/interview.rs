@@ -254,7 +254,7 @@ pub async fn profile_scan(root:String)->Result<Vec<interview_core::Candidate>,St
 pub async fn profile_structured_preview(state:State<'_,InterviewState>,root:String,path:String)->Result<interview_core::StructuredPreview,String> {
     let _guard=state.lifecycle.try_lock().map_err(|_|"请先完成或取消当前资料操作")?;
     if state.session.load(Ordering::SeqCst){return Err("请结束会话后预览新的资料文件".into());}
-    let python=std::env::var("INTERVIEW_PYTHON").unwrap_or_else(|_|"python3".into());
+    let python=crate::tingxian_runtime::document_python();
     interview_core::preview_structured(&root,&path,&python).await
 }
 #[derive(Clone, serde::Serialize)]
@@ -282,7 +282,7 @@ pub async fn profile_import(app:tauri::AppHandle,state:State<'_,InterviewState>,
     let guard=state.lifecycle.clone().try_lock_owned().map_err(|_|"另一项操作正在进行，请稍后再导入")?;
     if state.session.load(Ordering::SeqCst){return Err("会话期间索引已锁定，请先结束会话".into());}
     let index=state.index(&app).await?.clone();
-    let python=std::env::var("INTERVIEW_PYTHON").unwrap_or_else(|_|"python3".into());
+    let python=crate::tingxian_runtime::document_python();
     let control=interview_core::ImportControl::default();
     let initial=ProfileImportEvent {import_id:import_id.clone(),phase:"starting".into(),completed:0,total:selected.len(),path:None,report:None,message:None};
     let jobs=state.imports.clone();
@@ -590,15 +590,22 @@ pub async fn rag_search<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_
     index.search_review(&question,if aliases.is_empty(){DEFAULT_ALIASES}else{&aliases},Some(&facts)).await
 }
 #[tauri::command]
-pub async fn answer_start(app:tauri::AppHandle,state:State<'_,InterviewState>,question_id:String,revision:u32,question:String,history:Vec<Turn>,dialogue:Option<Vec<interview_core::SpokenTurn>>,answer_first:Option<bool>)->Result<(),String> {
-    start_answer(app,&state,question_id,revision,question,history,dialogue,None,answer_first.unwrap_or(false)).await
+pub async fn answer_start(app:tauri::AppHandle,state:State<'_,InterviewState>,question_id:String,revision:u32,question:String,history:Vec<Turn>,dialogue:Option<Vec<interview_core::SpokenTurn>>,answer_first:Option<bool>,meeting_mode:Option<String>)->Result<(),String> {
+    start_answer(app,&state,question_id,revision,question,history,dialogue,None,answer_first.unwrap_or(false),meeting_mode).await
 }
 #[tauri::command]
-pub async fn interview_screenshot_answer_start(app:tauri::AppHandle,window:tauri::WebviewWindow,state:State<'_,InterviewState>,question_id:String,revision:u32,question:String,history:Vec<Turn>,dialogue:Option<Vec<interview_core::SpokenTurn>>,display_id:Option<u32>)->Result<(),String> {
+pub async fn interview_screenshot_answer_start(app:tauri::AppHandle,window:tauri::WebviewWindow,state:State<'_,InterviewState>,question_id:String,revision:u32,question:String,history:Vec<Turn>,dialogue:Option<Vec<interview_core::SpokenTurn>>,display_id:Option<u32>,meeting_mode:Option<String>)->Result<(),String> {
     if window.label()!="main" {return Err("请在主窗口点击截屏并回答".into());}
-    start_answer(app,&state,question_id,revision,question,history,dialogue,Some(display_id),true).await
+    start_answer(app,&state,question_id,revision,question,history,dialogue,Some(display_id),true,meeting_mode).await
 }
-async fn start_answer(app:tauri::AppHandle,state:&InterviewState,question_id:String,revision:u32,question:String,history:Vec<Turn>,dialogue:Option<Vec<interview_core::SpokenTurn>>,screenshot:Option<Option<u32>>,answer_first:bool)->Result<(),String> {
+async fn start_answer(app:tauri::AppHandle,state:&InterviewState,question_id:String,revision:u32,question:String,history:Vec<Turn>,dialogue:Option<Vec<interview_core::SpokenTurn>>,screenshot:Option<Option<u32>>,answer_first:bool,meeting_mode:Option<String>)->Result<(),String> {
+    let meeting_instruction=match meeting_mode.as_deref().unwrap_or("pair") {
+        "pair"=>"",
+        "panel"=>"多对一面试。多位提问者可能连续补充条件，围绕当前完整问题回应，不推断评委身份。",
+        "group"|"groups"=>"群面。当前问题已交给使用者或由其手动选中。区分他人的例子与使用者实际经历。对端通道混有多人，不能据此认定具体说话人。",
+        "mixed"=>"复合会议。围绕当前交给使用者的事项给可直接说出口的回应。区分讨论、建议、已定决议与待确认事项，不代替他人作承诺，不猜负责人或期限。",
+        _=>return Err("未知参会模式".into()),
+    };
     crate::interview_exit::ensure_not_exiting(&app)?;
     if question_id.len()>100 || question.trim().is_empty() || question.chars().count()>1500 {return Err("问题或问题 ID 无效".into());}
     let _guard=state.lifecycle.lock().await;
@@ -644,6 +651,10 @@ async fn start_answer(app:tauri::AppHandle,state:&InterviewState,question_id:Str
                 let system=messages[0]["content"].as_str().unwrap_or_default();
                 messages[0]["content"]=json!(format!("{system}\n本工作区输出格式优先：先直接回答，再单独一行输出 <<<QUESTION>>>，随后输出完整纠正问题，保留所有条件和子问题。"));
             }
+            if !meeting_instruction.is_empty() {
+                let system=messages[0]["content"].as_str().unwrap_or_default();
+                messages[0]["content"]=json!(format!("{system}\n{meeting_instruction}"));
+            }
             let messages=if let Some(png)=screenshot {interview_core::attach_screenshot(messages,&png)?}else{messages};
             interview_core::stream_answer_with_provider(&key,messages,cancel.clone(),&profile,|event|{
                 let body=serde_json::to_value(event).unwrap_or_default();
@@ -687,11 +698,12 @@ pub async fn interview_audio_start(app:tauri::AppHandle,state:State<'_,Interview
     crate::interview_exit::ensure_not_exiting(&app)?;
     let _guard=state.lifecycle.lock().await;
     crate::interview_exit::ensure_not_exiting(&app)?;
+    let bundled=crate::tingxian_runtime::prepare_model(&app).await?;
     let existing=crate::api::api::api_get_transcript_config(app.clone(),app.state(),None).await?;
     // Upstream seeds Parakeet on first launch. The interview entry point is
     // explicitly Whisper-only; choose base unless a valid Whisper preference exists.
-    if existing.as_ref().map_or(true,|config|config.provider!="localWhisper") {
-        crate::api::api::api_save_transcript_config(app.clone(),app.state(),"localWhisper".into(),"base".into(),None,None).await?;
+    if existing.as_ref().map_or(true,|config|config.provider!="localWhisper") || (bundled.is_some() && existing.as_ref().is_some_and(|c|c.model=="base") && !app.path().app_data_dir().map_err(|e|e.to_string())?.join("models/ggml-base.bin").is_file()) {
+        crate::api::api::api_save_transcript_config(app.clone(),app.state(),"localWhisper".into(),bundled.unwrap_or("base").into(),None,None).await?;
     }
     let config=crate::api::api::api_get_transcript_config(app.clone(),app.state(),None).await?
         .ok_or("请先在原生设置中下载并选择 Whisper 多语言模型")?;

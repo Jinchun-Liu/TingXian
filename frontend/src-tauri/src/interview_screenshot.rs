@@ -52,7 +52,7 @@ async fn capture_mac(display_id:Option<u32>)->Result<Vec<u8>,String> {
     if !displays.contains(&id){return Err("所选屏幕已断开，请刷新屏幕列表后重试".into());}
     let native=CGDisplay::new(id);
     let (width,height)=bounded_size(native.pixels_wide() as usize,native.pixels_high() as usize)?;
-    let content=sc::ShareableContent::current().await.map_err(|_|"无法获取屏幕内容，请在 macOS 系统设置 → 隐私与安全性 → 屏幕录制中允许 Meetily，然后重启应用".to_string())?;
+    let content=sc::ShareableContent::current().await.map_err(|_|"无法获取屏幕内容，请在 macOS 系统设置 → 隐私与安全性 → 屏幕录制中允许听弦，然后重启应用".to_string())?;
     let displays=content.displays();
     let display=displays.iter().find(|d|d.display_id().0==id).ok_or("没有找到所选屏幕，请检查屏幕录制权限或刷新列表")?;
     let filter=sc::ContentFilter::with_display_excluding_windows(&display,&ns::Array::new());
