@@ -4,7 +4,7 @@ import {ReactNode,useCallback,useEffect,useRef,useState} from 'react';
 import {Button} from '@/components/ui/button';
 
 /** Reading and generation are independent: interaction pauses scrolling only. */
-export function ConversationFeed({children,revision,fill=false}:{children:ReactNode;revision:unknown;fill?:boolean}) {
+export function ConversationFeed({children,revision,fill=false,showNavigation=true}:{children:ReactNode;revision:unknown;fill?:boolean;showNavigation?:boolean}) {
   const feed=useRef<HTMLDivElement>(null);
   const follow=useRef(false);
   const previous=useRef(revision);
@@ -35,7 +35,7 @@ export function ConversationFeed({children,revision,fill=false}:{children:ReactN
       }}>
       {children}
     </div>
-    <div className="shrink-0 flex flex-wrap items-center justify-between gap-2 border-t px-4 py-2 text-xs text-slate-500">
+    <div hidden={!showNavigation} className="shrink-0 flex flex-wrap items-center justify-between gap-2 border-t px-4 py-2 text-xs text-slate-500">
       <span>{following?'正在跟随最新对话':'阅读模式 · 保留当前位置'}{!following && updated?' · 有新内容':''}</span>
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" size="sm" onClick={latest}>回到最新对话</Button>

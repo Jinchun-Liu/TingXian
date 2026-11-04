@@ -32,11 +32,11 @@ export function PreviousMeetings({initialId}:{initialId?:string}){
     if(initialId)void open({kind:'meeting',id:initialId,title:''});
     return()=>{live=false;seq.current++;};
   },[initialId,revision]);
-  return <section aria-label="以往会议" className="space-y-2 border-t pt-3">
-    <h3>以往会议</h3>{message&&<p role="alert">{message} <button onClick={()=>setRevision(n=>n+1)}>重试</button></p>}
-    {loading?<p>正在读取…</p>:!rows.length&&!message?<p>暂无旧会议</p>:null}
-    {rows.map(r=><button type="button" key={r.kind+r.id} className="block text-left underline" onClick={()=>void open(r)}>{['Interview practice','Dialogue session'].includes(r.title)?'听弦会话':r.title}{r.kind==='recovery'?' · 未保存转写':''}</button>)}
-    {detail&&<article className="space-y-2"><h4>{['Interview practice','Dialogue session'].includes(detail.title)?'听弦会话':detail.title}</h4>{detail.transcripts.map((t,i)=><p key={i}><time>{t.timestamp}</time> {t.text}</p>)}{!detail.transcripts.length&&<p>这次会议没有转写</p>}
+  return <section aria-label="以往会议" className="tx-previous">
+    <header className="tx-section-head"><h3>以往会议</h3>{detail&&<button className="tx-text-action" onClick={()=>{seq.current++;setDetail(null);}}>返回列表</button>}</header>{message&&<p role="alert">{message} <button onClick={()=>setRevision(n=>n+1)}>重试</button></p>}
+    {!detail&&!rows.length&&(loading?<p className="tx-empty-line">正在读取…</p>:!message?<p className="tx-empty-line">暂无旧会议</p>:null)}
+    {!detail&&rows.map(r=><button type="button" key={r.kind+r.id} className="tx-archive-link" onClick={()=>void open(r)}>{['Interview practice','Dialogue session'].includes(r.title)?'听弦会话':r.title}{r.kind==='recovery'?' · 未保存转写':''}<span aria-hidden="true">›</span></button>)}
+    {detail&&<article className="tx-archive-detail"><h4>{['Interview practice','Dialogue session'].includes(detail.title)?'听弦会话':detail.title}</h4>{detail.transcripts.map((t,i)=><p className="tx-transcript-line" key={i}><time>{t.timestamp}</time><span>{t.text}</span></p>)}{!detail.transcripts.length&&<p>这次会议没有转写</p>}
       <Button variant="outline" size="sm" onClick={()=>{
         const url=URL.createObjectURL(new Blob([JSON.stringify(detail,null,2)],{type:'application/json'}));const a=document.createElement('a');
         a.href=url;a.download='听弦-旧会议.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
