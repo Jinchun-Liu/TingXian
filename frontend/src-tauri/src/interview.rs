@@ -707,7 +707,7 @@ pub async fn interview_audio_start(app:tauri::AppHandle,state:State<'_,Interview
     crate::audio::recording_preferences::save_recording_preferences(&app,&prefs).await.map_err(|e|e.to_string())?;
     crate::set_language_preference(preferences.transcription_language).await?;
     let mic = if record_microphone { prefs.preferred_mic_device } else { Some("__interview_disabled__".into()) };
-    crate::audio::recording_commands::start_recording_with_devices_and_meeting(app.clone(),mic,prefs.preferred_system_device,Some("Dialogue session".into())).await?;
+    crate::audio::recording_commands::start_recording_with_devices_and_meeting(app.clone(),mic,prefs.preferred_system_device,Some("Interview practice".into())).await?;
     let status=crate::audio::recording_commands::microphone_status();
     // The generic recorder permits microphone-only capture after a system
     // stream error. An interview cannot claim to hear the remote participant.

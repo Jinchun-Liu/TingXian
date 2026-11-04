@@ -1,5 +1,6 @@
 'use client';
 
+import {useSessionCommands} from '@/lib/session-commands';
 import {PreviousMeetings} from '@/components/interview/PreviousMeetings';
 import {AudioSettings} from '@/components/interview/AudioSettings';
 import {ChoiceMenu, ChoiceOption} from '@/components/ui/choice-menu';
@@ -615,6 +616,43 @@ export default function InterviewPage() {
     setSettings(!settings);
   };
 
+  const sendCommand=useSessionCommands(async(command)=>{
+    if(busy||sessionOperation.current)return;
+    if(command==='audio'){setSavedSessions(null);setSettingsTab('音频');setSettings(true);return;}
+    if(command==='history'){setSettings(false);await listSessions();return;}
+    if(command==='cancel'){await cancel().catch(error);return;}
+    if(command==='clear'){await clearHistory();return;}
+    if(command==='toggle')command=recording.isRecording?'stop':'start';
+    if(command==='start'){
+      if(recording.isRecording)return;
+      if(!audioAllowed){setNotice('请先勾选「已获允许使用转写」，再开始采集。');return;}
+      if(!status){setNotice('正在读取本机设置，请稍后重试。');return;}
+      await run(async()=>{
+          audioHealth.current.prepareStart(); syncHealth();
+          meeting.reset(); utterances.current.reset(); setQueued(0); setFrozen(false); setAutomatic(cloudAllowed && !!status?.key_configured);
+          captureSession.current++;
+          acceptTranscripts.current = true;
+          live.current.automatic = cloudAllowed && !!status?.key_configured;
+          microphoneChanging.current = true;
+          microphoneVersion.current++;
+          try {
+            applyMicrophoneState(await invoke<MicrophoneState>('interview_audio_start', { recordMicrophone }));
+            setPhase(live.current.automatic?(addressedOnly(meeting.current.current.mode)?'监听中 · 等待点名':'监听中 · 对方说完后回答'):'监听中 · 本地转写');
+          } catch (e) { setAutomatic(false); live.current.automatic = false; audioHealth.current.close(); syncHealth(); throw e; }
+          finally { microphoneChanging.current = false; }
+        });
+    }else if(command==='stop'&&recording.isRecording){
+      await run(async()=>{
+          live.current.automatic = false; setAutomatic(false); await cancel(); await stopInterviewAudio();
+          microphoneGate.current.close(); audioHealth.current.close(); syncHealth(); setHistory(h => h.map(t => t.status === 'listening' ? {...t,status:'recorded'} : t)); setMicLevel(0); setLevel(0); setPhase('采集已停止 · 可直接重新开始');
+        });
+    }else if(recording.isRecording&&(command==='pause'&&!recording.isPaused||command==='resume'&&recording.isPaused)){
+      await run(async()=>{
+          if (recording.isPaused) { await invoke('resume_recording'); const enable = cloudAllowed && !audioHealth.current.paused; live.current.automatic = enable; setAutomatic(enable); }
+          else { live.current.automatic = false; setAutomatic(false); await cancel(); await invoke('pause_recording'); }
+        });
+    }
+  });
   return <main aria-label="面试辅助工作区" className={`interview-desk${split ? ' desk-split' : ''}`}>
     <aside aria-label="面试操作区" className="desk-rail">
       <header className="desk-brand">
@@ -637,28 +675,9 @@ export default function InterviewPage() {
       <div className="desk-permissions"><label><input type="checkbox" checked={audioAllowed} onChange={e => setAudioAllowed(e.target.checked)} /> 已获允许使用转写</label><label><input type="checkbox" checked={cloudAllowed} onChange={e => { setCloudAllowed(e.target.checked); if (!e.target.checked) { setAutomatic(false); void cancel().catch(error); } }} /> 允许向已启用的 AI 发送对方发言、近期对话和选定资料</label></div>
 
         <div className="desk-transport">
-        <Button hidden={recording.isRecording} disabled={!audioAllowed || recording.isRecording || busy} onClick={() => run(async () => {
-          audioHealth.current.prepareStart(); syncHealth();
-          meeting.reset(); utterances.current.reset(); setQueued(0); setFrozen(false); setAutomatic(cloudAllowed && !!status?.key_configured);
-          captureSession.current++;
-          acceptTranscripts.current = true;
-          live.current.automatic = cloudAllowed && !!status?.key_configured;
-          microphoneChanging.current = true;
-          microphoneVersion.current++;
-          try {
-            applyMicrophoneState(await invoke<MicrophoneState>('interview_audio_start', { recordMicrophone }));
-            setPhase(live.current.automatic?(addressedOnly(meeting.current.current.mode)?'监听中 · 等待点名':'监听中 · 对方说完后回答'):'监听中 · 本地转写');
-          } catch (e) { setAutomatic(false); live.current.automatic = false; audioHealth.current.close(); syncHealth(); throw e; }
-          finally { microphoneChanging.current = false; }
-        })}><Play className="h-4 w-4 mr-1" />开始持续聆听</Button>
-        <Button variant="outline" hidden={!recording.isRecording} disabled={!recording.isRecording || busy} onClick={() => run(async () => {
-          if (recording.isPaused) { await invoke('resume_recording'); const enable = cloudAllowed && !audioHealth.current.paused; live.current.automatic = enable; setAutomatic(enable); }
-          else { live.current.automatic = false; setAutomatic(false); await cancel(); await invoke('pause_recording'); }
-        })}><Pause className="h-4 w-4 mr-1" />{recording.isPaused ? '恢复' : '暂停'}</Button>
-        <Button variant="outline" hidden={!recording.isRecording} disabled={!recording.isRecording || busy} onClick={() => run(async () => {
-          live.current.automatic = false; setAutomatic(false); await cancel(); await stopInterviewAudio();
-          microphoneGate.current.close(); audioHealth.current.close(); syncHealth(); setHistory(h => h.map(t => t.status === 'listening' ? {...t,status:'recorded'} : t)); setMicLevel(0); setLevel(0); setPhase('采集已停止 · 可直接重新开始');
-        })}><Square className="h-4 w-4 mr-1" />停止采集</Button>
+        <Button hidden={recording.isRecording} disabled={!audioAllowed || recording.isRecording || busy} onClick={()=>sendCommand('start')}><Play className="h-4 w-4 mr-1" />开始持续聆听</Button>
+        <Button variant="outline" hidden={!recording.isRecording} disabled={!recording.isRecording || busy} onClick={()=>sendCommand(recording.isPaused?'resume':'pause')}><Pause className="h-4 w-4 mr-1" />{recording.isPaused ? '恢复' : '暂停'}</Button>
+        <Button variant="outline" hidden={!recording.isRecording} disabled={!recording.isRecording || busy} onClick={()=>sendCommand('stop')}><Square className="h-4 w-4 mr-1" />停止采集</Button>
 
         </div>
         <label className="desk-check" title="本软件的麦克风独立于飞书静音">
@@ -674,7 +693,7 @@ export default function InterviewPage() {
         live.current.automatic = true; setAutomatic(true); setPhase('监听已恢复 · 故障期间的发言可手动重问');
       }}>确认声音恢复，继续自动回答</Button><p className="text-xs">请确认音量和字幕已恢复。故障前排队及故障期间的发言不会自动补发；可编辑后重问。仍异常时点击“停止采集”再开始。</p></div>}
       {healthView.advisory && <p role="status" className="text-xs text-amber-800">{healthView.advisory}</p>}
-      <div className="grid gap-2" hidden={!recording.isActive && !generating && !queued && !frozen}><Button size="sm" variant={frozen ? 'default' : 'outline'} onClick={() => { const next = !frozen; setFrozen(next); if (next) { void cancel().catch(error); setPhase('我在回答 · 已冻结'); } }}>{frozen ? '解除冻结' : '我在回答 / 冻结'}</Button><Button size="sm" variant="outline" disabled={!generating && !queued} onClick={() => cancel().catch(error)}>取消当前与队列</Button></div>
+      <div className="grid gap-2" hidden={!recording.isActive && !generating && !queued && !frozen}><Button size="sm" variant={frozen ? 'default' : 'outline'} onClick={() => { const next = !frozen; setFrozen(next); if (next) { void cancel().catch(error); setPhase('我在回答 · 已冻结'); } }}>{frozen ? '解除冻结' : '我在回答 / 冻结'}</Button><Button size="sm" variant="outline" disabled={!generating && !queued} onClick={()=>sendCommand('cancel')}>取消当前与队列</Button></div>
         <Button className="w-full" variant="outline" title={status?.vision_ready ? `向 ${status.vision_model} 发送所选整屏和近期对话` : "打开视觉模型配置"} disabled={busy||!!editingSelfId} onClick={()=>void submit(question.trim()||'请识别屏幕中的完整题目，并结合本次双方对话提供答案。',false,undefined,true)}>截屏并回答</Button>
 
       </section>
@@ -689,8 +708,8 @@ export default function InterviewPage() {
           <small>截屏会将所选整屏和近期对话发送至视觉模型。</small>
         </div></details>
         <details className="desk-fold"><summary>会话记录</summary><div>
-<Button variant="outline" size="sm" disabled={busy || !history.length} onClick={()=>run(saveSessionSnapshot)}>保存当前会话到本机</Button><Button variant="outline" size="sm" disabled={busy} onClick={()=>{setSettings(false);void listSessions();}}>查看已保存会话</Button><Button variant="outline" size="sm" onClick={exportSession}>导出本次记录</Button><Button variant="outline" size="sm" disabled={busy || !history.length} onClick={end}>结束会话并保留历史</Button>
-          <Button variant="outline" size="sm" disabled={busy} onClick={clearHistory}>清空历史，重新开始</Button>
+<Button variant="outline" size="sm" disabled={busy || !history.length} onClick={()=>run(saveSessionSnapshot)}>保存当前会话到本机</Button><Button variant="outline" size="sm" disabled={busy} onClick={()=>sendCommand('history')}>查看已保存会话</Button><Button variant="outline" size="sm" onClick={exportSession}>导出本次记录</Button><Button variant="outline" size="sm" disabled={busy || !history.length} onClick={end}>结束会话并保留历史</Button>
+          <Button variant="outline" size="sm" disabled={busy} onClick={()=>sendCommand('clear')}>清空历史，重新开始</Button>
           <small>清空会将本机已保存会话一并移入废纸篓。</small>
         </div></details>
         <details className="desk-fold"><summary>连接与用量</summary><div>
@@ -717,7 +736,7 @@ export default function InterviewPage() {
         {limit-calls<=REQUEST_LIMIT_WARNING && <Button variant="outline" size="sm" disabled={busy} onClick={()=>setLimit(l=>l+20)}>继续 20 次</Button>}
     <ResidueNotice blocked={busy || recording.isRecording || generating || history.length>0 || !!question || !!confirmedAnswer || !!status?.session_active} revision={residueRevision} onClear={clearResidue} />
 
-        <nav>{!recording.isRecording && !generating && !busy && !split && <Link href="/interview">对话助手</Link>}<button type="button" onClick={()=>{setSettings(false);void listSessions();}}>会议记录</button><button type="button" onClick={()=>{setSavedSessions(null);setSettingsTab('音频');setSettings(true);}}>音频设置</button></nav>
+        <nav>{!recording.isRecording && !generating && !busy && !split && <Link href="/interview">对话助手</Link>}<button type="button" onClick={()=>sendCommand('history')}>会议记录</button><button type="button" onClick={()=>sendCommand('audio')}>音频设置</button></nav>
       </footer>
       {split && <div className="desk-split-composer">
         {(notice||answerWarning) && <div role="status">{notice||answerWarning}</div>}
