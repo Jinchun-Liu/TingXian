@@ -69,8 +69,13 @@ impl Tap {
 
 impl TapDesc {
     pub fn create_process_tap(&self) -> os::Result<TapGuard> {
-        os::result_init(|res| unsafe { AudioHardwareCreateProcessTap(self, res) })
-            .map(|tap| TapGuard(Tap(tap)))
+        let mut id = Obj::UNKNOWN;
+        unsafe { AudioHardwareCreateProcessTap(self, &mut id) }.result()?;
+        // Some HAL configurations return noErr but leave the tap ID at zero.
+        if id == Obj::UNKNOWN {
+            return Err(os::Error::from_be_bytes(*b"!obj"));
+        }
+        Ok(TapGuard(Tap(id)))
     }
 }
 

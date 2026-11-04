@@ -71,7 +71,9 @@ impl CoreAudioCapture {
     fn tap_description(output_uid: Option<&cf::String>) -> arc::R<ca::TapDesc> {
         let mut desc = ca::TapDesc::with_mono_global_tap_excluding_processes(&cidre::ns::Array::new());
         if let Some(uid) = output_uid {
+            // CATapDescription needs the output stream index as well as the UID.
             desc.set_device_uid(Some(uid.as_ns()));
+            desc.set_stream(Some(&cidre::ns::Number::with_i32(0)));
         }
         desc
     }
@@ -105,28 +107,18 @@ impl CoreAudioCapture {
         let tap = tap_desc.create_process_tap()
             .map_err(|e| {
                 error!("❌ CoreAudio: Failed to create process tap: {:?}", e);
-                anyhow::anyhow!("Failed to create process tap: {:?}", e)
+                anyhow::anyhow!("未能创建系统音频通道，请检查输出设备和系统权限：{e:?}")
             })?;
 
         // Get tap information
-        let tap_uid = tap.uid().unwrap_or_else(|_| cf::Uuid::new().to_cf_string());
-        let tap_asbd = tap.asbd();
-
-        match tap_asbd {
-            Ok(asbd) => {
-                info!("✅ CoreAudio: Process tap created - UID: {:?}", tap_uid);
-                info!("📊 CoreAudio: Tap format - sample_rate: {} Hz, channels: {}",
-                      asbd.sample_rate, asbd.channels_per_frame);
-            }
-            Err(e) => {
-                warn!("⚠️ CoreAudio: Tap created but couldn't get format info: {:?}", e);
-            }
-        }
+        let tap_uid = tap.uid().map_err(|e| anyhow::anyhow!("无法读取系统音频通道标识，请检查输出设备和权限：{e:?}"))?;
+        let asbd = tap.asbd().map_err(|e| anyhow::anyhow!("无法读取系统音频通道格式：{e:?}"))?;
+        info!("CoreAudio: Process tap ready ({} Hz, {} channel(s))", asbd.sample_rate, asbd.channels_per_frame);
 
         // Create sub-tap dictionary
         let sub_tap = cf::DictionaryOf::with_keys_values(
             &[ca::sub_device_keys::uid()],
-            &[tap.uid().unwrap().as_type_ref()],
+            &[tap_uid.as_type_ref()],
         );
 
         // Create aggregate device descriptor
@@ -475,11 +467,34 @@ mod routing_tests {
     }
 
     #[test]
+    #[ignore = "checks the HAL response to an incomplete tap without starting audio I/O"]
+    fn successful_status_with_unknown_id_never_returns_a_tap_guard() {
+        let uid = ca::System::default_output_device().unwrap().uid().unwrap();
+        let mut desc = ca::TapDesc::with_mono_global_tap_excluding_processes(&cidre::ns::Array::new());
+        desc.set_device_uid(Some(uid.as_ns()));
+        // Sonoma returns noErr with ID zero here. A system that accepts this
+        // descriptor must produce a real, readable tap instead.
+        if let Ok(tap) = desc.create_process_tap() {
+            assert!(tap.uid().is_ok() && tap.asbd().is_ok());
+        }
+    }
+
+    #[test]
+    #[ignore = "creates and releases a real tap without starting audio I/O"]
+    fn pinned_output_creates_a_usable_mono_tap() {
+        let name = ca::System::default_output_device().unwrap().name().unwrap().to_string();
+        let capture = CoreAudioCapture::for_output(Some(&name)).unwrap();
+        assert!(capture.tap.uid().is_ok());
+        assert_eq!(capture.tap.asbd().unwrap().channels_per_frame, 1);
+    }
+
+    #[test]
     fn mono_tap_binds_only_the_explicit_device() {
         let uid = cf::String::from_str("tingxian-synthetic-output");
         for target in [None, Some(&*uid)] {
             let desc = CoreAudioCapture::tap_description(target);
             assert_eq!(desc.device_uid().map(|s| s.to_string()), target.map(|s| s.to_string()));
+            assert_eq!(desc.stream().map(|n| n.as_isize()), target.map(|_| 0));
             assert!(desc.is_mono() && desc.is_mixdown() && desc.is_exclusive());
         }
     }
