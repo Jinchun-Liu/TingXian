@@ -1,3 +1,4 @@
+import {ChoiceMenu, ChoiceOption} from '@/components/ui/choice-menu';
 import { ModelConfig } from "@/components/ModelSettingsModal";
 import { PreferenceSettings } from "@/components/PreferenceSettings";
 import { DeviceSelection } from "@/components/DeviceSelection";
@@ -91,11 +92,10 @@ export function SettingsModals({
                     Summarization Model
                   </label>
                   <div className="flex space-x-2">
-                    <select
-                      className="px-3 py-2 text-sm bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                    <ChoiceMenu aria-label="Model provider"
                       value={modelConfig.provider}
-                      onChange={(e) => {
-                        const provider = e.target.value as ModelConfig['provider'];
+                      onValueChange={nextValue => {
+                        const provider = nextValue as ModelConfig['provider'];
                         setModelConfig({
                           ...modelConfig,
                           provider,
@@ -103,25 +103,25 @@ export function SettingsModals({
                         });
                       }}
                     >
-                      <option value="builtin-ai">Built-in AI</option>
-                      <option value="claude">Claude</option>
-                      <option value="groq">Groq</option>
-                      <option value="ollama">Ollama</option>
-                      <option value="openrouter">OpenRouter</option>
-                      <option value="openai">OpenAI</option>
-                    </select>
+                      <ChoiceOption value="builtin-ai">Built-in AI</ChoiceOption>
+                      <ChoiceOption value="claude">Claude</ChoiceOption>
+                      <ChoiceOption value="groq">Groq</ChoiceOption>
+                      <ChoiceOption value="ollama">Ollama</ChoiceOption>
+                      <ChoiceOption value="openrouter">OpenRouter</ChoiceOption>
+                      <ChoiceOption value="openai">OpenAI</ChoiceOption>
+                    </ChoiceMenu>
 
-                    <select
-                      className="flex-1 px-3 py-2 text-sm bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                    <ChoiceMenu aria-label="Summarization model"
+                      className="flex-1"
                       value={modelConfig.model}
-                      onChange={(e) => setModelConfig((prev: ModelConfig) => ({ ...prev, model: e.target.value }))}
+                      onValueChange={nextValue => setModelConfig((prev: ModelConfig) => ({ ...prev, model: nextValue }))}
                     >
                       {modelOptions[modelConfig.provider].map((model: string) => (
-                        <option key={model} value={model}>
+                        <ChoiceOption key={model} value={model}>
                           {model}
-                        </option>
+                        </ChoiceOption>
                       ))}
-                    </select>
+                    </ChoiceMenu>
                   </div>
                 </div>
                 {modelConfig.provider === 'ollama' && (

@@ -39,6 +39,7 @@ function load(relative) {
     if (name === '@/contexts/RecordingStateContext') return {useRecordingState:()=>({isRecording:native.recording,isActive:native.recording,isPaused:false,isStopping:false})};
     if (name === '@/contexts/TranscriptContext') return {useTranscripts:()=>({resetAfterHistoryClear:()=>{}})};
     if (name === '@/services/indexedDBService') return {indexedDBService:{suspendRecordingWrites(){},snapshotInterviewHistory:async()=>({meetings:[],transcripts:[]}),removeArchivedInterviewHistory:async()=>{}}};
+    if (name === '@/components/ui/choice-menu') return {ChoiceMenu:'choice-menu',ChoiceOption:'choice-option'};
     if (name === '@/components/ui/button') return {Button:props=>React.createElement('button',props)};
     if (name === '@/components/ui/input') return {Input:props=>React.createElement('input',props)};
     if (name === 'next/link') return props=>React.createElement('a',props);

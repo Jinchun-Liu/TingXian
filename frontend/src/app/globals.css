@@ -214,3 +214,34 @@
 }
 /* Local build: avoid remote font downloads. */
 :root { --font-source-sans-3: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif; }
+
+/* Webview and portalled menus share the same palette in either window. */
+:root {
+  --tx-ink: #17181A;
+  --tx-silver: #C5C7CA;
+  --tx-cyan: #00E5EF;
+  --tx-disabled-fill: #505357;
+}
+.tx-solid { background-color: var(--tx-ink); color: var(--tx-cyan); }
+.tx-solid:not(:disabled):hover { background-color: #303236; }
+button.tx-solid:disabled { background-color: var(--tx-disabled-fill); color: var(--tx-cyan); opacity: 1; box-shadow: none; }
+button.tx-select-trigger {
+  min-width: 0; max-width: 100%; height: auto; min-height: 34px; gap: 10px;
+  border: 1px solid var(--tx-silver); border-radius: 8px; background: #fff;
+  padding: 6px 10px; color: var(--tx-ink); text-align: left; font-weight: 500;
+}
+.tx-select-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.tx-select-trigger:focus-visible, button.tx-select-trigger[data-state=open] {
+  border-color: var(--tx-ink); outline: 2px solid var(--tx-cyan); outline-offset: 1px; box-shadow:none;
+}
+.tx-select-popup {
+  z-index: 100; max-width: min(32rem, calc(100vw - 16px));
+  max-height: min(22rem, var(--radix-select-content-available-height));
+  border: 1px solid var(--tx-silver); border-radius: 10px; background: #fff; color:var(--tx-ink);
+  box-shadow: 0 6px 20px rgb(23 24 26 / 14%);
+}
+.tx-select-popup [data-radix-select-viewport] { min-width: min(var(--radix-select-trigger-width), calc(100vw - 16px)); }
+.tx-select-item { border-radius: 6px; min-height: 30px; line-height: 1.35; overflow-wrap: anywhere; }
+.tx-select-popup .tx-select-item[data-highlighted] { background: #eef0f1; color: var(--tx-ink); }
+.tx-select-popup .tx-select-item[data-state=checked] { background: var(--tx-ink); color: var(--tx-cyan); }
+.tx-select-tick { color: var(--tx-cyan); stroke-width: 2.5; }

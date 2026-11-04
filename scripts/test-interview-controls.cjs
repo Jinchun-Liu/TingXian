@@ -107,6 +107,7 @@ function load(relative) {
     if (name === '@/contexts/RecordingStateContext') return {useRecordingState:()=>({isRecording:native.recording,isActive:native.recording && !paused,isPaused:paused,isStopping:false})};
     if (name === '@/contexts/TranscriptContext') return {useTranscripts:()=>({resetAfterHistoryClear:()=>{}})};
     if (name === '@/services/indexedDBService') return {indexedDBService:{suspendRecordingWrites(){cacheSuspended=true;},resumeRecordingWrites(){cacheSuspended=false;},recordingWritesSuspended:()=>cacheSuspended,inspectInterviewHistory:async()=>({meetings:recoveryFixture.meetings.length,transcripts:recoveryFixture.transcripts.length}),snapshotInterviewHistory:async()=>JSON.parse(JSON.stringify(recoveryFixture)),removeArchivedInterviewHistory:async()=>{if(failCacheRemove)throw Error('synthetic changed cache');recoveryFixture={meetings:[],transcripts:[]};}}};
+    if (name === '@/components/ui/choice-menu') return {ChoiceMenu:'choice-menu',ChoiceOption:'choice-option'};
     if (name === '@/components/ui/button') return {Button:props=>React.createElement('button',props)};
     if (name === '@/components/ui/input') return {Input:props=>React.createElement('input',props)};
     if (name === 'next/link') return props=>React.createElement('a',props);
@@ -494,7 +495,7 @@ function text(node) { return typeof node === 'string' ? node : (node?.children||
   }
   scene='interview';configuredKey=true;
   await act(async()=>{tree=create(React.createElement(load('app/interview/page.tsx').default));});
-  const choose=async(label,value)=>act(async()=>tree.root.findByProps({'aria-label':label}).props.onChange({target:{value}}));
+  const choose=async(label,value)=>act(async()=>{const field=tree.root.findByProps({'aria-label':label}).props;if(field.onValueChange)field.onValueChange(value);else field.onChange({target:{value}});});
   await choose('参会模式','groups');await choose('点名称呼','小林、Alex');
   await check('已获允许使用转写',true);await check('允许向 DeepSeek',true);await click('开始持续聆听与回答');
   const previous=answers().length;

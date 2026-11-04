@@ -1,4 +1,5 @@
 'use client';
+import {ChoiceMenu, ChoiceOption} from '@/components/ui/choice-menu';
 import {useMemo, useState} from 'react';
 import {ConversationFeed} from './WorkspaceFeed';
 import {answerPresentation, DisplayTurn, fontPixels, PresentationPreferences, visibleTurns} from '@/lib/interview-presentation';
@@ -33,10 +34,10 @@ export function AnswerConversation({history, preferences, selectedId, onSelect, 
       <h2>对话</h2>
       {rows.length > 0 && <div className="answer-history-controls">
         <input type="search" aria-label="搜索历史问题" placeholder="搜索历史" value={search} onChange={e=>setSearch(e.target.value)}/>
-        <select aria-label="选择历史问题" value={selected?.turn.id || ''} onChange={e=>jumpTo(e.target.value)}>
-          {!matches.length && <option value="" disabled>没有匹配问题</option>}
-          {matches.map(({turn, index, title}) => <option key={turn.id} value={turn.id}>{index+1} · {title.slice(0,90)}</option>)}
-        </select>
+        <ChoiceMenu aria-label="选择历史问题" value={selected?.turn.id || ''} onValueChange={nextValue =>jumpTo(nextValue)}>
+          {!matches.length && <ChoiceOption value="" disabled>没有匹配问题</ChoiceOption>}
+          {matches.map(({turn, index, title}) => <ChoiceOption key={turn.id} value={turn.id}>{index+1} · {title.slice(0,90)}</ChoiceOption>)}
+        </ChoiceMenu>
         <button type="button" onClick={()=>{
           setSearch('');onSelect(null);
           if (!preferences.focus) requestAnimationFrame(()=>document.getElementById('turn-'+rows.at(-1)?.turn.id)?.scrollIntoView({block:'start'}));

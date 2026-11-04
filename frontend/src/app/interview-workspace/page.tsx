@@ -1,5 +1,6 @@
 'use client';
 
+import {ChoiceMenu, ChoiceOption} from '@/components/ui/choice-menu';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -33,7 +34,7 @@ import { indexedDBService } from '@/services/indexedDBService';
 import { LatencyRecord, TurnLatency, latencyLabel } from '@/lib/interview-latency';
 import { AudioFault, InterviewAudioHealth } from '@/lib/interview-health';
 import { MicrophoneState, MicrophoneTranscriptGate, stopInterviewAudio } from '@/lib/interview-audio';
-import { Play, Pause, Square, Search, Snowflake, FolderOpen, Settings2, FileText, Trash2 } from 'lucide-react';
+import { AppWindow, Columns2, Play, Pause, Square, Search, Snowflake, FolderOpen, Settings2, FileText, Trash2 } from 'lucide-react';
 
 
 type File = { path: string; bytes: number; eligible: boolean; reason: string };
@@ -611,6 +612,15 @@ export default function InterviewPage() {
         <div className="desk-state" data-listening={recording.isRecording && !recording.isPaused}>
           <span aria-hidden="true" className="desk-state-dot"/><span role="status">{phase}</span>
         </div>
+      <Button type="button" variant="outline" className="w-full justify-start border-[#C5C7CA] bg-white" disabled={windowChanging} onClick={async () => {
+        setWindowChanging(true);
+        try { setSplit(await invoke<boolean>('interview_window_mode', { enabled: !split })); }
+        catch (e) { error(e); }
+        finally { setWindowChanging(false); }
+      }}>
+        {split ? <AppWindow aria-hidden="true"/> : <Columns2 aria-hidden="true"/>}
+        {split ? '合并窗口' : '拆分窗口'}
+      </Button>
       <MeetingControls setup={meeting.setup} change={meeting.change}/>
       <div className="desk-permissions"><label><input type="checkbox" checked={audioAllowed} onChange={e => setAudioAllowed(e.target.checked)} /> 已获允许使用转写</label><label><input type="checkbox" checked={cloudAllowed} onChange={e => { setCloudAllowed(e.target.checked); if (!e.target.checked) { setAutomatic(false); void cancel().catch(error); } }} /> 允许向已启用的 AI 发送对方发言、近期对话和选定资料</label></div>
 
@@ -658,13 +668,10 @@ export default function InterviewPage() {
       </section>
       <CallNotice text={split ? meeting.notice : null}/><div className="desk-tools">
         <details className="desk-fold"><summary>屏幕与显示</summary><div>
-        <Button variant="outline" className="w-full" disabled={windowChanging} onClick={async()=>{
-          setWindowChanging(true);try{setSplit(await invoke<boolean>('interview_window_mode',{enabled:!split}));}catch(e){error(e);}finally{setWindowChanging(false);}
-        }}>{split?'合并操作与对话窗口':'拆分操作与对话窗口'}</Button>
-        <label className="block">对话字号<select aria-label="对话字号" className="ml-2 rounded border p-1" value={preferences.fontSize} onChange={e=>changePreferences({...preferences,fontSize:e.target.value as PresentationPreferences['fontSize']})}><option value="small">小</option><option value="medium">中</option><option value="large">大</option></select></label>
+        <label className="block">对话字号<ChoiceMenu aria-label="对话字号" className="ml-2" value={preferences.fontSize} onValueChange={nextValue =>changePreferences({...preferences,fontSize:nextValue as PresentationPreferences['fontSize']})}><ChoiceOption value="small">小</ChoiceOption><ChoiceOption value="medium">中</ChoiceOption><ChoiceOption value="large">大</ChoiceOption></ChoiceMenu></label>
         <label className="block"><input type="checkbox" checked={preferences.focus} onChange={e=>changePreferences({...preferences,focus:e.target.checked})} /> 每次只看一问一答</label>
         <label className="block"><input type="checkbox" checked={preferences.showSelf} onChange={e=>changePreferences({...preferences,showSelf:e.target.checked})} /> 展示我的发言</label>
-        <label className="block">截屏范围<select aria-label="截屏范围" className="w-full rounded border p-1" value={screenId??''} onChange={e=>setScreenId(e.target.value?Number(e.target.value):null)}><option value="">当前主屏幕（完整屏幕）</option>{screenDisplays.map((d,i)=><option key={d.id} value={d.id}>屏幕 {i+1}{d.primary?' · 主屏':''} · {d.width}×{d.height}</option>)}</select></label>
+        <label className="block">截屏范围<ChoiceMenu aria-label="截屏范围" className="w-full" value={screenId??''} onValueChange={nextValue =>setScreenId(nextValue?Number(nextValue):null)}><ChoiceOption value="">当前主屏幕（完整屏幕）</ChoiceOption>{screenDisplays.map((d,i)=><ChoiceOption key={d.id} value={d.id}>屏幕 {i+1}{d.primary?' · 主屏':''} · {d.width}×{d.height}</ChoiceOption>)}</ChoiceMenu></label>
         <Button size="sm" variant="outline" disabled={busy} onClick={async()=>{try{const screens=await invoke<ScreenDisplay[]>('interview_screenshot_displays');setScreenDisplays(screens);if(screenId&&!screens.some(d=>d.id===screenId))setScreenId(null);}catch(e){error(e);}}}>刷新屏幕列表</Button>
 
           <small>截屏会将所选整屏和近期对话发送至视觉模型。</small>
@@ -715,7 +722,7 @@ export default function InterviewPage() {
       <div><p>{importJob.cancelPending ? '正在取消导入，保留原资料库…' : importPhaseNames[importJob.phase] || importJob.phase} · {importJob.completed} / {importJob.total}</p>{importJob.path && <p className="text-xs text-slate-500 break-all">{importJob.path}</p>}</div>
       <Button variant="outline" disabled={!importJob.ready || importJob.cancelPending || importJob.phase === 'committing'} onClick={cancelImport}>取消导入</Button>
     </section>}
-    {settings && <section className="desk-panel" aria-label="资料与设置" onKeyDown={e=>{if(e.key==='Escape' && !e.nativeEvent.isComposing)closeSettings();}}>
+    {settings && <section className="desk-panel" aria-label="资料与设置" onKeyDown={e=>{if(e.key==='Escape' && !e.nativeEvent.isComposing && !e.defaultPrevented && !(e.target as Element).closest('[role=listbox]'))closeSettings();}}>
       <header className="desk-panel-heading"><h2>资料与设置</h2><Button autoFocus variant="ghost" size="sm" onClick={closeSettings}>收起资料与设置</Button></header>
       <nav aria-label="设置分类" className="desk-tabs">{(['资料库','事实与术语','模型接口'] as const).map(tab=><button key={tab} type="button" aria-pressed={settingsTab===tab} onClick={()=>setSettingsTab(tab)}>{tab}</button>)}</nav>
       <div className="desk-panel-body">
@@ -732,7 +739,7 @@ export default function InterviewPage() {
       {files.length > 0 && <><Input aria-label="筛选文件" value={filter} onChange={e => setFilter(e.target.value)} placeholder="筛选文件名，例如：背景、SELECTTEST" /><div className={`${Object.values(selected).some(s => isStructuredPath(s.path)) ? 'max-h-[36rem]' : 'max-h-64'} overflow-auto divide-y rounded border`}>
         {files.filter(f => f.path.toLowerCase().includes(filter.toLowerCase())).slice(0,300).map(file => <div key={file.path} className="p-2 text-xs flex flex-wrap items-center gap-2">
           <input aria-label={`纳入 ${file.path}`} type="checkbox" disabled={busy || !file.eligible || status?.session_active} checked={!!selected[file.path]} onChange={e => toggleFile(file, e.target.checked)} /><span className="flex-1 min-w-40 break-all">{file.path}</span><span className="text-slate-400">{(file.bytes/1024).toFixed(0)} KB · {file.reason}</span>
-          {selected[file.path] && <><select disabled={busy || status?.session_active} aria-label="资料类型" className="border rounded p-1" value={selected[file.path].kind} onChange={e => setSelected(s => ({ ...s, [file.path]: { ...s[file.path], kind: e.target.value } }))}>{Object.entries(kindNames).map(([v,n]) => <option key={v} value={v}>{n}</option>)}</select><label><input type="checkbox" disabled={busy || status?.session_active} checked={selected[file.path].allow_external} onChange={e => setSelected(s => ({ ...s, [file.path]: { ...s[file.path], allow_external: e.target.checked } }))} /> 允许相关片段外发</label></>}
+          {selected[file.path] && <><ChoiceMenu disabled={busy || status?.session_active} aria-label="资料类型" value={selected[file.path].kind} onValueChange={nextValue => setSelected(s => ({ ...s, [file.path]: { ...s[file.path], kind: nextValue } }))}>{Object.entries(kindNames).map(([v,n]) => <ChoiceOption key={v} value={v}>{n}</ChoiceOption>)}</ChoiceMenu><label><input type="checkbox" disabled={busy || status?.session_active} checked={selected[file.path].allow_external} onChange={e => setSelected(s => ({ ...s, [file.path]: { ...s[file.path], allow_external: e.target.checked } }))} /> 允许相关片段外发</label></>}
           {selected[file.path] && isStructuredPath(file.path) && <StructuredFields key={JSON.stringify([root,file.path])} root={root} path={file.path} value={selected[file.path].structured} locked={busy || !!status?.session_active} onBusyChange={setBusy} onChange={structured => setSelected(current => current[file.path] ? { ...current, [file.path]: { ...current[file.path], structured } } : current)} />}
         </div>)}
       </div><p className="text-xs text-slate-500">扫描 {files.length} 项，当前选择 {Object.keys(selected).length} 项。列表最多展示 300 项，可输入名称筛选。重新导入会移除未选择项目的活动索引。{incompleteStructured && '所选 JSON/YAML 尚未选择字段，暂不能导入。'}</p><Button disabled={busy || status?.session_active || incompleteStructured} onClick={startImport}>导入 / 更新所选资料</Button></>}

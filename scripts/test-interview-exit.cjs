@@ -44,6 +44,7 @@ async function checkComponent(){
     if(name==='@tauri-apps/api/core')return {isTauri:()=>true,invoke:async command=>{assert.equal(command,'interview_exit_status');return pendingStatus;}};
     if(name==='@tauri-apps/api/event')return {listen:async(name,fn)=>{assert.equal(name,'interview-exit-requested');listener=fn;return()=>unlistened++;}};
     if(name==='@/lib/interview-exit')return {interviewExit:s.flow};
+    if(name==='@/components/ui/choice-menu')return {ChoiceMenu:'choice-menu',ChoiceOption:'choice-option'};
     if(name==='@/components/ui/button')return {Button:props=>React.createElement('button',props)};
     if(name==='@/components/ui/dialog')return {Dialog:({open,children})=>open?React.createElement('section',null,children):null,DialogContent:props=>React.createElement('article',props),DialogHeader:props=>React.createElement('header',props),DialogTitle:props=>React.createElement('h1',props),DialogDescription:props=>React.createElement('p',props)};
     return fromFrontend(name);

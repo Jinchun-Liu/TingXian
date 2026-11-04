@@ -9,7 +9,7 @@ const sceneModule={exports:{}};
 new Function('module','exports',ts.transpileModule(fs.readFileSync(path.resolve(__dirname,'../frontend/src/lib/conversation-scenarios.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText)(sceneModule,sceneModule.exports);
 const moduleObject={exports:{}};
 const code=ts.transpileModule(fs.readFileSync(path.resolve(__dirname,'../frontend/src/components/interview/InterviewPreferences.tsx'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
-new Function('require','module','exports',code)(name=>name==='@/lib/conversation-scenarios'?sceneModule.exports:name==='@tauri-apps/api/core'?{invoke}:name==='@/components/ui/button'?{Button:props=>React.createElement('button',props)}:frontend(name),moduleObject,moduleObject.exports);
+new Function('require','module','exports',code)(name=>name==='@/lib/conversation-scenarios'?sceneModule.exports:name==='@tauri-apps/api/core'?{invoke}:name==='@/components/ui/choice-menu'?{ChoiceMenu:'choice-menu',ChoiceOption:'choice-option'}:name==='@/components/ui/button'?{Button:props=>React.createElement('button',props)}:frontend(name),moduleObject,moduleObject.exports);
 const {InterviewPreferences}=moduleObject.exports;
 const text=node=>typeof node==='string'?node:(node?.children||[]).map(text).join('');
 (async()=>{
@@ -22,7 +22,7 @@ const text=node=>typeof node==='string'?node:(node?.children||[]).map(text).join
  await act(async()=>input('角色 / 目标岗位').props.onChange({target:{value:'策展助理'}}));
  fail=true;await click('保存对话场景');assert.equal(saved,null);assert.equal(input('角色 / 目标岗位').props.value,'策展助理');assert.ok(text(tree.toJSON()).includes('synthetic failure'));
  fail=false;await click('保存对话场景');assert.equal(saved.role,'策展助理');assert.equal(stored.context,'零售行业');
- await act(async()=>input('使用场景').props.onChange({target:{value:'learning'}}));await click('保存对话场景');assert.equal(stored.scenario,'learning');
+ await act(async()=>input('使用场景').props.onValueChange('learning'));await click('保存对话场景');assert.equal(stored.scenario,'learning');
  locked=true;await act(async()=>render());assert.ok(input('转写语言').props.disabled);assert.ok(button('保存对话场景').props.disabled);
  locked=false;await act(async()=>render());pending=true;await click('重新读取场景');assert.ok(button('保存对话场景').props.disabled);await click('恢复空白场景');
  await act(async()=>{const resolve=pending;pending=null;resolve({...stored,role:'stale'});});assert.equal(input('角色 / 目标岗位').props.value,'');assert.equal(input('转写语言').props.value,'auto');

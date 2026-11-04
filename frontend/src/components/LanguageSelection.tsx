@@ -1,3 +1,4 @@
+import {ChoiceMenu, ChoiceOption} from '@/components/ui/choice-menu';
 import React, { useState, useEffect } from 'react';
 import { Globe } from 'lucide-react';
 import Analytics from '@/lib/analytics';
@@ -183,19 +184,19 @@ export function LanguageSelection({
       </div>
 
       <div className="space-y-2">
-        <select
+        <ChoiceMenu aria-label="Transcription language"
           value={selectedLanguage}
-          onChange={(e) => handleLanguageChange(e.target.value)}
+          onValueChange={nextValue => handleLanguageChange(nextValue)}
           disabled={disabled || saving}
-          className="w-full px-3 py-2 text-sm bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-50 disabled:text-gray-500"
+          className="w-full"
         >
           {availableLanguages.map((language) => (
-            <option key={language.code} value={language.code}>
+            <ChoiceOption key={language.code} value={language.code}>
               {language.name}
               {language.code !== 'auto' && language.code !== 'auto-translate' && ` (${language.code})`}
-            </option>
+            </ChoiceOption>
           ))}
-        </select>
+        </ChoiceMenu>
 
         {/* Parakeet language limitation warning */}
         {isParakeet && (

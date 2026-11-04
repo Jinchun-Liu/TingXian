@@ -1,4 +1,5 @@
 'use client';
+import {ChoiceMenu, ChoiceOption} from '@/components/ui/choice-menu';
 import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { ConversationScenario, scenarioNames } from '@/lib/conversation-scenarios';
@@ -28,12 +29,12 @@ export function InterviewPreferences({locked,onSaved}:{locked:boolean;onSaved:(v
   return <div className="border-t pt-3 space-y-3">
     <h3 className="text-sm font-medium">对话场景</h3>
     <p className="text-xs text-slate-500">可选择面试、学习问答、会议或通用对话。背景可全部留空。这里的目标与术语不代表个人经历；回答时会发送到 AI。界面目前为中文。</p>
-    <label className="block text-sm">使用场景<select aria-label="使用场景" className="block w-full border rounded p-2 mt-1" disabled={disabled} value={draft.scenario || 'interview'} onChange={e=>setDraft(value=>({...value,scenario:e.target.value as ConversationScenario}))}>{Object.entries(scenarioNames).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
+    <label className="block text-sm">使用场景<ChoiceMenu aria-label="使用场景" className="w-full mt-1" disabled={disabled} value={draft.scenario || 'interview'} onValueChange={nextValue =>setDraft(value=>({...value,scenario:nextValue as ConversationScenario}))}>{Object.entries(scenarioNames).map(([value,label])=><ChoiceOption key={value} value={value}>{label}</ChoiceOption>)}</ChoiceMenu></label>
     <p className="text-xs text-slate-500">面试模式在获得外发许可后默认自动回答对方发言；其他模式默认只转写、按需提问。本人声音始终不自动触发 AI。切换场景不会清空历史。</p>
     {textFields.map(([field,label,maxLength,placeholder])=><label key={field} className="block text-sm">{label}<textarea aria-label={label} className="block w-full border rounded p-2 mt-1" rows={field==='context' || field==='terminology'?3:1} value={draft[field]} maxLength={maxLength} placeholder={placeholder} disabled={disabled} onChange={e=>setDraft(value=>({...value,[field]:e.target.value}))} /></label>)}
     <div className="grid sm:grid-cols-2 gap-3">
-      <label className="block text-sm">回答语言<select aria-label="回答语言" className="block w-full border rounded p-2 mt-1" disabled={disabled} value={draft.answer_language} onChange={e=>setDraft(value=>({...value,answer_language:e.target.value}))}><option value="auto">跟随当前发言</option><option value="zh">中文</option><option value="en">英文</option></select></label>
-      <label className="block text-sm">转写语言<select aria-label="转写语言" className="block w-full border rounded p-2 mt-1" disabled={disabled} value={draft.transcription_language} onChange={e=>setDraft(value=>({...value,transcription_language:e.target.value}))}>{speechLanguages.map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
+      <label className="block text-sm">回答语言<ChoiceMenu aria-label="回答语言" className="w-full mt-1" disabled={disabled} value={draft.answer_language} onValueChange={nextValue =>setDraft(value=>({...value,answer_language:nextValue}))}><ChoiceOption value="auto">跟随当前发言</ChoiceOption><ChoiceOption value="zh">中文</ChoiceOption><ChoiceOption value="en">英文</ChoiceOption></ChoiceMenu></label>
+      <label className="block text-sm">转写语言<ChoiceMenu aria-label="转写语言" className="w-full mt-1" disabled={disabled} value={draft.transcription_language} onValueChange={nextValue =>setDraft(value=>({...value,transcription_language:nextValue}))}>{speechLanguages.map(([value,label])=><ChoiceOption key={value} value={value}>{label}</ChoiceOption>)}</ChoiceMenu></label>
     </div>
     <p className="text-xs text-slate-500">较短发言可指定转写语言；自动识别和非英语转写需要多语言 Whisper 模型。领域术语供 AI 参考，检索同义词请在“术语别名”中配置。</p>
     {locked && <p className="text-xs text-slate-500">请结束当前会话后修改场景。</p>}

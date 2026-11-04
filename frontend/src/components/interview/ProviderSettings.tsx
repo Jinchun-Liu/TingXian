@@ -1,4 +1,5 @@
 'use client';
+import {ChoiceMenu, ChoiceOption} from '@/components/ui/choice-menu';
 import {useEffect,useState} from 'react';
 import {invoke} from '@tauri-apps/api/core';
 import {Button} from '@/components/ui/button';
@@ -26,7 +27,7 @@ export function ProviderSettings({locked,onSaved,onBusyChange,openVision=false,o
         {p.id==='vision'&&<p className="text-xs text-slate-500">填写支持图片输入的模型。可复用已有多模态接口的地址、模型和 Key，也可使用单独视觉服务或本机兼容服务。点击“截屏并回答”才会发送所选整屏图片与近期上下文；图片不写入会话历史。文字连接测试不能验证视觉能力。</p>}
         <div className="grid sm:grid-cols-2 gap-2">
           <label>名称<input aria-label={`${p.id} 名称`} className="w-full rounded border p-2" disabled={disabled} value={p.name} onChange={e=>patch(p.id,{name:e.target.value})} /></label>
-          {p.id!=='background'&&<label>接口类型<select aria-label={`${p.id} 接口类型`} className="w-full rounded border p-2" disabled={disabled} value={p.protocol} onChange={e=>patch(p.id,{protocol:e.target.value as Profile['protocol']})}><option value="deepseek">DeepSeek（关闭思考）</option><option value="qwen">千问 / 百炼（关闭思考）</option><option value="openai">OpenAI 兼容 / 本地模型</option></select></label>}
+          {p.id!=='background'&&<label>接口类型<ChoiceMenu aria-label={`${p.id} 接口类型`} className="w-full" disabled={disabled} value={p.protocol} onValueChange={nextValue =>patch(p.id,{protocol:nextValue as Profile['protocol']})}><ChoiceOption value="deepseek">DeepSeek（关闭思考）</ChoiceOption><ChoiceOption value="qwen">千问 / 百炼（关闭思考）</ChoiceOption><ChoiceOption value="openai">OpenAI 兼容 / 本地模型</ChoiceOption></ChoiceMenu></label>}
         </div>
         <label className="block">完整 API 地址<input aria-label={`${p.id} API 地址`} className="w-full rounded border p-2" disabled={disabled} value={p.endpoint} placeholder="https://服务地址/v1/chat/completions" onChange={e=>patch(p.id,{endpoint:e.target.value.trim()})} /></label>
         <label className="block">模型 ID<input aria-label={`${p.id} 模型 ID`} className="w-full rounded border p-2" disabled={disabled} value={p.request.model} maxLength={128} onChange={e=>patch(p.id,{request:{...p.request,model:e.target.value}})} /></label>

@@ -6,7 +6,8 @@ function load(file){
  if(cache[file])return cache[file];
  const code=ts.transpileModule(fs.readFileSync(path.resolve(__dirname,'../frontend/src',file),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
  const m={exports:{}};new Function('require','module','exports',code)(name=>{
-  if(name==='@/components/ui/button')return {Button:p=>React.createElement('button',p)};
+  if(name==='@/components/ui/choice-menu')return {ChoiceMenu:'choice-menu',ChoiceOption:'choice-option'};
+    if(name==='@/components/ui/button')return {Button:p=>React.createElement('button',p)};
   if(name==='./WorkspaceFeed')return load('components/interview/WorkspaceFeed.tsx');
   if(name==='@/lib/interview-presentation')return load('lib/interview-presentation.ts');
   return req(name);

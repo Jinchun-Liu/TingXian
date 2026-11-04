@@ -1,4 +1,5 @@
 'use client';
+import {ChoiceMenu, ChoiceOption} from '@/components/ui/choice-menu';
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {addressedOnly,initialMeeting,MeetingAddress,meetingModes,MeetingSetup,readMeeting} from '@/lib/meeting-mode';
 const storageKey='tingxian-meeting-v1';
@@ -30,9 +31,9 @@ export function useMeetingMode(clearQueue:()=>void) {
 }
 export function MeetingControls({setup,change}:{setup:MeetingSetup;change:(value:MeetingSetup)=>void}){
   return <div className="meeting-controls">
-    <label>参会模式<select aria-label="参会模式" value={setup.mode} onChange={e=>change({...setup,mode:e.target.value as MeetingSetup['mode']})}>
-      {Object.entries(meetingModes).map(([id,name])=><option key={id} value={id}>{name}</option>)}
-    </select></label>
+    <label>参会模式<ChoiceMenu aria-label="参会模式" value={setup.mode} onValueChange={nextValue =>change({...setup,mode:nextValue as MeetingSetup['mode']})}>
+      {Object.entries(meetingModes).map(([id,name])=><ChoiceOption key={id} value={id}>{name}</ChoiceOption>)}
+    </ChoiceMenu></label>
     {addressedOnly(setup.mode)&&<label>点名称呼<input aria-label="点名称呼" maxLength={240} placeholder="如：小林、林老师、Alex" value={setup.names} onChange={e=>change({...setup,names:e.target.value})}/>
       {!setup.names.trim()&&<small>未填写时只转写。可手动选题回答。</small>}</label>}
   </div>;

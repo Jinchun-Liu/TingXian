@@ -38,8 +38,8 @@
 .desk-rail button { min-height: 32px; height: auto; max-width: 100%; padding: 6px 10px; white-space: normal; font-size: 13px; line-height: 1.45; }
 .desk-rail button svg { flex-shrink: 0; }
 .desk-transport { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.desk-transport > :first-child { grid-column: 1 / -1; background: var(--accent); color: white; min-height: 40px; }
-.desk-transport > :first-child:disabled { opacity: .55; }
+.desk-transport > :first-child { grid-column: 1 / -1; min-height: 40px; }
+.desk-transport > :first-child:disabled { background: var(--tx-disabled-fill); opacity: 1; }
 .desk-controls > .grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 6px; }
 .desk-tools { display: grid; border-top: 1px solid var(--line); }
 .desk-fold { border-bottom: 1px solid var(--line); }
@@ -67,7 +67,7 @@
 .answer-history-controls { display: flex; align-items: center; gap: 8px; max-width: 100%; min-width: 0; }
 .answer-history-controls :is(input,select) { min-width: 0; padding: 4px 7px; font-size: 12px; border: 1px solid var(--line); border-radius: 5px; }
 .answer-history-controls input { width: clamp(66px,9vw,135px); }
-.answer-history-controls select { width: clamp(86px,16vw,240px); }
+.answer-history-controls .tx-select-trigger { width: clamp(86px,16vw,240px); }
 .answer-history-controls button, .answer-scroll-tools button { color: var(--accent); flex-shrink: 0; padding: 4px; font-size: 12px; }
 .answer-scroll { position: relative; flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: clamp(18px,3.5vw,62px) clamp(15px,4.5vw,84px); }
 .answer-scroll.fixed-feed { min-height: 20rem; height: 58vh; }
@@ -93,7 +93,7 @@
 .composer-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .composer-actions kbd { margin-right: auto; color: var(--muted); font-size: 11px; }
 .composer-actions button { height: auto; min-height: 30px; padding: 4px 10px; font-size: 12px; }
-.composer-actions button:first-of-type { order: 1; background: var(--accent); color: white; }
+.composer-actions button:first-of-type { order: 1; }
 .composer-editing { color: var(--accent); font-size: 12px; }
 .desk-transcripts { flex: none; max-height: 30vh; overflow: auto; padding: 4px clamp(14px,2.4vw,40px) 10px; color: var(--muted); font-size: 12px; }
 .desk-split-composer { display: grid; gap: 7px; }
@@ -116,7 +116,7 @@
 }
 @media (max-width: 420px) {
   .answer-history-controls { flex: 1 1 100%; }
-  .answer-history-controls select { flex: 1; }
+  .answer-history-controls .tx-select-trigger { flex: 1; }
   .desk-panel-body :is(input,select) { max-width: 100%; }
   .desk-tabs { gap: 10px; }
 }
@@ -124,7 +124,7 @@
 .desk-brand img {border-radius:8px}
 .meeting-controls {display:grid;gap:8px;font-size:13px;color:#17181A}
 .meeting-controls label {display:grid;gap:4px}
-.meeting-controls input,.meeting-controls select {border:1px solid #C5C7CA;border-radius:7px;padding:6px 8px;background:#fff;color:#17181A;min-width:0;width:100%}
+.meeting-controls input {border:1px solid #C5C7CA;border-radius:7px;padding:6px 8px;background:#fff;color:#17181A;min-width:0;width:100%}
 .meeting-controls small {color:#55585D;line-height:1.4}
 .meeting-call {margin:8px 12px;padding:8px 12px;border-radius:6px;border-inline-start:4px solid #00E5EF;background:#17181A;color:white;font-weight:600}
 .desk-brand::after {content:"";width:6px;height:6px;border-radius:50%;background:#00E5EF}

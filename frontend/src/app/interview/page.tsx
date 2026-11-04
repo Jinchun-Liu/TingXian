@@ -1,5 +1,6 @@
 'use client';
 
+import {ChoiceMenu, ChoiceOption} from '@/components/ui/choice-menu';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -617,7 +618,7 @@ export default function InterviewPage() {
       {files.length > 0 && <><Input aria-label="筛选文件" value={filter} onChange={e => setFilter(e.target.value)} placeholder="筛选文件名，例如：背景、简历、岗位" /><div className={`${Object.values(selected).some(s => isStructuredPath(s.path)) ? 'max-h-[36rem]' : 'max-h-64'} overflow-auto divide-y rounded border`}>
         {files.filter(f => f.path.toLowerCase().includes(filter.toLowerCase())).slice(0,300).map(file => <div key={file.path} className="p-2 text-xs flex flex-wrap items-center gap-2">
           <input aria-label={`纳入 ${file.path}`} type="checkbox" disabled={busy || !file.eligible || status?.session_active} checked={!!selected[file.path]} onChange={e => toggleFile(file, e.target.checked)} /><span className="flex-1 min-w-40 break-all">{file.path}</span><span className="text-slate-400">{(file.bytes/1024).toFixed(0)} KB · {file.reason}</span>
-          {selected[file.path] && <><select disabled={busy || status?.session_active} aria-label="资料类型" className="border rounded p-1" value={selected[file.path].kind} onChange={e => setSelected(s => ({ ...s, [file.path]: { ...s[file.path], kind: e.target.value } }))}>{Object.entries(kindNames).map(([v,n]) => <option key={v} value={v}>{n}</option>)}</select><label><input type="checkbox" disabled={busy || status?.session_active} checked={selected[file.path].allow_external} onChange={e => setSelected(s => ({ ...s, [file.path]: { ...s[file.path], allow_external: e.target.checked } }))} /> 允许相关片段外发</label></>}
+          {selected[file.path] && <><ChoiceMenu disabled={busy || status?.session_active} aria-label="资料类型" value={selected[file.path].kind} onValueChange={nextValue => setSelected(s => ({ ...s, [file.path]: { ...s[file.path], kind: nextValue } }))}>{Object.entries(kindNames).map(([v,n]) => <ChoiceOption key={v} value={v}>{n}</ChoiceOption>)}</ChoiceMenu><label><input type="checkbox" disabled={busy || status?.session_active} checked={selected[file.path].allow_external} onChange={e => setSelected(s => ({ ...s, [file.path]: { ...s[file.path], allow_external: e.target.checked } }))} /> 允许相关片段外发</label></>}
           {selected[file.path] && isStructuredPath(file.path) && <StructuredFields key={JSON.stringify([root,file.path])} root={root} path={file.path} value={selected[file.path].structured} locked={busy || !!status?.session_active} onBusyChange={setBusy} onChange={structured => setSelected(current => current[file.path] ? { ...current, [file.path]: { ...current[file.path], structured } } : current)} />}
         </div>)}
       </div><p className="text-xs text-slate-500">扫描 {files.length} 项，当前选择 {Object.keys(selected).length} 项。列表最多展示 300 项，可输入名称筛选。重新导入会移除未选择项目的活动索引。{incompleteStructured && '所选 JSON/YAML 尚未选择字段，暂不能导入。'}</p><Button disabled={busy || status?.session_active || incompleteStructured} onClick={startImport}>导入 / 更新所选资料</Button></>}

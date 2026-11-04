@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.md)
 [![Source checks](https://github.com/Jinchun-Liu/TingXian/actions/workflows/source-checks.yml/badge.svg)](https://github.com/Jinchun-Liu/TingXian/actions/workflows/source-checks.yml)
 
-[下载 macOS 安装包](https://github.com/Jinchun-Liu/TingXian/releases/download/v0.5.0/TingXian-0.5.0-macOS-arm64.pkg) · [发布记录与 SHA-256](https://github.com/Jinchun-Liu/TingXian/releases/tag/v0.5.0)
+[下载 macOS 安装包](https://github.com/Jinchun-Liu/TingXian/releases/download/v0.5.1/TingXian-0.5.1-macOS-arm64.pkg) · [发布记录与 SHA-256](https://github.com/Jinchun-Liu/TingXian/releases/tag/v0.5.1)
 
 适用于 Apple Silicon Mac、macOS 14.4 及以上。双击 .pkg，跟随 macOS 安装器完成后，从「应用程序 → 听弦」启动。安装包自带多语言 Whisper small、FFmpeg、Python 和文档解析依赖。首次采集按 macOS 提示允许屏幕与系统音频，需要记录自己时允许麦克风。AI 回答使用自己的模型接口与 Key。此个人开发版本使用本地应用签名，安装包未经 Apple 公证。如系统要求额外确认，请参照 [Apple 的安装说明](https://support.apple.com/en-us/102445)。
 
@@ -15,7 +15,7 @@ An experimental conversation assistant for interviews, learning, meetings and ge
 
 **基于 [Meetily Community](https://github.com/Zackriya-Solutions/meetily) v0.4.1 的独立修改版，非官方产品。** 保留上游 MIT 版权；见 [来源与变更](NOTICE.md)。
 
-打开听弦即进入高级对话工作区，可独立移动或缩放对话窗口，调整字号，让不同问题并行使用最多三个回答接口。配置视觉模型后可主动截屏提问。回答先显示正文，再显示纠正后的完整问题。
+打开听弦即进入高级对话工作区。点击左侧「参会模式」上方的「拆分窗口」，即可独立移动或缩放对话窗口，调整字号，让不同问题并行使用最多三个回答接口。配置视觉模型后可主动截屏提问。回答先显示正文，再显示纠正后的完整问题。
 
 在高级工作区的「资料与设置」选择自己的资料夹或重点文件，以独立的背景模型整理原文、综述、岗位和术语。核对后应用，也可导出整理 Skill，在 Codex 或 Claude Code 中处理再导回。文字上下文调试预算为 256K，可查看整库估算及接口返回的实际用量。
 
