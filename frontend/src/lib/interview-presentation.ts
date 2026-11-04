@@ -3,7 +3,7 @@ import type {Turn} from './interview-session';
 export const QUESTION_MARKER = '<<<QUESTION>>>';
 export type FontSize = 'small' | 'medium' | 'large';
 export type PresentationPreferences = {fontSize:FontSize;showSelf:boolean;focus:boolean};
-export const presentationDefaults:PresentationPreferences = {fontSize:'medium',showSelf:false,focus:true};
+export const presentationDefaults:PresentationPreferences = {fontSize:'medium',showSelf:false,focus:false};
 export const fontPixels:Record<FontSize,number> = {small:16,medium:20,large:24};
 export type DisplayTurn = Pick<Turn,'id'|'role'|'question'|'suggestion'|'status'|'time'|'passive'>;
 
@@ -33,7 +33,7 @@ export function visibleTurns(history:DisplayTurn[], showSelf:boolean) {
 export function readPresentationPreferences(value:unknown):PresentationPreferences {
   const v=value as Partial<PresentationPreferences>|null;
   return {fontSize:v && ['small','medium','large'].includes(v.fontSize||'')?v.fontSize!:presentationDefaults.fontSize,
-    showSelf:v?.showSelf===true,focus:v?.focus!==false};
+    showSelf:v?.showSelf===true,focus:v?.focus===true};
 }
 
 /** Each question owns its revision and stream buffer. Completing/cancelling a

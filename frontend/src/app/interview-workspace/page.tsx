@@ -504,7 +504,7 @@ export default function InterviewPage() {
       microphoneGate.current.close();audioHealth.current.close();syncHealth();
       captureSession.current=Math.max(0,...saved.spoken_dialogue.map(t=>t.capture_session || 0),...saved.history.map(t=>t.capture_session || 0))+1;
       historyRef.current=saved.history;setHistory(saved.history);setTranscripts(saved.transcripts);spoken.current=saved.spoken_dialogue;
-      setFeedGeneration(v=>v+1);
+      presentationEpoch.current=crypto.randomUUID();setSelectedQuestion(null);setFeedGeneration(v=>v+1);
       current.current=saved.current;setCalls(saved.calls);setUsage(saved.usage);setLimit(Math.max(DEFAULT_REQUEST_LIMIT,saved.calls));
       usageLedger.current=new InterviewUsage(saved.usage_ledger??undefined,saved.calls);setUsageVersion(v=>v+1);
       setQuestion('');setAnswer('');setSources([]);setConflicts([]);setConfirmedAnswer('');setEditingSelfId(null);setTiming('');
@@ -560,7 +560,7 @@ export default function InterviewPage() {
       selfEditBase.current=null;
       usageLedger.current=new InterviewUsage();setUsageVersion(v=>v+1);
       setTiming(''); setUsage('未知'); setGenerating(false); setFrozen(false); setLevel(0); setMicLevel(0);
-      setFeedGeneration(v=>v+1);
+      presentationEpoch.current=crypto.randomUUID();setSelectedQuestion(null);setFeedGeneration(v=>v+1);
       setPhase('历史已清空 · 可重新开始');
       setNotice(`历史已移入废纸篓：${report.recording_folders} 个录音记录目录、${report.database_meetings} 条已保存会议、${report.saved_sessions || 0} 份会话快照，以及本次对话和恢复缓存。个人资料库已保留。点击“开始持续聆听与回答”进行新测试。`);
       await refresh();

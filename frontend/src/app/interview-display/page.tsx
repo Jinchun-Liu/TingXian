@@ -25,6 +25,6 @@ export default function InterviewDisplay(){
   return <main className="interview-display">
     <div aria-live="assertive" className={snapshot?.call_notice ? "meeting-call" : "sr-only"}>{snapshot?.call_notice}</div>
     {message&&<p role="alert">{message}</p>}
-    {snapshot?<AnswerConversation history={snapshot.history} preferences={snapshot.preferences} selectedId={picked?.epoch===snapshot.epoch?picked.id:snapshot.selected_id} onSelect={id=>setPicked({epoch:snapshot.epoch,id})}/>:<p className="m-auto text-slate-400">等待主窗口同步对话…</p>}
+    {snapshot?<AnswerConversation key={snapshot.epoch} history={snapshot.history} preferences={snapshot.preferences} selectedId={picked?.epoch===snapshot.epoch?picked.id:snapshot.selected_id} onSelect={id=>setPicked({epoch:snapshot.epoch,id})}/>:<p className="m-auto text-slate-400">等待主窗口同步对话…</p>}
   </main>;
 }
