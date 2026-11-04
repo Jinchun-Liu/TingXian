@@ -23,7 +23,7 @@ export function DocumentReview({document,locked,onSave}:{document:DocumentRecord
     catch(e){setError(String(e));}
   };
   return <details className="rounded border p-3 text-xs">
-    <summary className="cursor-pointer break-all">{document.path} · {sourceStatusLabel(document.metadata)}</summary>
+    <summary className="cursor-pointer break-all">{document.path.replace(/^\.背景\/(?:[a-f0-9]{64}\/)?/,'')} · {sourceStatusLabel(document.metadata)}</summary>
     <div className="mt-3 space-y-3">
       <p className="text-slate-500">核对针对本次导入的内容；源文件修改后请重新导入。日期可留空，保存不会修改原文件。练习参考仍只用于组织表达。</p>
       <Button variant="outline" size="sm" disabled={locked || loading} onClick={preview}>{loading ? '正在读取片段' : '查看已导入片段'}</Button>

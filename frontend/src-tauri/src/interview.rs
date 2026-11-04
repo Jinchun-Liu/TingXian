@@ -3,7 +3,7 @@ use interview_core::{Index, Selection, Turn, DEFAULT_ALIASES};
 use serde_json::{json, Value};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use tauri::{Emitter, Manager, State};
-use tokio::sync::{Mutex, OnceCell};
+use tokio::sync::{Mutex, OnceCell, RwLock};
 use tokio_util::sync::CancellationToken;
 use tauri_plugin_dialog::DialogExt;
 
@@ -31,16 +31,18 @@ pub fn interview_audio_level()->Value { json!({
 #[derive(Default)]
 pub struct InterviewState {
     index: OnceCell<Index>,
-    active: Mutex<Option<CancellationToken>>,
+    active: Arc<crate::interview_jobs::AnswerJobs>,
+    provider_keys: Mutex<std::collections::HashMap<String,(String,String)>>,
     pub(crate) lifecycle: Arc<Mutex<()>>,
     imports: Arc<std::sync::Mutex<Option<ProfileImportJob>>>,
-    network: Arc<Mutex<()>>,
-    session: AtomicBool,
+    network: Arc<RwLock<()>>,
+    pub(crate) session: AtomicBool,
+    pub(crate) background:crate::interview_background::Work,
     key: Mutex<Option<String>>,
     connection: crate::interview_connection::ConnectionState,
 }
 impl InterviewState {
-    async fn index<R:tauri::Runtime>(&self, app:&tauri::AppHandle<R>)->Result<&Index,String> {
+    pub(crate) async fn index<R:tauri::Runtime>(&self, app:&tauri::AppHandle<R>)->Result<&Index,String> {
         self.index.get_or_try_init(||async {
             let dir=app.path().app_data_dir().map_err(|e|e.to_string())?.join("interview");
             tokio::fs::create_dir_all(&dir).await.map_err(|e|e.to_string())?;
@@ -48,8 +50,33 @@ impl InterviewState {
         }).await
     }
     async fn api_key(&self)->String { self.key.lock().await.clone().unwrap_or_else(||std::env::var("DEEPSEEK_API_KEY").unwrap_or_default()) }
-    async fn cancel(&self) { if let Some(token)=self.active.lock().await.take(){token.cancel();} self.connection.cancel(None); }
+    pub(crate) async fn provider_key(&self,profile:&interview_core::ProviderProfile)->String {
+        if let Some((endpoint,key))=self.provider_keys.lock().await.get(&profile.id){
+            if endpoint==&profile.endpoint{return key.clone();}
+        }
+        if profile.id=="answer-1" && profile.endpoint==interview_core::DEEPSEEK_ENDPOINT {self.api_key().await}else{String::new()}
+    }
+    async fn ready_profiles(&self,config:&interview_core::ProviderConfig)->Vec<String>{
+        let mut ready=vec![];
+        for p in &config.answers {if p.enabled && (p.accepts_empty_key() || !self.provider_key(p).await.is_empty()){ready.push(p.id.clone());}}
+        ready
+    }
+    async fn cancel(&self) { self.active.cancel_all(); self.connection.cancel(None); }
+    async fn cancel_answers(&self)->Result<(),String> {
+        // Interrupt a connection probe before waiting for its lifecycle lock.
+        self.cancel().await;
+        let deadline=tokio::time::Instant::now()+std::time::Duration::from_secs(35);
+        let message="取消仍在收尾，已暂停自动回答；请等待后重试取消";
+        let _guard=tokio::time::timeout_at(deadline,self.lifecycle.lock()).await.map_err(|_|message)?;
+        self.cancel().await;
+        // A cancelled screenshot worker or stream still owns its slot until
+        // it exits. Acknowledging earlier lets the next queued question fail
+        // against an apparently free provider. Keep new starts behind us.
+        let _network=tokio::time::timeout_at(deadline,self.network.write()).await.map_err(|_|message)?;
+        Ok(())
+    }
     pub(crate) async fn quiesce_for_exit<R:tauri::Runtime>(&self,app:&tauri::AppHandle<R>)->Result<crate::interview_exit::ExitLease,String> {
+        self.background.cancel();
         self.cancel().await;
         {
             let mut jobs=self.imports.lock().unwrap_or_else(|e|e.into_inner());
@@ -60,7 +87,7 @@ impl InterviewState {
         let wait=std::time::Duration::from_secs(35);
         let interview=tokio::time::timeout(wait,self.lifecycle.clone().lock_owned()).await.map_err(|_|"资料操作尚未结束，退出已暂停；请等待后重试")?;
         self.cancel().await;
-        let network=tokio::time::timeout(wait,self.network.clone().lock_owned()).await.map_err(|_|"AI请求尚未退出，未清理记录；请稍后重试")?;
+        let network=tokio::time::timeout(wait,self.network.clone().write_owned()).await.map_err(|_|"AI请求尚未退出，未清理记录；请稍后重试")?;
         if crate::audio::recording_commands::is_recording().await {
             crate::audio::recording_commands::stop_recording(app.clone(),crate::audio::recording_commands::RecordingArgs{save_path:String::new()}).await?;
         }
@@ -77,10 +104,13 @@ pub async fn interview_status(app:tauri::AppHandle,state:State<'_,InterviewState
     let aliases=index.setting("aliases").await?;
     let documents:i64=sqlx::query_scalar("SELECT count(*) FROM documents").fetch_one(&index.pool).await.map_err(|e|e.to_string())?;
     let chunks:i64=sqlx::query_scalar("SELECT count(*) FROM chunks").fetch_one(&index.pool).await.map_err(|e|e.to_string())?;
-    let request_config=index.request_config().await?;
+    let providers=index.provider_config().await?;
+    let ready=state.ready_profiles(&providers).await;
+    let request_config=&providers.answers[0].request;
     Ok(json!({"architecture":std::env::consts::ARCH,"os":std::env::consts::OS,
         "memory_bytes":sysinfo::System::new_all().total_memory(),
-        "system_version":sysinfo::System::os_version(),"key_configured":!state.api_key().await.is_empty(),"connection":state.connection.snapshot(),
+        "system_version":sysinfo::System::os_version(),"key_configured":!state.api_key().await.is_empty(),"workspace_ready":!ready.is_empty(),"answer_capacity":ready.len(),"connection":state.connection.snapshot(),
+        "vision_ready":providers.vision.enabled && (providers.vision.accepts_empty_key() || !state.provider_key(&providers.vision).await.is_empty()),"vision_model":providers.vision.request.model,
         "preferences":index.preferences().await?,"model":request_config.model,"root":index.setting("root").await?,"suggested_root":dirs::home_dir().map(|p|p.join("Documents").to_string_lossy().into_owned()),"index_version":index.setting("version").await?,
         "session_active":state.session.load(Ordering::SeqCst),"index_documents":documents,"index_chunks":chunks,"documents":index.documents().await?,"aliases":if aliases.is_empty(){DEFAULT_ALIASES}else{&aliases},
         "facts":index.setting("facts").await?,"fact_card":index.fact_card().await?,"whisper_model":crate::whisper_engine::commands::whisper_get_current_model().await.unwrap_or(None),
@@ -102,6 +132,52 @@ pub async fn interview_preferences_save<R:tauri::Runtime>(app:tauri::AppHandle<R
 #[tauri::command]
 pub async fn interview_request_config_get<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>)->Result<interview_core::RequestConfig,String> {
     state.index(&app).await?.request_config().await
+}
+#[tauri::command]
+pub async fn interview_providers_get<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>)->Result<Value,String> {
+    let config=state.index(&app).await?.provider_config().await?;
+    let mut configured=serde_json::Map::new();
+    for profile in config.answers.iter().chain([&config.vision,&config.background]) {
+        configured.insert(profile.id.clone(),json!(!state.provider_key(profile).await.is_empty()));
+    }
+    Ok(json!({"config":config,"key_configured":configured,"capacity":state.ready_profiles(&config).await.len()}))
+}
+#[tauri::command]
+pub async fn interview_providers_save<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,config:interview_core::ProviderConfig,keys:std::collections::HashMap<String,String>)->Result<(),String> {
+    crate::interview_exit::ensure_not_exiting(&app)?;config.validate()?;
+    let _guard=state.lifecycle.try_lock().map_err(|_|"请先完成当前操作")?;
+    if state.session.load(Ordering::SeqCst) || crate::audio::recording_commands::is_recording().await {return Err("请结束当前会话后修改接口".into());}
+    let _network=state.network.try_write().map_err(|_|"请求正在结束，请稍后保存")?;
+    for (id,key) in &keys {
+        if !config.answers.iter().chain([&config.vision,&config.background]).any(|p|&p.id==id) || key.len()>4096 || key.chars().any(char::is_control) {return Err("接口凭证格式无效".into());}
+    }
+    state.index(&app).await?.set_provider_config(&config).await?;
+    let mut stored=state.provider_keys.lock().await;
+    for profile in config.answers.iter().chain([&config.vision,&config.background]) {
+        if let Some(key)=keys.get(&profile.id){stored.insert(profile.id.clone(),(profile.endpoint.clone(),key.trim().into()));}
+        else if stored.get(&profile.id).is_some_and(|(endpoint,_)|endpoint!=&profile.endpoint){stored.remove(&profile.id);}
+    }
+    state.connection.invalidate();Ok(())
+}
+#[tauri::command]
+pub async fn interview_provider_test<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,profile_id:String)->Result<interview_core::ProbeOutcome,String> {
+    crate::interview_exit::ensure_not_exiting(&app)?;
+    let _guard=state.lifecycle.try_lock().map_err(|_|"请等待当前操作结束")?;
+    if state.session.load(Ordering::SeqCst) || crate::audio::recording_commands::is_recording().await {return Err("请结束会话后测试接口".into());}
+    let _network=state.network.try_write().map_err(|_|"请求正在结束")?;
+    let config=state.index(&app).await?.provider_config().await?;
+    let profile=config.answers.iter().chain([&config.vision,&config.background]).find(|p|p.id==profile_id).ok_or("接口不存在")?;
+    let key=state.provider_key(profile).await;
+    let check_id=format!("profile-{}-{}",profile.id,chrono::Utc::now().timestamp_millis());
+    let cancel=state.connection.begin(&check_id,&profile.request.model)?;
+    let start=std::time::Instant::now();let mut attempts=0;let mut total_tokens=None;
+    let result=interview_core::stream_answer_with_provider(&key,interview_core::connection_test_messages(),cancel,profile,|event|match event {
+        interview_core::StreamEvent::RequestSent{attempt}=>attempts=attempts.max(attempt),
+        interview_core::StreamEvent::Usage{usage,..}=>total_tokens=usage["total_tokens"].as_u64(),
+        _=>{},
+    }).await;
+    let outcome=interview_core::ProbeOutcome{success:result.is_ok(),message:interview_core::redact_credentials(&result.err().unwrap_or_else(||"连接成功（固定测试文字；视觉能力需图片联测）".into()),Some(&key)),elapsed_ms:start.elapsed().as_millis() as u64,attempts,total_tokens};
+    state.connection.finish(&check_id,outcome.clone())?;Ok(outcome)
 }
 #[tauri::command]
 pub async fn interview_request_config_save<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,config:interview_core::RequestConfig)->Result<interview_core::RequestConfig,String> {
@@ -139,7 +215,7 @@ where R:tauri::Runtime,F:FnOnce(String,interview_core::RequestConfig,Cancellatio
     let _guard=state.lifecycle.try_lock().map_err(|_|"请先完成或取消当前操作")?;
     crate::interview_exit::ensure_not_exiting(app)?;
     if state.session.load(Ordering::SeqCst) || crate::audio::recording_commands::is_recording().await {return Err("请结束当前会话后测试连接".into());}
-    let _network=state.network.try_lock().map_err(|_|"模型请求仍在结束，请稍后测试连接")?;
+    let _network=state.network.try_write().map_err(|_|"模型请求仍在结束，请稍后测试连接")?;
     let key=state.api_key().await;if key.trim().is_empty(){return Err("尚未配置 API Key；请先在资料与设置中填写".into());}
     let config=state.index(app).await?.request_config().await?;
     let cancel=state.connection.begin(&check_id,&config.model)?;
@@ -268,6 +344,23 @@ pub async fn profile_index_clear<R:tauri::Runtime>(app:tauri::AppHandle<R>,state
 mod import_command_tests {
     use super::*;
     #[tokio::test]
+    async fn cancellation_acknowledgement_waits_for_workers_and_blocks_new_starts(){
+        let state=Arc::new(InterviewState::default());
+        let profiles=vec!["answer-1".into()];
+        let lease=state.active.reserve("synthetic-question",1,&profiles).unwrap();
+        let network=state.network.clone().read_owned().await;
+        let worker=state.clone();let cancel=tokio::spawn(async move{worker.cancel_answers().await});
+        lease.cancel.cancelled().await;
+        assert!(!cancel.is_finished(),"cancel acknowledged while old worker still holds its slot");
+        assert!(state.lifecycle.try_lock().is_err(),"new starts can overtake cancellation drain");
+        assert!(state.active.reserve("next",2,&profiles).is_err());
+        drop(lease);drop(network);
+        cancel.await.unwrap().unwrap();
+        assert!(state.lifecycle.try_lock().is_ok());
+        assert!(state.network.try_write().is_ok());
+        assert!(state.active.reserve("next",2,&profiles).is_ok());
+    }
+    #[tokio::test]
     async fn connection_checks_require_explicit_action_share_locks_and_cancel_without_touching_interview_history() {
         use crate::interview_connection::CheckStatus;
         let state=InterviewState::default();let root=std::env::temp_dir().join(format!("interview-connection-{}",uuid::Uuid::new_v4()));std::fs::create_dir(&root).unwrap();
@@ -286,12 +379,12 @@ mod import_command_tests {
         });
         let control=async {
             started.notified().await;assert_eq!(state.connection.snapshot().status,CheckStatus::Checking);
-            assert!(state.lifecycle.try_lock().is_err());assert!(state.network.try_lock().is_err());
+            assert!(state.lifecycle.try_lock().is_err());assert!(state.network.try_write().is_err());
             assert!(connection_test_with(app.handle(),&state,uuid::Uuid::new_v4().to_string(),true,forbidden).await.is_err());
             state.cancel().await;
         };
         let (result,())=tokio::join!(running,control);let report=result.unwrap();assert_eq!(report.status,CheckStatus::Cancelled);
-        assert!(state.lifecycle.try_lock().is_ok());assert!(state.network.try_lock().is_ok());assert!(!state.session.load(Ordering::SeqCst));assert!(state.active.lock().await.is_none());
+        assert!(state.lifecycle.try_lock().is_ok());assert!(state.network.try_write().is_ok());assert!(!state.session.load(Ordering::SeqCst));assert!(state.active.is_empty());
         let index=state.index.get().unwrap();assert_eq!(index.setting("facts").await.unwrap(),"SYNTHETIC_PRIVATE_FACT_NEVER_SENT");assert!(index.documents().await.unwrap().is_empty());
         let report=connection_test_with(app.handle(),&state,uuid::Uuid::new_v4().to_string(),true,|key,_,_|async move {interview_core::ProbeOutcome{success:false,message:format!("synthetic failure {key}"),elapsed_ms:2,attempts:1,total_tokens:None}}).await.unwrap();
         assert!(!report.message.contains("synthetic-configured-key"));assert_eq!(report.status,CheckStatus::Failed);
@@ -344,7 +437,7 @@ mod import_command_tests {
         assert_eq!(invoke("interview_request_config_get",json!({})).unwrap().deserialize::<Value>().unwrap(),custom);
         assert!(invoke("interview_exit_request",json!({"restart":false})).is_ok());assert!(save().is_err());
         assert!(!app.state::<InterviewState>().session.load(Ordering::SeqCst));
-        assert!(tauri::async_runtime::block_on(app.state::<InterviewState>().active.lock()).is_none());
+        assert!(app.state::<InterviewState>().active.is_empty());
     }
     #[test]
     fn structured_preview_ipc_is_read_only_and_rejects_busy_or_active_session() {
@@ -362,7 +455,7 @@ mod import_command_tests {
         assert!(invoke("../fields.json").is_err());
         let preview=invoke("fields.json").unwrap().deserialize::<Value>().unwrap();
         assert_eq!(preview["path"],"fields.json");assert_eq!(preview["file_hash"].as_str().unwrap().len(),64);assert_eq!(preview["fields"].as_array().unwrap().len(),5);
-        assert!(state.index.get().is_none(),"preview must not initialize or mutate the real profile database");assert!(tauri::async_runtime::block_on(state.active.lock()).is_none());assert!(!state.session.load(Ordering::SeqCst));
+        assert!(state.index.get().is_none(),"preview must not initialize or mutate the real profile database");assert!(state.active.is_empty());assert!(!state.session.load(Ordering::SeqCst));
     }
     #[test]
     fn local_search_returns_both_conflicting_sources_without_model_or_fact_mutation() {
@@ -376,7 +469,7 @@ mod import_command_tests {
         let invoke=||tauri::test::get_ipc_response(&webview,tauri::webview::InvokeRequest {cmd:"rag_search".into(),callback:tauri::ipc::CallbackFn(0),error:tauri::ipc::CallbackFn(1),url:"tauri://localhost".parse().unwrap(),body:tauri::ipc::InvokeBody::Json(json!({"question":"本科毕业时间"})),headers:Default::default(),invoke_key:tauri::test::INVOKE_KEY.to_string()});
         let guard=tauri::async_runtime::block_on(lifecycle.lock_owned());assert!(invoke().is_err());drop(guard);
         let review=invoke().unwrap().deserialize::<Value>().unwrap();assert_eq!(review["evidence"].as_array().unwrap().len(),2);assert_eq!(review["conflicts"].as_array().unwrap().len(),1);
-        let state=app.state::<InterviewState>();assert!(!state.session.load(Ordering::SeqCst));assert!(tauri::async_runtime::block_on(state.active.lock()).is_none());assert_eq!(tauri::async_runtime::block_on(state.index.get().unwrap().fact_card()).unwrap().version,0);
+        let state=app.state::<InterviewState>();assert!(!state.session.load(Ordering::SeqCst));assert!(state.active.is_empty());assert_eq!(tauri::async_runtime::block_on(state.index.get().unwrap().fact_card()).unwrap().version,0);
     }
     #[test]
     fn fact_commands_require_confirmation_and_cannot_be_bypassed_by_config() {
@@ -497,49 +590,85 @@ pub async fn rag_search<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_
     index.search_review(&question,if aliases.is_empty(){DEFAULT_ALIASES}else{&aliases},Some(&facts)).await
 }
 #[tauri::command]
-pub async fn answer_start(app:tauri::AppHandle,state:State<'_,InterviewState>,question_id:String,revision:u32,question:String,history:Vec<Turn>,dialogue:Option<Vec<interview_core::SpokenTurn>>)->Result<(),String> {
+pub async fn answer_start(app:tauri::AppHandle,state:State<'_,InterviewState>,question_id:String,revision:u32,question:String,history:Vec<Turn>,dialogue:Option<Vec<interview_core::SpokenTurn>>,answer_first:Option<bool>)->Result<(),String> {
+    start_answer(app,&state,question_id,revision,question,history,dialogue,None,answer_first.unwrap_or(false)).await
+}
+#[tauri::command]
+pub async fn interview_screenshot_answer_start(app:tauri::AppHandle,window:tauri::WebviewWindow,state:State<'_,InterviewState>,question_id:String,revision:u32,question:String,history:Vec<Turn>,dialogue:Option<Vec<interview_core::SpokenTurn>>,display_id:Option<u32>)->Result<(),String> {
+    if window.label()!="main" {return Err("请在主窗口点击截屏并回答".into());}
+    start_answer(app,&state,question_id,revision,question,history,dialogue,Some(display_id),true).await
+}
+async fn start_answer(app:tauri::AppHandle,state:&InterviewState,question_id:String,revision:u32,question:String,history:Vec<Turn>,dialogue:Option<Vec<interview_core::SpokenTurn>>,screenshot:Option<Option<u32>>,answer_first:bool)->Result<(),String> {
     crate::interview_exit::ensure_not_exiting(&app)?;
     if question_id.len()>100 || question.trim().is_empty() || question.chars().count()>1500 {return Err("问题或问题 ID 无效".into());}
     let _guard=state.lifecycle.lock().await;
     crate::interview_exit::ensure_not_exiting(&app)?;
-    state.cancel().await;
     let index=state.index(&app).await?.clone();
-    let key=state.api_key().await;
-    if key.is_empty(){return Err("尚未配置 API Key；可使用本地检索".into());}
-    let request_config=index.request_config().await?;
+    let providers=if answer_first {index.provider_config().await?} else {interview_core::ProviderConfig::initial(index.request_config().await?)};
+    let ready=if screenshot.is_some(){
+        if !providers.vision.enabled || (!providers.vision.accepts_empty_key() && state.provider_key(&providers.vision).await.is_empty()) {
+            return Err("请先配置并启用支持图片的视觉模型及 API Key，尚未截屏或发送".into());
+        }
+        vec!["vision".to_string()]
+    }else if !answer_first {if state.api_key().await.is_empty(){vec![]}else{vec!["answer-1".into()]}}else{state.ready_profiles(&providers).await};
+    if ready.is_empty(){return Err("尚未配置启用接口的 API Key；可使用本地检索".into());}
+    let lease=state.active.reserve(&question_id,revision,&ready)?;
+    let profile=providers.answers.iter().chain(std::iter::once(&providers.vision)).find(|p|p.id==lease.profile).unwrap().clone();
+    let key=if answer_first{state.provider_key(&profile).await}else{state.api_key().await};
+    // Acquire before releasing lifecycle, so clear/exit cannot overtake a
+    // spawned request that has not acquired its network guard yet.
+    let network=state.network.clone().read_owned().await;
     state.session.store(true,Ordering::SeqCst);
-    let cancel=CancellationToken::new();*state.active.lock().await=Some(cancel.clone());
-    let network=state.network.clone();
     tauri::async_runtime::spawn(async move {
+        let cancel=lease.cancel.clone();
         let emit=|body:Value| {if !cancel.is_cancelled(){let _=app.emit("interview-answer",json!({"question_id":question_id,"revision":revision,"event":body}));}};
+        let mut terminal=None;
         let result=async {
-            let _slot=tokio::select! {_=cancel.cancelled()=>return Err("已取消".into()),slot=network.lock()=>slot};
+            // Capture immediately after the explicit click, before retrieval.
+            // Only this local future owns image bytes; no event/history contains them.
+            let screenshot=if let Some(display_id)=screenshot {Some(crate::interview_screenshot::capture(display_id,cancel.clone()).await?)}else{None};
+            if cancel.is_cancelled(){return Err("已取消".to_string());}
             let started=std::time::Instant::now();
             let aliases=index.setting("aliases").await?;
             let facts=index.fact_card().await?;
             let review=index.search_review(&question,if aliases.is_empty(){DEFAULT_ALIASES}else{&aliases},Some(&facts)).await?;
             let evidence=review.evidence;
-            emit(json!({"type":"sources","evidence":evidence,"conflicts":review.conflicts,"retrieval_ms":started.elapsed().as_millis(),"index_version":index.setting("version").await?,"fact_version":facts.version}));
-            let preferences=index.preferences().await?;
-            let messages=interview_core::messages_with_preferences(&question,&facts,&history,&evidence,&dialogue.unwrap_or_default(),&preferences)?;
-            interview_core::stream_answer_with_config(&key,messages,cancel.clone(),&request_config,|event|emit(serde_json::to_value(event).unwrap_or_default())).await
+            emit(json!({"type":"sources","evidence":evidence,"conflicts":review.conflicts,"retrieval_ms":started.elapsed().as_millis(),"index_version":index.setting("version").await?,"fact_version":facts.version,"profile_id":profile.id}));
+            let prefs=index.preferences().await?;
+            let mut messages=interview_core::messages_with_preferences(&question,&facts,&history,&evidence,&dialogue.unwrap_or_default(),&prefs)?;
+            if let Some(role)=index.background_role().await? {
+                let mut input:Value=serde_json::from_str(messages[1]["content"].as_str().ok_or("缺少问题上下文")?).map_err(|e|e.to_string())?;
+                input["interview_role"]=json!(role);messages[1]["content"]=json!(input.to_string());
+            }
+            if answer_first {
+                let system=messages[0]["content"].as_str().unwrap_or_default();
+                messages[0]["content"]=json!(format!("{system}\n本工作区输出格式优先：先直接回答，再单独一行输出 <<<QUESTION>>>，随后输出完整纠正问题，保留所有条件和子问题。"));
+            }
+            let messages=if let Some(png)=screenshot {interview_core::attach_screenshot(messages,&png)?}else{messages};
+            interview_core::stream_answer_with_provider(&key,messages,cancel.clone(),&profile,|event|{
+                let body=serde_json::to_value(event).unwrap_or_default();
+                if body["type"]=="done" {terminal=Some(body);}else{emit(body);}
+            }).await
         }.await;
-        if let Err(message)=result {emit(json!({"type":"error","message":message}));}
+        // The next queued question can use this profile as soon as it sees done.
+        drop(lease);drop(network);
+        if let Err(message)=result {emit(json!({"type":"error","message":interview_core::redact_credentials(&message,Some(&key))}));}
+        else if let Some(body)=terminal{emit(body);}
     });
     Ok(())
 }
 #[tauri::command]
-pub async fn answer_cancel(state:State<'_,InterviewState>)->Result<(),String> {state.cancel().await;Ok(())}
+pub async fn answer_cancel(state:State<'_,InterviewState>)->Result<(),String> {state.cancel_answers().await}
 #[tauri::command]
 pub async fn session_clear(state:State<'_,InterviewState>)->Result<(),String> {
-    let _guard=state.lifecycle.lock().await;state.cancel().await;state.session.store(false,Ordering::SeqCst);Ok(())
+    let _guard=state.lifecycle.lock().await;state.cancel().await;let _network=state.network.write().await;state.session.store(false,Ordering::SeqCst);Ok(())
 }
 
 #[tauri::command]
 pub async fn interview_history_clear(app:tauri::AppHandle,state:State<'_,InterviewState>,snapshot:Value)->Result<crate::interview_history::ClearReport,String> {
     let _guard=state.lifecycle.lock().await;
     state.cancel().await;
-    let _network=state.network.lock().await;
+    let _network=state.network.write().await;
     let _capture=crate::audio::common::acquire_engine_lifecycle_lock().await;
     let recording=crate::audio::recording_commands::get_recording_state().await;
     if recording.get("is_recording").and_then(Value::as_bool)==Some(true) {
@@ -662,7 +791,7 @@ pub async fn interview_residue_clear<R:tauri::Runtime>(app:tauri::AppHandle<R>,s
     let _guard=state.lifecycle.lock().await;
     let _capture=crate::audio::common::acquire_engine_lifecycle_lock().await;
     if crate::audio::recording_commands::is_recording().await || state.session.load(Ordering::SeqCst) {return Err("当前会话仍在进行，未清理任何残留；请先结束会话".into());}
-    let _network=state.network.lock().await;
+    let _network=state.network.write().await;
     let prefs=crate::audio::recording_preferences::load_recording_preferences(&app).await.map_err(|e|e.to_string())?;
     crate::interview_history::clear_temporary_history_with(app.state::<crate::state::AppState>().db_manager.pool(),&prefs.save_folder,json!({"recovery":recovery}),crate::interview_history::move_to_trash).await
 }

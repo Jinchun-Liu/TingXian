@@ -581,7 +581,7 @@ export default function InterviewPage() {
     <ConnectionCheck disabled={operationBusy||recording.isRecording||generating||!!status?.session_active} hasKey={!!status?.key_configured} revision={connectionRevision} onCheckingChange={setConnectionChecking} />
       </div></details>
     <ResidueNotice blocked={busy || recording.isRecording || generating || history.length>0 || !!question || !!confirmedAnswer || !!status?.session_active} revision={residueRevision} onClear={clearResidue} />
-      <nav className="flex flex-wrap gap-3 text-xs text-slate-500"><Link href="/" className="underline">会议记录</Link><Link href="/settings" className="underline">音频设置</Link></nav>
+      <nav className="flex flex-wrap gap-3 text-xs text-slate-500">{!recording.isRecording && !generating && !busy && <Link href="/interview-workspace" className="underline">高级对话工作区</Link>}<Link href="/" className="underline">会议记录</Link><Link href="/settings" className="underline">音频设置</Link></nav>
     </aside>
     <div aria-label="识别与对话区" className="flex h-[calc(100dvh-2rem)] min-w-0 flex-col gap-3 md:h-auto md:min-h-0">
     {notice && <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm break-words">{notice}</div>}

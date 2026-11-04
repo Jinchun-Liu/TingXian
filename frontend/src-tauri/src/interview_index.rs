@@ -22,14 +22,14 @@ where F:FnOnce(&Path)->Result<PathBuf,String> + Send + 'static {
     let old_version=old_version.parse::<i64>().map_err(|_|"索引版本无效，已停止清理")?;
     let root:Option<String>=sqlx::query_scalar("SELECT value FROM settings WHERE key='root'").fetch_optional(&mut *tx).await.map_err(|e|e.to_string())?;
     let mut rows=Map::new();
-    for table in ["documents","chunks","search","document_metadata"] {
+    for table in ["documents","chunks","search","document_metadata","background_library"] {
         let values=crate::interview_history::rows_to_json(sqlx::query(&format!("SELECT * FROM {table}")).fetch_all(&mut *tx).await.map_err(|e|e.to_string())?)?;
         rows.insert(table.into(),json!(values));
     }
     let documents=rows["documents"].as_array().unwrap().len();
     let chunks=rows["chunks"].as_array().unwrap().len();
     let metadata_records=rows["document_metadata"].as_array().unwrap().len();
-    if metadata_records==0 && documents==0 && chunks==0 && rows["search"].as_array().unwrap().is_empty() {
+    if rows["background_library"].as_array().unwrap().is_empty() && metadata_records==0 && documents==0 && chunks==0 && rows["search"].as_array().unwrap().is_empty() {
         tx.rollback().await.map_err(|e|e.to_string())?;
         return Ok(IndexClearReport {archive_path:None,documents,chunks,metadata_records,version:old_version});
     }
@@ -69,7 +69,7 @@ where F:FnOnce(&Path)->Result<PathBuf,String> + Send + 'static {
         Ok::<PathBuf,String>(destination)
     }).await.map_err(|e|format!("索引备份任务失败，未清理：{e}"))??;
     let result=async {
-        for table in ["search","chunks","documents","document_metadata"] {sqlx::query(&format!("DELETE FROM {table}")).execute(&mut *tx).await.map_err(|e|e.to_string())?;}
+        for table in ["search","chunks","documents","document_metadata","background_library"] {sqlx::query(&format!("DELETE FROM {table}")).execute(&mut *tx).await.map_err(|e|e.to_string())?;}
         sqlx::query("UPDATE settings SET value=? WHERE key='version'").bind(version.to_string()).execute(&mut *tx).await.map_err(|e|e.to_string())?;
         Ok::<(),String>(())
     }.await;

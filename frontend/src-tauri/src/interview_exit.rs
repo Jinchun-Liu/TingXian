@@ -9,7 +9,7 @@ use tokio::sync::OwnedMutexGuard;
 
 pub(crate) struct ExitLease {
     pub(crate) _interview: OwnedMutexGuard<()>,
-    pub(crate) _network: OwnedMutexGuard<()>,
+    pub(crate) _network: tokio::sync::OwnedRwLockWriteGuard<()>,
     pub(crate) _capture: OwnedMutexGuard<()>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]

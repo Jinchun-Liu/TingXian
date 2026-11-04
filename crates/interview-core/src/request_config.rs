@@ -15,8 +15,8 @@ impl Default for RequestConfig {
 }
 impl RequestConfig {
     pub fn validate(&self) -> crate::Result<()> {
-        if self.model.is_empty() || self.model.len()>64 || !self.model.bytes().all(|c|c.is_ascii_alphanumeric() || b"._-".contains(&c)) || crate::contains_credential(&self.model) {
-            return Err("模型ID须为1–64个英文字母、数字、点、下划线或连字符，不能填写凭证或地址".into());
+        if self.model.is_empty() || self.model.len()>128 || self.model.contains("://") || !self.model.bytes().all(|c|c.is_ascii_alphanumeric() || b"._-/:".contains(&c)) || crate::contains_credential(&self.model) {
+            return Err("模型ID须为1–128个英文字母、数字、点、下划线、连字符、斜线或冒号，不能填写凭证或地址".into());
         }
         if !(1..=30).contains(&self.connect_timeout_secs) || !(5..=120).contains(&self.total_timeout_secs)
             || self.connect_timeout_secs>self.total_timeout_secs || self.first_answer_warning_secs==0 || self.first_answer_warning_secs>=self.total_timeout_secs {

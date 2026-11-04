@@ -81,7 +81,7 @@ impl Index {
         let mut sources=vec![];let mut ids=std::collections::HashSet::new();
         for source in update.sources {
             if !ids.insert(source.source_id.clone()) {return Err("事实来源重复，请重新选择".into());}
-            if source.root!=root {return Err("来源目录已改变，请重新检索并核对事实来源".into());}
+            if source.root!=crate::background::doc_root(&source.path,&root) {return Err("来源目录已改变，请重新检索并核对事实来源".into());}
             let row=sqlx::query("SELECT c.path,c.location,c.text,d.hash,d.kind FROM chunks c JOIN documents d ON d.path=c.path WHERE c.id=?")
                 .bind(&source.source_id).fetch_optional(&mut *tx).await.map_err(|e|e.to_string())?.ok_or("事实来源已退出索引，请重新检索")?;
             let path:String=row.get("path");let hash:String=row.get("hash");let kind:String=row.get("kind");

@@ -6,7 +6,7 @@ This is an independent derivative of Meetily Community v0.4.1 by Zackriya Soluti
 - Upstream baseline: `a2cb62e827da7ef59f65064c97233efb2313878e`
 - First public baseline: `a107408c962b479bb4aa3bd094108f03e0d3fa76`
 - Current development source HEAD: `8f4eeeacdff20f801cb18cf6b23916c1883b735a` plus locally present adaptive-answer and layout changes, frozen for this publication before generalization.
-- Public source release: `v0.3.0-alpha.1`; application/package versions now follow the fork release.
+- Public source release: `v0.4.0-alpha.1`; application/package versions now follow the fork release.
 
 Modifications add continuous bidirectional interview dialogue, local document retrieval, contextual text correction and suggestions through DeepSeek, remote-only answer scheduling, independent microphone control, and recoverable history cleanup. Public-release changes replace personal defaults with synthetic samples, document data transmission, and disable the upstream binary update feed and telemetry initialization.
 

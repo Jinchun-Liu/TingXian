@@ -1,3 +1,4 @@
+pub mod background;
 pub mod index;
 pub mod model;
 pub mod import_control;
@@ -8,6 +9,10 @@ pub mod structured;
 pub mod credentials;
 pub mod request_config;
 pub use request_config::RequestConfig;
+pub mod providers;
+pub use providers::*;
+pub mod vision;
+pub use vision::*;
 pub mod connection_probe;
 pub use connection_probe::*;
 pub use credentials::*;

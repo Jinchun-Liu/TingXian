@@ -14,7 +14,7 @@ const MainContent: React.FC<MainContentProps> = ({ children }) => {
 
   // Interview owns its 20/80 workspace; the meeting navigation must not
   // consume a second column or leave its usual padding behind.
-  if (pathname === '/interview') return <div className="min-w-0 w-full">{children}</div>;
+  if (['/interview','/interview-workspace'].includes(pathname || '')) return <div className="min-w-0 w-full">{children}</div>;
 
   return (
     <main

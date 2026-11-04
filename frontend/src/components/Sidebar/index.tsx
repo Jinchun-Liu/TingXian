@@ -660,7 +660,7 @@ const Sidebar: React.FC = () => {
     );
   };
 
-  if (pathname === '/interview') return null;
+  if (['/interview','/interview-workspace'].includes(pathname || '')) return null;
 
   return (
     <div className="fixed top-0 left-0 h-screen z-40">

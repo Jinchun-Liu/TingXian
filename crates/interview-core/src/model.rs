@@ -21,7 +21,7 @@ pub const ANSWER_STYLE: &str = r#"自适应回答规则：以下字数以中文�
 
 // A ceiling, not a target: the prompt keeps simple answers short while leaving
 // room for a complete multi-part answer. Existing timeout/cancel rules still apply.
-pub const MAX_ANSWER_TOKENS: u32 = 1600;
+pub const MAX_ANSWER_TOKENS: u32 = 4096;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Turn { pub question: String, pub confirmed_answer: Option<String>, #[serde(default)] pub suggested_answer: Option<String> }
@@ -122,11 +122,26 @@ where F:FnMut(StreamEvent)+Send {
     run_stream(client,"https://api.deepseek.com/chat/completions",key,messages,cancel,config,notify).await
 }
 
-// The endpoint is private: only local tests replace the fixed production URL.
+// Legacy entry point retains the DeepSeek protocol for existing callers/tests.
 async fn run_stream<F>(client:reqwest::Client,endpoint:&str,key:&str,messages:Value,cancel:CancellationToken,config:&crate::RequestConfig,notify:F)->Result<()>
 where F:FnMut(StreamEvent)+Send {
+    run_stream_with_protocol(client,endpoint,key,messages,cancel,config,&crate::ProviderProtocol::Deepseek,notify).await
+}
+
+pub async fn stream_answer_with_provider<F>(key:&str,messages:Value,cancel:CancellationToken,profile:&crate::ProviderProfile,notify:F)->Result<()>
+where F:FnMut(StreamEvent)+Send {
+    profile.validate()?;
+    if key.trim().is_empty() && !profile.accepts_empty_key(){return Err("请配置此接口的 API Key".into());}
+    let client=reqwest::Client::builder().connect_timeout(Duration::from_secs(profile.request.connect_timeout_secs)).redirect(reqwest::redirect::Policy::none()).build().map_err(|_|"无法创建模型连接")?;
+    run_stream_with_protocol(client,&profile.endpoint,key,messages,cancel,&profile.request,&profile.protocol,notify).await
+}
+
+async fn run_stream_with_protocol<F>(client:reqwest::Client,endpoint:&str,key:&str,messages:Value,cancel:CancellationToken,config:&crate::RequestConfig,protocol:&crate::ProviderProtocol,notify:F)->Result<()>
+where F:FnMut(StreamEvent)+Send {
     config.validate()?;
-    let payload=request_payload(key,messages,&config.model)?;
+    let mut payload=request_payload(key,messages,&config.model)?;
+    if *protocol!=crate::ProviderProtocol::Deepseek {payload.as_object_mut().unwrap().remove("thinking");}
+    if *protocol==crate::ProviderProtocol::Qwen {payload["enable_thinking"]=json!(false);}
     let notify=std::sync::Mutex::new(notify);
     let emit=|event|{(notify.lock().unwrap())(event);};
     let useful=std::sync::atomic::AtomicBool::new(false);
@@ -147,7 +162,7 @@ where F:FnMut(StreamEvent)+Send {
                 }
                 return Err(match status.as_u16() {
                     401=>"API Key 无效（401）".into(),402=>"账户余额不足（402）".into(),429=>"请求限流（429），请稍后手动重试".into(),
-                    _=>format!("DeepSeek 返回 HTTP {}；请检查网络、模型参数或服务状态",status.as_u16()),
+                    _=>format!("模型服务返回 HTTP {}；请检查网络、模型参数或服务状态",status.as_u16()),
                 });
             }
             let mut stream=response.bytes_stream();let mut decoder=SseDecoder::default();let mut usage=None;let mut truncated=false;let mut answer=String::new();
@@ -202,7 +217,7 @@ fn has_useful_answer(text:&str)->bool {
     static PATTERNS:std::sync::OnceLock<(regex::Regex,regex::Regex)>=std::sync::OnceLock::new();
     let (heading,next_section)=PATTERNS.get_or_init(||(
         regex::Regex::new(r"(?m)^\s*(?:#{1,6}\s*)?(?:\*\*)?建议回答(?:\*\*)?\s*[：:]\s*").unwrap(),
-        regex::Regex::new(r"(?m)^\s*(?:听写纠正|纠正|关键点|可能追问|事实提醒)\s*[：:]").unwrap(),
+        regex::Regex::new(r"(?m)^\s*(?:<<<QUESTION>>>|(?:听写纠正|纠正|关键点|可能追问|事实提醒)\s*[：:])").unwrap(),
     ));
     let Some(prefix)=heading.find(text) else{return false;};
     let rest=&text[prefix.end()..];
@@ -224,6 +239,10 @@ fn request_payload(key:&str,mut messages:Value,model:&str)->Result<Value> {
     // Last guard even for callers that supply their own messages. The real key
     // remains only in the HTTP Authorization header, never the model context.
     crate::redact_json_credentials(&mut messages,Some(key))?;
+    if messages.as_array().is_some_and(|v|v.iter().all(|m|m["content"].is_string())){
+        let bound=messages.to_string().len() as u64+128+u64::from(MAX_ANSWER_TOKENS);
+        if bound>crate::background::BASELINE{return Err("文字请求超过 256K 上下文基线，未发送".into())}
+    }
     Ok(json!({"model":model,"thinking":{"type":"disabled"},"stream":true,"stream_options":{"include_usage":true},"max_tokens":MAX_ANSWER_TOKENS,"messages":messages}))
 }
 

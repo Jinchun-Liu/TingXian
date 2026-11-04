@@ -22,6 +22,22 @@ export function FactReview({card,candidates,locked,onSave,onRefresh,onBusyChange
     catch(e){setError(String(e));}
     finally {savingRef.current=false;setSaving(false);onBusyChange(false);}
   };
+  const fillFromBackground=async()=>{
+    if(savingRef.current||locked||stale)return;
+    savingRef.current=true;setSaving(true);onBusyChange(true);setConfirmed(false);
+    try{
+      const rows=await invoke<FactCandidate[]>('background_fact_candidates');
+      let draft=text;const picks=[...chosen];
+      for(const r of rows){
+        if(!r.text||draft.includes(r.text)||picks.length>=6)continue;
+        const next=(draft.trimEnd()+'\n'+r.text).trim();
+        if(Array.from(next).length>2200)continue;
+        draft=next;if(!picks.some(s=>s.source_id===r.source_id))picks.push(r);
+      }
+      if(draft===text){setError('没有可追加的个人证据引文，或编辑稿已满。');return;}
+      setText(draft);setChosen(picks);setNote(n=>n||'来自所附背景文件的原文，待本人核对。');setReason(r=>r||'根据背景资料补充个人事实');setError('');
+    }catch(e){setError(String(e));}finally{savingRef.current=false;setSaving(false);onBusyChange(false);}
+  };
   const save=async()=>{
     if(savingRef.current || locked || stale)return;
     if(!confirmed || !note.trim() || !reason.trim()) {setError('请填写具体来源、更正原因，并明确确认本次更正');return;}
@@ -47,6 +63,7 @@ export function FactReview({card,candidates,locked,onSave,onRefresh,onBusyChange
       <details className="rounded bg-slate-50 p-3" open><summary>当前事实卡 v{card.version} · {card.confirmed_at?'本人已确认':'沿用旧版，尚未重新确认'}</summary><p className="whitespace-pre-wrap mt-2">{card.text || '尚无已确认事实'}</p><p className="text-xs text-slate-500 mt-2">来源：{card.source_note}</p>{card.confirmed_at && <p className="text-xs text-slate-500">确认：{new Date(card.confirmed_at).toLocaleString('zh-CN')}</p>}<Sources sources={card.sources}/></details>
       <label>本人确认的事实卡（可留空）<textarea className="w-full border rounded p-2 mt-1 h-40 text-sm" maxLength={2200} value={text} disabled={locked || saving} onChange={e=>edit(setText,e.target.value)} placeholder="只填写本人核对过的事实与来源，不粘贴 AI 建议。" /></label>
     </div>
+    <Button variant="outline" size="sm" disabled={locked || saving || stale} onClick={fillFromBackground}>从背景引文补充编辑稿</Button>
     {stale && <p role="alert" className="text-amber-700">事实卡已更新到 v{card.version}，当前编辑稿仍基于 v{base}，不能直接覆盖。请比较上方最新事实卡。</p>}
     <Button variant="outline" size="sm" disabled={locked || saving} onClick={reload}>载入最新事实卡并替换编辑稿</Button>
     <div className="grid md:grid-cols-2 gap-3">

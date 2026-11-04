@@ -473,9 +473,13 @@ pub fn get_language_preference_internal() -> Option<String> {
 mod interview;
 pub mod interview_history;
 pub mod interview_exit;
+mod interview_jobs;
+mod interview_screenshot;
+mod interview_windows;
 pub mod interview_sessions;
 pub mod interview_connection;
 pub mod interview_index;
+pub mod interview_background;
 
 pub fn run() {
     log::set_max_level(log::LevelFilter::Info);
@@ -508,6 +512,7 @@ pub fn run() {
         .manage(audio::init_system_audio_state())
         .manage(interview::InterviewState::default())
         .manage(interview_exit::ExitState::default())
+        .manage(interview_windows::PresentationState::default())
         .manage(summary::summary_engine::ModelManagerState(Arc::new(tokio::sync::Mutex::new(None))))
         .setup(|_app| {
             #[cfg(target_os = "windows")]
@@ -623,6 +628,7 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label()=="interview-conversation" && matches!(event,tauri::WindowEvent::Destroyed) {interview_windows::restore_main(window.app_handle());}
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
                     api.prevent_close();
@@ -639,7 +645,22 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             interview::interview_status,
+            interview_windows::interview_presentation_publish,
+            interview_windows::interview_presentation_get,
+            interview_windows::interview_presentation_action,
+            interview_windows::interview_window_mode,
+            interview_windows::interview_window_mode_get,
             interview::interview_config,
+            interview_background::background_status,
+            interview_background::background_progress,
+            interview_background::background_choose,
+            interview_background::background_generate,
+            interview_background::background_cancel,
+            interview_background::background_fact_candidates,
+            interview_background::background_edit,
+            interview_background::background_preview,
+            interview_background::background_apply,
+            interview_background::background_export_skill,
             interview::profile_choose,
             interview::profile_scan,
             interview::profile_structured_preview,
@@ -656,7 +677,12 @@ pub fn run() {
             interview::answer_start,
             interview::interview_preferences_get,
             interview::interview_preferences_save,
+            interview::interview_screenshot_answer_start,
+            interview_screenshot::interview_screenshot_displays,
             interview::interview_request_config_get,
+            interview::interview_providers_get,
+            interview::interview_providers_save,
+            interview::interview_provider_test,
             interview::interview_request_config_save,
             interview::interview_connection_status,
             interview::interview_connection_test,

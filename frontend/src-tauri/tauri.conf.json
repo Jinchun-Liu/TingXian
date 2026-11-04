@@ -1,7 +1,7 @@
 {
     "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
     "productName": "Meetily Dialogue",
-    "version": "0.3.0-alpha.1",
+    "version": "0.4.0-alpha.1",
     "identifier": "io.github.jinchunliu.meetilyinterview",
     "build": {
         "frontendDist": "../out",
@@ -74,6 +74,16 @@
                                 }
                             ]
                         }
+                    ]
+                },
+                {
+                    "identifier": "interview-display",
+                    "description": "Read-only conversation presentation events",
+                    "windows": [
+                        "interview-conversation"
+                    ],
+                    "permissions": [
+                        "core:event:default"
                     ]
                 }
             ]

@@ -97,6 +97,7 @@ impl Index {
             CREATE TABLE IF NOT EXISTS document_metadata(path TEXT NOT NULL, root TEXT NOT NULL, reviewed_hash TEXT NOT NULL, confirmed INTEGER NOT NULL, confirmed_at TEXT, valid_from TEXT, valid_until TEXT, updated_at TEXT NOT NULL, PRIMARY KEY(path,root));
             CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(id UNINDEXED, tokens);
             CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS background_library(key TEXT PRIMARY KEY,value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS fact_revisions(version INTEGER PRIMARY KEY, previous_version INTEGER, text TEXT NOT NULL, source_note TEXT NOT NULL, sources_json TEXT NOT NULL, reason TEXT NOT NULL, confirmed_at TEXT, recorded_at TEXT NOT NULL);
             INSERT OR IGNORE INTO fact_revisions(version,previous_version,text,source_note,sources_json,reason,confirmed_at,recorded_at)
                 VALUES(0,NULL,COALESCE((SELECT value FROM settings WHERE key='facts'),''),'旧版事实卡；来源仍以原正文为准，未重新确认','[]','迁移基线，不代表新增用户确认',NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
@@ -218,7 +219,7 @@ impl Index {
         let old: Vec<String> = sqlx::query_scalar("SELECT path FROM documents").fetch_all(&mut *tx).await.map_err(|e|e.to_string())?;
         for path in old {
             control.check()?;
-            if old_root != root_text || !active.contains(path.as_str()) { remove_document(&mut tx, &path).await?; }
+            if !path.starts_with(crate::background::PREFIX) && (old_root != root_text || !active.contains(path.as_str())) { remove_document(&mut tx, &path).await?; }
         }
         for (position, (item, hash, chunks)) in prepared.into_iter().enumerate() {
             control.check()?;
@@ -275,7 +276,7 @@ impl Index {
             // Rank the compact FTS rows first. Joining full excerpts/metadata
             // before LIMIT copies and looks up every matching document. The
             // atomic import/cleanup gate keeps FTS IDs and source rows aligned.
-            let rows=sqlx::query(&format!("WITH matches AS MATERIALIZED (SELECT id,bm25(search) AS score FROM search WHERE search MATCH ? ORDER BY score LIMIT 40) SELECT c.id,c.path,c.location,c.text,d.hash,d.kind,d.allow_external,COALESCE((SELECT value FROM settings WHERE key='root'),'') AS current_root,matches.score,{} FROM matches JOIN chunks c ON c.id=matches.id JOIN documents d ON d.path=c.path {} ORDER BY matches.score",crate::document_meta::META_COLUMNS,crate::document_meta::META_JOIN))
+            let rows=sqlx::query(&format!("WITH matches AS MATERIALIZED (SELECT id,bm25(search) AS score FROM search WHERE search MATCH ? ORDER BY score LIMIT 40) SELECT c.id,c.path,c.location,c.text,d.hash,d.kind,d.allow_external,CASE WHEN d.path GLOB '.背景/*' THEN '背景资料库' ELSE COALESCE((SELECT value FROM settings WHERE key='root'),'') END AS current_root,matches.score,{} FROM matches JOIN chunks c ON c.id=matches.id JOIN documents d ON d.path=c.path {} ORDER BY matches.score",crate::document_meta::META_COLUMNS,crate::document_meta::META_JOIN))
                 .bind(query).fetch_all(&self.pool).await.map_err(|e|e.to_string())?;
             // Query lengths and added alias IDFs have different score scales.
             // Normalize each result set before applying the 2:1 weighting.
@@ -299,7 +300,7 @@ impl Index {
         Ok(result)
     }
 }
-async fn remove_document(tx: &mut sqlx::Transaction<'_,sqlx::Sqlite>,path:&str)->Result<()> {
+pub(crate) async fn remove_document(tx: &mut sqlx::Transaction<'_,sqlx::Sqlite>,path:&str)->Result<()> {
     sqlx::query("DELETE FROM search WHERE id IN (SELECT id FROM chunks WHERE path=?)").bind(path).execute(&mut **tx).await.map_err(|e|e.to_string())?;
     sqlx::query("DELETE FROM chunks WHERE path=?").bind(path).execute(&mut **tx).await.map_err(|e|e.to_string())?;
     sqlx::query("DELETE FROM documents WHERE path=?").bind(path).execute(&mut **tx).await.map_err(|e|e.to_string())?;

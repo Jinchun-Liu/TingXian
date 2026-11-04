@@ -43,7 +43,7 @@ export class TurnLatency {
     // Headings/correction text are not useful answer characters. If a provider
     // ignores the format, keep the useful metric unknown instead of guessing.
     const answer = text.match(/(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*\*)?建议回答(?:\*\*)?\s*[：:]\s*([\s\S]*)/u)?.[1]
-      ?.split(/\n\s*(?:听写纠正|纠正|关键点|可能追问|事实提醒)\s*[：:]/u)[0];
+      ?.split(/\n\s*(?:<<<QUESTION>>>|(?:听写纠正|纠正|关键点|可能追问|事实提醒)\s*[：:])/u)[0];
     if (!answer || !/[\p{L}\p{N}]/u.test(answer)) return;
     this.mark('first_useful_text', now);
     // A decimal point or punctuation-only prefix cannot count as a sentence.

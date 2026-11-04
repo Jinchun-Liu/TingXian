@@ -33,7 +33,7 @@ pub struct DocumentUpdate {
 }
 
 pub(crate) const META_COLUMNS:&str="m.reviewed_hash AS meta_hash,m.confirmed AS meta_confirmed,m.confirmed_at AS meta_confirmed_at,m.valid_from AS meta_from,m.valid_until AS meta_until,m.updated_at AS meta_updated";
-pub(crate) const META_JOIN:&str="LEFT JOIN document_metadata m ON m.path=d.path AND m.root=COALESCE((SELECT value FROM settings WHERE key='root'),'')";
+pub(crate) const META_JOIN:&str="LEFT JOIN document_metadata m ON m.path=d.path AND m.root=CASE WHEN d.path GLOB '.背景/*' THEN '背景资料库' ELSE COALESCE((SELECT value FROM settings WHERE key='root'),'') END";
 fn date(value:&str)->Result<NaiveDate> {
     if value.len()!=10 {return Err("有效日期须为 YYYY-MM-DD".into());}
     let parsed=NaiveDate::parse_from_str(value,"%Y-%m-%d").map_err(|_|"有效日期无效，请检查年月日")?;
@@ -59,7 +59,7 @@ pub(crate) fn status(row:&sqlx::sqlite::SqliteRow, hash:&str, today:NaiveDate)->
 }
 impl Index {
     pub async fn documents(&self)->Result<Vec<DocumentRecord>> {
-        let rows=sqlx::query(&format!("SELECT d.*,COALESCE((SELECT value FROM settings WHERE key='root'),'') AS current_root,(SELECT count(*) FROM chunks c WHERE c.path=d.path) AS chunk_count,{META_COLUMNS} FROM documents d {META_JOIN} ORDER BY d.path"))
+        let rows=sqlx::query(&format!("SELECT d.*,CASE WHEN d.path GLOB '.背景/*' THEN '背景资料库' ELSE COALESCE((SELECT value FROM settings WHERE key='root'),'') END AS current_root,(SELECT count(*) FROM chunks c WHERE c.path=d.path) AS chunk_count,{META_COLUMNS} FROM documents d {META_JOIN} ORDER BY d.path"))
             .fetch_all(&self.pool).await.map_err(|e|e.to_string())?;
         let today=Local::now().date_naive();
         Ok(rows.into_iter().map(|r| {let hash:String=r.get("hash");let metadata=status(&r,&hash,today);DocumentRecord {path:r.get("path"),root:r.get("current_root"),hash,kind:r.get("kind"),allow_external:r.get("allow_external"),chunks:r.get("chunk_count"),metadata}}).collect())
@@ -71,6 +71,7 @@ impl Index {
         let hash:Option<String>=sqlx::query_scalar("SELECT hash FROM documents WHERE path=?").bind(&update.path).fetch_optional(&mut *tx).await.map_err(|e|e.to_string())?;
         if hash.as_deref()!=Some(update.expected_hash.as_str()) {return Err("资料已更新或退出索引，请刷新后重新核对；未保存旧版本确认".into());}
         let root:String=sqlx::query_scalar("SELECT value FROM settings WHERE key='root'").fetch_optional(&mut *tx).await.map_err(|e|e.to_string())?.unwrap_or_default();
+        let root=crate::background::doc_root(&update.path,&root).to_owned();
         if root!=update.expected_root {return Err("资料根目录已改变，请刷新后重新核对；未保存旧目录确认".into());}
         let now=Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis,true);
         sqlx::query("INSERT OR REPLACE INTO document_metadata(path,root,reviewed_hash,confirmed,confirmed_at,valid_from,valid_until,updated_at) VALUES(?,?,?,?,?,?,?,?)")
@@ -84,7 +85,7 @@ impl Index {
         let hash:Option<String>=sqlx::query_scalar("SELECT hash FROM documents WHERE path=?").bind(path).fetch_optional(&mut *tx).await.map_err(|e|e.to_string())?;
         if hash.as_deref()!=Some(expected_hash) {return Err("资料已更新或退出索引，请刷新后查看".into());}
         let root:String=sqlx::query_scalar("SELECT value FROM settings WHERE key='root'").fetch_optional(&mut *tx).await.map_err(|e|e.to_string())?.unwrap_or_default();
-        if root!=expected_root {return Err("资料根目录已改变，请刷新后查看".into());}
+        if crate::background::doc_root(path,&root)!=expected_root {return Err("资料根目录已改变，请刷新后查看".into());}
         let rows=sqlx::query("SELECT location,text FROM chunks WHERE path=? ORDER BY rowid").bind(path).fetch_all(&mut *tx).await.map_err(|e|e.to_string())?;
         Ok(rows.into_iter().map(|r|Segment {location:r.get("location"),text:r.get("text")}).collect())
     }

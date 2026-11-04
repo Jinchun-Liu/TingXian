@@ -1,6 +1,8 @@
 'use client'
 
 import './globals.css'
+import './interview/workspace.css'
+import {usePathname} from 'next/navigation'
 import Sidebar from '@/components/Sidebar'
 import { SidebarProvider } from '@/components/Sidebar/SidebarProvider'
 import MainContent from '@/components/MainContent'
@@ -55,7 +57,7 @@ function ConditionalImportDialog({
 
 // export { metadata } from './metadata'
 
-export default function RootLayout({
+function ApplicationLayout({
   children,
 }: {
   children: React.ReactNode
@@ -228,4 +230,12 @@ export default function RootLayout({
       </body>
     </html>
   )
+}
+
+// A presentation window must never mount recording, transcript persistence,
+// exit cleanup, tray handlers or update providers a second time.
+export default function RootLayout({children}:{children:React.ReactNode}) {
+  const pathname=usePathname();
+  if(pathname==='/interview-display')return <html lang="zh-CN"><body className="font-sans antialiased">{children}</body></html>;
+  return <ApplicationLayout>{children}</ApplicationLayout>;
 }

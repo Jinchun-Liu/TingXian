@@ -55,7 +55,7 @@ async fn multipart_answer_streams_as_one_request_without_losing_numbered_points(
     let received: String = events.iter().filter_map(|event| match event { StreamEvent::Delta { text } => Some(text.as_str()), _ => None }).collect();
     assert_eq!(received, parts.concat());
     assert!(has_useful_answer(&received));
-    assert_eq!(server.requests.lock().unwrap()[0].0["max_tokens"], 1600);
+    assert_eq!(server.requests.lock().unwrap()[0].0["max_tokens"], crate::MAX_ANSWER_TOKENS);
 }
 
 #[tokio::test]

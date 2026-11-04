@@ -7,7 +7,11 @@
 
 An experimental conversation assistant for interviews, learning, meetings and general discussion, with local Whisper transcription, document retrieval and optional DeepSeek assistance. The interface is currently in Chinese; response and transcription languages are configurable.
 
-**基于 [Meetily Community](https://github.com/Zackriya-Solutions/meetily) v0.4.1 的独立修改版，非官方产品。当前为 v0.3.0-alpha.1 源码预览版，无签名或公证安装包。** 保留上游 MIT 版权；见 [来源与变更](NOTICE.md)。
+**基于 [Meetily Community](https://github.com/Zackriya-Solutions/meetily) v0.4.1 的独立修改版，非官方产品。当前为 v0.4.0-alpha.1 源码预览版，无签名或公证安装包。** 保留上游 MIT 版权；见 [来源与变更](NOTICE.md)。
+
+从「对话助手 → 高级对话工作区」进入新版布局，可独立移动或缩放对话窗口，调整字号，让不同问题并行使用最多三个回答接口。配置视觉模型后可主动截屏提问。回答先显示正文，再显示纠正后的完整问题。
+
+在高级工作区的「资料与设置」选择自己的资料夹或重点文件，以独立的背景模型整理原文、综述、岗位和术语。核对后应用，也可导出整理 Skill，在 Codex 或 Claude Code 中处理再导回。文字上下文调试预算为 256K，可查看整库估算及接口返回的实际用量。
 
 ## 场景与默认行为
 
