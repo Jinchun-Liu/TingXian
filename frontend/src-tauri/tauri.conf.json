@@ -1,7 +1,7 @@
 {
     "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
     "productName": "听弦",
-    "version": "0.5.1",
+    "version": "0.6.0",
     "identifier": "io.github.jinchunliu.meetilyinterview",
     "build": {
         "frontendDist": "../out",
@@ -83,7 +83,8 @@
                         "interview-conversation"
                     ],
                     "permissions": [
-                        "core:event:default"
+                        "core:event:allow-listen",
+                        "core:event:allow-unlisten"
                     ]
                 }
             ]
@@ -105,9 +106,7 @@
             "icons/app_icon.icns",
             "icons/app_icon.ico"
         ],
-        "resources": [
-            "templates/*.json"
-        ],
+        "resources": [],
         "externalBin": [
             "binaries/ffmpeg"
         ],

@@ -113,7 +113,7 @@ static TRANSCRIPT_LISTENER_ID: Mutex<Option<tauri::EventId>> = Mutex::new(None);
 
 const TRANSCRIPTION_RUNTIME_START_ERROR_CODE: &str =
     "TRANSCRIPTION_RUNTIME_INITIALIZATION_FAILED";
-const TRANSCRIPTION_RUNTIME_USER_MESSAGE: &str = "Speech recognition could not initialize. Restart 听弦. If the problem continues, repair or reinstall the app.";
+const TRANSCRIPTION_RUNTIME_USER_MESSAGE: &str = "本地语音引擎无法初始化，请重启听弦；若仍失败请重新安装。";
 
 // ============================================================================
 // PUBLIC TYPES
@@ -366,7 +366,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     let current_recording_state = IS_RECORDING.load(Ordering::SeqCst);
     info!("🔍 IS_RECORDING state check: {}", current_recording_state);
     if current_recording_state {
-        return Err("Recording already in progress".to_string());
+        return Err("采集已经开始".to_string());
     }
 
     if let Err(error) = crate::ensure_onnx_runtime_available() {
@@ -385,7 +385,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         // (download progress is already shown in top-right toast)
         let _ = app.emit("transcription-error", serde_json::json!({
             "error": validation_error,
-            "userMessage": format!("Recording cannot start: {}", validation_error),
+            "userMessage": format!("无法开始采集：{}", validation_error),
             "actionable": false,
             "phase": "startup"
         }));
@@ -545,7 +545,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     let current_recording_state = IS_RECORDING.load(Ordering::SeqCst);
     info!("🔍 IS_RECORDING state check: {}", current_recording_state);
     if current_recording_state {
-        return Err("Recording already in progress".to_string());
+        return Err("采集已经开始".to_string());
     }
 
     if let Err(error) = crate::ensure_onnx_runtime_available() {
@@ -564,7 +564,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         // (download progress is already shown in top-right toast)
         let _ = app.emit("transcription-error", serde_json::json!({
             "error": validation_error,
-            "userMessage": format!("Recording cannot start: {}", validation_error),
+            "userMessage": format!("无法开始采集：{}", validation_error),
             "actionable": false,
             "phase": "startup"
         }));
@@ -1134,7 +1134,7 @@ pub async fn pause_recording<R: Runtime>(app: AppHandle<R>) -> Result<(), String
 
     // Check if currently recording
     if !IS_RECORDING.load(Ordering::SeqCst) {
-        return Err("No recording is currently active".to_string());
+        return Err("当前没有正在进行的采集".to_string());
     }
 
     // Access the recording manager and pause it
@@ -1168,7 +1168,7 @@ pub async fn resume_recording<R: Runtime>(app: AppHandle<R>) -> Result<(), Strin
 
     // Check if currently recording
     if !IS_RECORDING.load(Ordering::SeqCst) {
-        return Err("No recording is currently active".to_string());
+        return Err("当前没有正在进行的采集".to_string());
     }
 
     // Access the recording manager and resume it
