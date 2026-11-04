@@ -1,5 +1,6 @@
 'use client';
 
+import {AudioSettings} from '@/components/interview/AudioSettings';
 import {ChoiceMenu, ChoiceOption} from '@/components/ui/choice-menu';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
@@ -60,6 +61,7 @@ export default function InterviewPage() {
   const [phase, setPhase] = useState('就绪');
   const [notice, setNotice] = useState('');
   const [answerWarning,setAnswerWarning] = useState('');
+  const [audioPanel,setAudioPanel]=useState(false);
   const [settings, setSettings] = useState(false);
   const [operationBusy, setOperationBusy] = useState(false);
   const [connectionChecking,setChecking]=useState(false);
@@ -115,6 +117,7 @@ export default function InterviewPage() {
   const [level, setLevel] = useState(0);
   const [micLevel, setMicLevel] = useState(0);
   const [recordMicrophone, setRecordMicrophone] = useState(true);
+  useEffect(()=>{try{setRecordMicrophone(localStorage.getItem('tingxian-microphone')!=='off');}catch{}},[]);
   const microphoneGate = useRef(new MicrophoneTranscriptGate());
   const microphoneChanging = useRef(false);
   const microphoneVersion = useRef(0);
@@ -517,6 +520,7 @@ export default function InterviewPage() {
       if (recording.isRecording) {
         applyMicrophoneState(await invoke<MicrophoneState>('interview_microphone_set', { enabled }));
       } else { setRecordMicrophone(enabled); }
+      try {localStorage.setItem('tingxian-microphone',enabled?'on':'off');} catch {}
       setMicLevel(0);
     } catch (e) {
       const levels = await invoke<{microphone_state:MicrophoneState}>('interview_audio_level').catch(() => null);
@@ -591,7 +595,7 @@ export default function InterviewPage() {
     <ConnectionCheck disabled={operationBusy||recording.isRecording||generating||!!status?.session_active} hasKey={!!status?.key_configured} revision={connectionRevision} onCheckingChange={setConnectionChecking} />
       </div></details>
     <ResidueNotice blocked={busy || recording.isRecording || generating || history.length>0 || !!question || !!confirmedAnswer || !!status?.session_active} revision={residueRevision} onClear={clearResidue} />
-      <nav className="flex flex-wrap gap-3 text-xs text-slate-500">{!recording.isRecording && !generating && !busy && <Link href="/interview-workspace" className="underline">高级对话工作区</Link>}<Link href="/" className="underline">会议记录</Link><Link href="/settings" className="underline">音频设置</Link></nav>
+      <nav className="flex flex-wrap gap-3 text-xs text-slate-500">{!recording.isRecording && !generating && !busy && <Link href="/interview-workspace" className="underline">高级对话工作区</Link>}<Link href="/" className="underline">会议记录</Link><button type="button" onClick={()=>{setSettings(false);setSavedSessions(null);setAudioPanel(true);}}>音频设置</button></nav>
     </aside>
     <div aria-label="识别与对话区" className="flex h-[calc(100dvh-2rem)] min-w-0 flex-col gap-3 md:h-auto md:min-h-0">
     {notice && <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm break-words">{notice}</div>}
@@ -600,6 +604,7 @@ export default function InterviewPage() {
       <div><p>{importJob.cancelPending ? '正在取消导入，保留原资料库…' : importPhaseNames[importJob.phase] || importJob.phase} · {importJob.completed} / {importJob.total}</p>{importJob.path && <p className="text-xs text-slate-500 break-all">{importJob.path}</p>}</div>
       <Button variant="outline" disabled={!importJob.ready || importJob.cancelPending || importJob.phase === 'committing'} onClick={cancelImport}>取消导入</Button>
     </section>}
+    {audioPanel && <section className="shrink-0 max-h-[48vh] overflow-y-auto rounded-xl border bg-white p-4 space-y-4"><Button variant="outline" onClick={()=>setAudioPanel(false)}>返回对话</Button><AudioSettings locked={busy || recording.isRecording} microphone={recordMicrophone} onMicrophone={enabled=>void toggleMicrophone(enabled)}/></section>}
     {settings && <section className="shrink-0 max-h-[45vh] overflow-y-auto rounded-xl border bg-white p-4 space-y-4">
       <div className="flex justify-between gap-3"><h2 className="font-semibold">资料与场景设置</h2><Button variant="outline" size="sm" onClick={()=>setSettings(false)}>收起资料与设置</Button></div>
       <InterviewPreferences locked={busy || !!status?.session_active || recording.isRecording || generating} onSaved={preferences=>setStatus(value=>value?{...value,preferences}:value)} />
@@ -634,7 +639,7 @@ export default function InterviewPage() {
       }} />}
       <label className="block text-sm">术语别名（每行一组，英文逗号分隔）<textarea className="w-full border rounded p-2 mt-1 h-28 text-sm" value={aliases} onChange={e => setAliases(e.target.value)} /></label>
       <RequestSettings locked={busy || !!status?.session_active || recording.isRecording || generating} onSaved={config=>{setStatus(s=>s?{...s,model:config.model}:s);setConnectionRevision(r=>r+1);}} />
-      <div className="flex gap-2"><Input type="password" aria-label="临时 API Key" autoComplete="off" value={key} onChange={e => setKey(e.target.value)} placeholder="替换本进程 API Key（不回显、不写入前端存储）" /><Button disabled={busy || status?.session_active} onClick={() => run(async () => { await invoke('interview_config', { aliases, key: key || null }); setKey(''); setConnectionRevision(r=>r+1); await refresh(); })}>保存配置</Button><Link href="/settings" className="text-sm underline self-center whitespace-nowrap">原生音频设置</Link></div>
+      <div className="flex gap-2"><Input type="password" aria-label="临时 API Key" autoComplete="off" value={key} onChange={e => setKey(e.target.value)} placeholder="替换本进程 API Key（不回显、不写入前端存储）" /><Button disabled={busy || status?.session_active} onClick={() => run(async () => { await invoke('interview_config', { aliases, key: key || null }); setKey(''); setConnectionRevision(r=>r+1); await refresh(); })}>保存配置</Button><button type="button" onClick={()=>{setSettings(false);setSavedSessions(null);setAudioPanel(true);}}>音频设置</button></div>
     </section>}
     {savedSessions !== null && <section className="shrink-0 max-h-[35vh] overflow-y-auto border rounded-lg p-4 text-sm space-y-2"><Button variant="outline" size="sm" onClick={()=>setSavedSessions(null)}>收起已保存会话</Button><p>本机保存的会话 · 恢复只替换当前显示，不会自动开始采集或回答</p>{(history.length>0 || question || confirmedAnswer) && <label className="block"><input type="checkbox" disabled={busy || recording.isRecording || generating} checked={allowReplaceSession} onChange={e=>setAllowReplaceSession(e.target.checked)} /> 我已保存需要的内容，允许替换当前显示（未保存内容会丢失）</label>}{!savedSessions.length && <p>暂无已保存会话</p>}{savedSessions.map(s=><div key={s.id} className="flex justify-between items-center gap-3"><span>{new Date(s.saved_at).toLocaleString('zh-CN')} · {s.turns} 条发言 · {s.calls} 次调用</span><Button size="sm" variant="outline" disabled={busy || recording.isRecording || generating || (!!(history.length || question || confirmedAnswer) && !allowReplaceSession)} onClick={()=>restoreSession(s.id)}>恢复这份会话</Button></div>)}{savedBefore!==null && <Button variant="outline" disabled={busy} onClick={()=>listSessions(true)}>更早的保存记录</Button>}</section>}
     <section aria-label="转写与对话" className="flex min-h-0 flex-1 flex-col rounded-xl border bg-white overflow-hidden">

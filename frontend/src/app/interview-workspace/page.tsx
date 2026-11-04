@@ -1,5 +1,6 @@
 'use client';
 
+import {AudioSettings} from '@/components/interview/AudioSettings';
 import {ChoiceMenu, ChoiceOption} from '@/components/ui/choice-menu';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
@@ -62,7 +63,7 @@ export default function InterviewPage() {
   const [notice, setNotice] = useState('');
   const [answerWarning,setAnswerWarning] = useState('');
   const [settings, setSettings] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'资料库'|'事实与术语'|'模型接口'>('资料库');
+  const [settingsTab, setSettingsTab] = useState<'资料库'|'事实与术语'|'模型接口'|'音频'>('资料库');
   const [openBackground,setOpenBackground]=useState(false);
   const [openVision, setOpenVision] = useState(false);
   const settingsTrigger = useRef<HTMLButtonElement>(null);
@@ -119,6 +120,7 @@ export default function InterviewPage() {
   const [level, setLevel] = useState(0);
   const [micLevel, setMicLevel] = useState(0);
   const [recordMicrophone, setRecordMicrophone] = useState(true);
+  useEffect(()=>{try{setRecordMicrophone(localStorage.getItem('tingxian-microphone')!=='off');}catch{}},[]);
   const microphoneGate = useRef(new MicrophoneTranscriptGate());
   const microphoneChanging = useRef(false);
   const microphoneVersion = useRef(0);
@@ -580,6 +582,7 @@ export default function InterviewPage() {
       if (recording.isRecording) {
         applyMicrophoneState(await invoke<MicrophoneState>('interview_microphone_set', { enabled }));
       } else { setRecordMicrophone(enabled); }
+      try {localStorage.setItem('tingxian-microphone',enabled?'on':'off');} catch {}
       setMicLevel(0);
     } catch (e) {
       const levels = await invoke<{microphone_state:MicrophoneState}>('interview_audio_level').catch(() => null);
@@ -705,7 +708,7 @@ export default function InterviewPage() {
         {limit-calls<=REQUEST_LIMIT_WARNING && <Button variant="outline" size="sm" disabled={busy} onClick={()=>setLimit(l=>l+20)}>继续 20 次</Button>}
     <ResidueNotice blocked={busy || recording.isRecording || generating || history.length>0 || !!question || !!confirmedAnswer || !!status?.session_active} revision={residueRevision} onClear={clearResidue} />
 
-        <nav>{!recording.isRecording && !generating && !busy && !split && <Link href="/interview">对话助手</Link>}<Link href="/">会议记录</Link><Link href="/settings">音频设置</Link></nav>
+        <nav>{!recording.isRecording && !generating && !busy && !split && <Link href="/interview">对话助手</Link>}<Link href="/">会议记录</Link><button type="button" onClick={()=>{setSavedSessions(null);setSettingsTab('音频');setSettings(true);}}>音频设置</button></nav>
       </footer>
       {split && <div className="desk-split-composer">
         {(notice||answerWarning) && <div role="status">{notice||answerWarning}</div>}
@@ -724,8 +727,9 @@ export default function InterviewPage() {
     </section>}
     {settings && <section className="desk-panel" aria-label="资料与设置" onKeyDown={e=>{if(e.key==='Escape' && !e.nativeEvent.isComposing && !e.defaultPrevented && !(e.target as Element).closest('[role=listbox]'))closeSettings();}}>
       <header className="desk-panel-heading"><h2>资料与设置</h2><Button autoFocus variant="ghost" size="sm" onClick={closeSettings}>收起资料与设置</Button></header>
-      <nav aria-label="设置分类" className="desk-tabs">{(['资料库','事实与术语','模型接口'] as const).map(tab=><button key={tab} type="button" aria-pressed={settingsTab===tab} onClick={()=>setSettingsTab(tab)}>{tab}</button>)}</nav>
+      <nav aria-label="设置分类" className="desk-tabs">{(['音频','资料库','事实与术语','模型接口'] as const).map(tab=><button key={tab} type="button" aria-pressed={settingsTab===tab} onClick={()=>setSettingsTab(tab)}>{tab}</button>)}</nav>
       <div className="desk-panel-body">
+      {settingsTab==='音频'&&<AudioSettings locked={busy || recording.isRecording} microphone={recordMicrophone} onMicrophone={enabled=>void toggleMicrophone(enabled)}/>}
       <div hidden={settingsTab!=='资料库'} className="space-y-4">
 
       <div className="flex flex-wrap items-center justify-between gap-3 text-xs">

@@ -301,7 +301,8 @@ impl WhisperEngine {
         match model_info.status {
             ModelStatus::Available => {
                 // FIX 5: Check if this model is already loaded
-                if let Some(current_model) = self.current_model.read().await.as_ref() {
+                let previous = self.get_current_model().await;
+                if let Some(current_model) = previous.as_deref() {
                     if current_model == model_name {
                         log::info!("Model {} is already loaded, skipping reload", model_name);
                         return Ok(());

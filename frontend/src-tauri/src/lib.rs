@@ -480,6 +480,7 @@ pub mod interview_sessions;
 pub mod interview_connection;
 pub mod interview_index;
 pub mod tingxian_runtime;
+mod tingxian_audio;
 pub mod interview_background;
 
 pub fn run() {
@@ -704,6 +705,9 @@ pub fn run() {
             interview_exit::interview_exit_archive,
             interview_exit::interview_exit_cancel,
             interview_exit::interview_exit_finish,
+            tingxian_audio::tingxian_asr_models,
+            tingxian_audio::tingxian_select_model,
+            tingxian_audio::tingxian_select_devices,
             interview::interview_audio_start,
             interview::interview_audio_level,
             interview::interview_microphone_set,
