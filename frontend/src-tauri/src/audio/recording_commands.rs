@@ -253,6 +253,8 @@ fn resolve_system_or_default(requested_name: Option<&str>) -> Option<Arc<super::
         match parse_audio_device(name) {
             Ok(device) => {
                 info!("✅ Using requested system audio: '{}'", device.name);
+                #[cfg(target_os = "macos")]
+                let device = super::AudioDevice { pin_output: true, ..device };
                 return Some(Arc::new(device));
             }
             Err(e) => warn!(

@@ -86,7 +86,7 @@ export function AudioSettings({locked,microphone,onMicrophone}:{locked:boolean;m
       setPrefs(next);setMessage('设备选择已保存');
     })}><ChoiceOption value="">跟随系统默认</ChoiceOption>{value&&!names.some(n=>value===n+' ('+kind.toLowerCase()+')')&&<ChoiceOption value={value}>{value}（未连接）</ChoiceOption>}{names.map(n=><ChoiceOption key={n} value={n+' ('+kind.toLowerCase()+')'}>{n}</ChoiceOption>)}</ChoiceMenu></div>
       <div className="tx-audio-test"><Button size="sm" variant="outline" disabled={disabled} aria-label={testLabel} onClick={()=>void run(async()=>{
-        if(system)setSystemCheck(await invoke<boolean>('trigger_system_audio_permission_command')?'通道可用，音量在采集中确认':'未能建立，请检查系统权限');
+        if(system)setSystemCheck(await invoke<boolean>('trigger_system_audio_permission_command',{output:prefs?.preferred_system_device||null})?'通道可用，音量在采集中确认':'未能建立，请检查系统权限');
         else setMicCheck(await invoke<boolean>('trigger_microphone_permission')?'默认麦克风可打开':'默认麦克风不可用，请检查权限');
       })}>{testLabel}</Button><span role="status">{system?systemCheck:micCheck}</span></div></div>;
   };

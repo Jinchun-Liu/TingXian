@@ -92,13 +92,13 @@ pub async fn request_screen_recording_permission_command() -> Result<(), String>
 /// Trigger system audio permission request and verify it was granted
 /// Returns Ok(true) if permission granted (tap created successfully), Ok(false) if denied
 #[cfg(target_os = "macos")]
-pub fn trigger_system_audio_permission() -> Result<bool> {
+pub fn trigger_system_audio_permission(device: Option<&str>) -> Result<bool> {
     info!("🔐 Triggering Audio Capture permission request...");
 
     // Try to create a Core Audio capture - this triggers the permission dialog
     // if NSAudioCaptureUsageDescription is present in Info.plist
     // NOTE: We only create the tap, don't start streaming - similar to mic permission approach
-    match crate::audio::capture::CoreAudioCapture::new() {
+    match crate::audio::capture::CoreAudioCapture::for_output(device) {
         Ok(_capture) => {
             info!("✅ Core Audio tap created successfully");
             // Sleep briefly to allow permission dialog to appear (if shown)
@@ -117,15 +117,13 @@ pub fn trigger_system_audio_permission() -> Result<bool> {
                 return Ok(false);
             }
             warn!("⚠️ Failed to create Core Audio tap: {}", e);
-            // If tap creation fails for other reasons, still return false
-            // as we can't verify permission status
-            Ok(false)
+            Err(e)
         }
     }
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn trigger_system_audio_permission() -> Result<bool> {
+pub fn trigger_system_audio_permission(_device: Option<&str>) -> Result<bool> {
     // System audio permissions not required on other platforms
     info!("System audio permissions not required on this platform");
     Ok(true)
@@ -134,10 +132,14 @@ pub fn trigger_system_audio_permission() -> Result<bool> {
 /// Tauri command to trigger system audio permission request
 /// Returns true if permission was granted (stream created), false if denied
 #[tauri::command]
-pub async fn trigger_system_audio_permission_command() -> Result<bool, String> {
+pub async fn trigger_system_audio_permission_command(output: Option<String>) -> Result<bool, String> {
     // Run in blocking task to avoid blocking the async runtime
-    tokio::task::spawn_blocking(|| {
-        trigger_system_audio_permission()
+    tokio::task::spawn_blocking(move || {
+        let device = output.as_deref().map(super::devices::parse_audio_device).transpose()?;
+        if let Some(ref device) = device {
+            anyhow::ensure!(device.device_type == super::devices::DeviceType::Output, "请选择输出设备");
+        }
+        trigger_system_audio_permission(device.as_ref().map(|d| d.name.as_str()))
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?

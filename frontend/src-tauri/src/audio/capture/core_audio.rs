@@ -53,24 +53,39 @@ struct AudioContext {
 
 #[cfg(target_os = "macos")]
 impl CoreAudioCapture {
-    /// Create a new Core Audio capture for system audio
     pub fn new() -> Result<Self> {
-        info!("🎙️ CoreAudio: Starting Core Audio capture initialization...");
+        Self::for_output(None)
+    }
 
+    fn named_output(name: &str) -> Result<ca::Device> {
+        let devices = ca::System::devices().map_err(|e| anyhow::anyhow!("无法读取输出设备列表：{e:?}"))?;
+        let mut matches = devices.into_iter().filter(|device| {
+            device.name().is_ok_and(|value| value.to_string() == name)
+                && device.output_stream_cfg().is_ok_and(|cfg| cfg.buffers().iter().any(|b| b.number_channels > 0))
+        });
+        let device = matches.next().ok_or_else(|| anyhow::anyhow!("输出设备「{name}」未连接，请重新选择"))?;
+        anyhow::ensure!(matches.next().is_none(), "有多个输出设备名为「{name}」，请先区分设备名称或选择跟随系统默认");
+        Ok(device)
+    }
+
+    fn tap_description(output_uid: Option<&cf::String>) -> arc::R<ca::TapDesc> {
+        let mut desc = ca::TapDesc::with_mono_global_tap_excluding_processes(&cidre::ns::Array::new());
+        if let Some(uid) = output_uid {
+            desc.set_device_uid(Some(uid.as_ns()));
+        }
+        desc
+    }
+
+    pub fn for_output(name: Option<&str>) -> Result<Self> {
         // Note: Audio Capture permission (NSAudioCaptureUsageDescription) is required for macOS 14.4+
         // The permission dialog is automatically triggered when creating the Core Audio tap.
         // If permission is denied, the tap will return silence (all zeros).
 
-        // Get default output device
-        info!("🎙️ CoreAudio: Getting default output device...");
-        let output_device = ca::System::default_output_device()
-            .map_err(|e| {
-                error!("❌ CoreAudio: Failed to get default output device: {:?}", e);
-                anyhow::anyhow!("Failed to get default output device: {:?}", e)
-            })?;
-
-        info!("✅ CoreAudio: Got default output device");
-
+        let output_device = match name {
+            Some(name) => Self::named_output(name)?,
+            None => ca::System::default_output_device()
+                .map_err(|e| anyhow::anyhow!("无法读取默认输出设备：{e:?}"))?,
+        };
         let output_uid = output_device.uid()
             .map_err(|e| {
                 error!("❌ CoreAudio: Failed to get device UID: {:?}", e);
@@ -79,16 +94,14 @@ impl CoreAudioCapture {
 
         // Get device name for better debugging
         let device_name = output_device.name().unwrap_or_else(|_| cf::String::from_str("Unknown"));
-        info!("✅ CoreAudio: Default output device: '{}' (UID: {:?})", device_name, output_uid);
+        info!("✅ CoreAudio: Output device: '{}' (UID: {:?})", device_name, output_uid);
 
         // IMPORTANT: We do NOT create a sub_device dictionary here
         // When using a tap, the tap provides all the audio we need
         // Including both the tap AND the device creates duplicate audio (echo issue)
 
-        // Create process tap with mono global tap, excluding no processes
-        // Note: Mono tap is more reliable for system audio capture on macOS
-        info!("🎙️ CoreAudio: Creating process tap (global mono tap)...");
-        let tap_desc = ca::TapDesc::with_mono_global_tap_excluding_processes(&cidre::ns::Array::new());
+        // The aggregate clock alone does not restrict which device contributes audio.
+        let tap_desc = Self::tap_description(name.map(|_| &*output_uid));
         let tap = tap_desc.create_process_tap()
             .map_err(|e| {
                 error!("❌ CoreAudio: Failed to create process tap: {:?}", e);
@@ -249,6 +262,7 @@ impl CoreAudioCapture {
                 anyhow::anyhow!("Failed to get tap ASBD: {:?}", e)
             })?;
 
+        anyhow::ensure!(asbd.channels_per_frame == 1, "系统音频未能协商单声道混音，请重新选择输出设备");
         let format = av::AudioFormat::with_asbd(&asbd)
             .ok_or_else(|| {
                 error!("❌ CoreAudio: Failed to create audio format");
@@ -443,5 +457,30 @@ mod tests {
 
         info!("Collected {} samples", sample_count);
         assert!(sample_count >= 48000);
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod routing_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "reads the Mac's hardware device list, without opening a tap"]
+    fn resolve_connected_output_and_reject_missing_device() {
+        let output = ca::System::default_output_device().unwrap();
+        let name = output.name().unwrap().to_string();
+        let chosen = CoreAudioCapture::named_output(&name).unwrap();
+        assert_eq!(chosen.uid().unwrap().to_string(), output.uid().unwrap().to_string());
+        assert!(CoreAudioCapture::named_output("听弦测试-不存在-86e96097").is_err());
+    }
+
+    #[test]
+    fn mono_tap_binds_only_the_explicit_device() {
+        let uid = cf::String::from_str("tingxian-synthetic-output");
+        for target in [None, Some(&*uid)] {
+            let desc = CoreAudioCapture::tap_description(target);
+            assert_eq!(desc.device_uid().map(|s| s.to_string()), target.map(|s| s.to_string()));
+            assert!(desc.is_mono() && desc.is_mixdown() && desc.is_exclusive());
+        }
     }
 }

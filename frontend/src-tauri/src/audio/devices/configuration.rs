@@ -56,11 +56,20 @@ pub enum DeviceType {
 pub struct AudioDevice {
     pub name: String,
     pub device_type: DeviceType,
+    // A saved output choice pins the macOS tap. Enumerated/default devices keep the global mix.
+    #[cfg(target_os = "macos")]
+    #[serde(skip)]
+    pub(crate) pin_output: bool,
 }
 
 impl AudioDevice {
     pub fn new(name: String, device_type: DeviceType) -> Self {
-        AudioDevice { name, device_type }
+        AudioDevice {
+            name,
+            device_type,
+            #[cfg(target_os = "macos")]
+            pin_output: false,
+        }
     }
 
     pub fn from_name(name: &str) -> Result<Self> {

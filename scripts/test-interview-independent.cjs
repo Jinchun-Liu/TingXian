@@ -15,7 +15,7 @@ const invoke=async(cmd,args)=>{
     case 'tingxian_select_model':assert.ok(available.has(args.model));chosen=args.model;return;
     case 'whisper_download_model':await new Promise(r=>releaseDownload=r);available.add(args.modelName);return;
     case 'whisper_cancel_download':assert.equal(args.modelName,nativeDownload.name);return cancelOutcome;
-    case 'trigger_system_audio_permission_command':return false;
+    case 'trigger_system_audio_permission_command':assert.equal(args.output,prefs.preferred_system_device);return false;
     default:throw Error('unexpected IPC: '+cmd);
   }
 };
