@@ -23,7 +23,22 @@ impl DatabaseManager {
                     backend_db_path,
                     tauri_db_path
                 );
-                fs::copy(backend_db_path, tauri_db_path).map_err(|e| sqlx::Error::Io(e))?;
+                // A raw copy can lose committed rows still in the source WAL. Let
+                // SQLite take a consistent snapshot and publish it only after migration.
+                let dest=Path::new(tauri_db_path);
+                let staged=tempfile::NamedTempFile::new_in(dest.parent().unwrap_or(Path::new(".")))?;
+                let staged_path=staged.path().to_str().ok_or_else(||sqlx::Error::Protocol("暂存路径无效".into()))?;
+                let source=SqlitePool::connect_with(sqlx::sqlite::SqliteConnectOptions::new().filename(backend_db_path).read_only(true)).await?;
+                sqlx::query("VACUUM INTO ?").bind(staged_path).execute(&source).await?;
+                source.close().await;
+                let candidate=SqlitePool::connect(staged_path).await?;
+                sqlx::migrate!("./migrations").run(&candidate).await?;
+                let integrity:String=sqlx::query_scalar("PRAGMA quick_check").fetch_one(&candidate).await?;
+                candidate.close().await;
+                if integrity!="ok"{return Err(sqlx::Error::Protocol("旧会议数据库校验未通过".into()));}
+                staged.as_file().sync_all()?;
+                staged.persist_noclobber(dest).map_err(|e|sqlx::Error::Io(e.error))?;
+
             } else {
                 log::info!("Creating database at {}", tauri_db_path);
                 Sqlite::create_database(tauri_db_path).await?;
@@ -62,59 +77,8 @@ impl DatabaseManager {
             .to_string_lossy()
             .to_string();
 
-        // WAL file paths for defensive cleanup
-        let wal_path = app_data_dir.join("meeting_minutes.sqlite-wal");
-        let shm_path = app_data_dir.join("meeting_minutes.sqlite-shm");
-
-        log::info!("Tauri DB path: {}", tauri_db_path);
-        log::info!("Legacy backend DB path: {}", backend_db_path);
-
-        // Try to open database with defensive WAL handling
-        match Self::new(&tauri_db_path, &backend_db_path).await {
-            Ok(db_manager) => {
-                log::info!("Database opened successfully");
-                Ok(db_manager)
-            }
-            Err(e) => {
-                // Check if error is due to corrupted WAL file
-                let error_msg = e.to_string();
-                if error_msg.contains("malformed") || error_msg.contains("corrupt") {
-                    log::warn!("Database appears corrupted, likely due to orphaned WAL file. Attempting recovery...");
-                    log::warn!("Error details: {}", error_msg);
-
-                    // Delete potentially corrupted WAL/SHM files
-                    if wal_path.exists() {
-                        match fs::remove_file(&wal_path) {
-                            Ok(_) => log::info!("Removed orphaned WAL file: {:?}", wal_path),
-                            Err(e) => log::warn!("Failed to remove WAL file: {}", e),
-                        }
-                    }
-                    if shm_path.exists() {
-                        match fs::remove_file(&shm_path) {
-                            Ok(_) => log::info!("Removed orphaned SHM file: {:?}", shm_path),
-                            Err(e) => log::warn!("Failed to remove SHM file: {}", e),
-                        }
-                    }
-
-                    // Retry connection without WAL files
-                    log::info!("Retrying database connection after WAL cleanup...");
-                    match Self::new(&tauri_db_path, &backend_db_path).await {
-                        Ok(db_manager) => {
-                            log::info!("Database opened successfully after WAL recovery");
-                            Ok(db_manager)
-                        }
-                        Err(retry_err) => {
-                            log::error!("Database connection failed even after WAL cleanup: {}", retry_err);
-                            Err(retry_err)
-                        }
-                    }
-                } else {
-                    // Not a WAL-related error, propagate original error
-                    log::error!("Database connection failed: {}", error_msg);
-                    Err(e)
-                }
-            }
-        }
+        // Preserve the database and its journals on failure; let the user retry.
+        Self::new(&tauri_db_path,&backend_db_path).await
     }
 
     /// Check if this is the first launch (sqlite database doesn't exist yet)

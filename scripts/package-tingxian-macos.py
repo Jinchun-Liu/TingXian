@@ -53,6 +53,13 @@ def main():
     shutil.copy2(a.media,macos/"ffmpeg")
     notices=resources/"Licenses";notices.mkdir(exist_ok=True)
     shutil.copy2(ROOT/"LICENSE.md",notices/"Meetily-MIT.md")
+    shutil.copy2(ROOT/"NOTICE.md",notices)
+    shutil.copy2(ROOT/"vendor/cidre/LICENSE.txt",notices/"cidre-LICENSE.txt")
+    shutil.copy2(ROOT/"packaging/macos/THIRD-PARTY.zh-CN.md",notices)
+    python_notices = sorted(str(f.relative_to(runtime)) for f in runtime.rglob("*") if f.is_file() and f.name.lower().startswith(("license","copying","copyright")))
+    if not any("python3.12/LICENSE" in f for f in python_notices): raise SystemExit("Python license is missing")
+    (notices/"python-licenses.txt").write_text("\n".join(python_notices)+"\n")
+
     shutil.copy2(ROOT/"packaging/macos/Whisper-LICENSE.txt",notices)
     shutil.copy2(a.media_source,notices/"ffmpeg-8.0.1.tar.xz")
     with tarfile.open(a.media_source) as src:

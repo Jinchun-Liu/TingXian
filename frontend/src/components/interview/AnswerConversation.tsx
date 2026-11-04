@@ -23,7 +23,11 @@ export function AnswerConversation({history, preferences, selectedId, onSelect, 
   const matches = query ? rows.filter(({turn, title, result}) =>
     [title, turn.question, result.answer].some(text => text.toLocaleLowerCase().includes(query))
   ) : rows;
-  const selected = matches.find(({turn}) => turn.id === selectedId) || matches.at(-1);
+  // Prefer the newest question with visible answer text. Parallel updates to
+  // earlier questions never steal the viewport from a newer answer.
+  const hasAnswer = ({turn, result}: typeof rows[number]) => turn.role !== 'self' && !turn.passive && !!result.answer.trim();
+  const latest = rows.findLast(hasAnswer);
+  const selected = matches.find(({turn}) => turn.id === selectedId) || matches.findLast(hasAnswer) || matches[0];
   const shown = preferences.focus ? selected ? [selected] : [] : matches;
   const jumpTo = (id: string) => {
     onSelect(id);
@@ -38,14 +42,13 @@ export function AnswerConversation({history, preferences, selectedId, onSelect, 
           {!matches.length && <ChoiceOption value="" disabled>没有匹配问题</ChoiceOption>}
           {matches.map(({turn, index, title}) => <ChoiceOption key={turn.id} value={turn.id}>{index+1} · {title.slice(0,90)}</ChoiceOption>)}
         </ChoiceMenu>
-        <button type="button" onClick={()=>{
-          setSearch('');onSelect(null);
-          if (!preferences.focus) requestAnimationFrame(()=>document.getElementById('turn-'+rows.at(-1)?.turn.id)?.scrollIntoView({block:'start'}));
-        }}>最新问题</button>
+
       </div>}
     </header>
-    <ConversationFeed key={preferences.focus ? selected?.turn.id : 'all'}
-      revision={shown.map(({turn}) => turn.id + turn.question + turn.suggestion + turn.status).join('|')} fill showNavigation={rows.length>0}>
+    <ConversationFeed latest={latest && {id:latest.turn.id, text:latest.result.answer}}
+      readingHistory={!!query || rows.some(({turn})=>turn.id===selectedId)}
+      onRead={()=>{if(preferences.focus && selected)onSelect(selected.turn.id);}}
+      onReturn={()=>{setSearch('');onSelect(null);}}>
       {!shown.length && <div className="answer-empty">
         <svg viewBox="0 0 60 26" width="60" height="26" aria-hidden="true"><path d="M2 13h10m5-5v10m6-15v20m7-17v14m7-11v8m6-6v4m6-2h9" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
         <p>{query ? '没有匹配的发言' : '等待提问'}</p>
@@ -54,7 +57,7 @@ export function AnswerConversation({history, preferences, selectedId, onSelect, 
         className="answer-sheet" style={{fontSize:fontPixels[preferences.fontSize]}}
         onPointerDown={()=>{if(preferences.focus)onSelect(turn.id);}}>
         {turn.passive ? <p className="answer-source">{turn.question}</p> : turn.role==='self' ? <p className="answer-self"><span>我</span>{turn.question}</p> : <>
-          <div className="answer-body" aria-label="回答正文">{result.answer || <span className="answer-pending">{
+          <div className="answer-body" aria-label="回答正文" data-latest-answer={turn.id === latest?.turn.id || undefined}>{result.answer || <span className="answer-pending">{
             turn.status==='listening' ? '对方仍在说话…' : turn.status==='queued' ? '等待回答通道…' : turn.status==='generating' ? '正在回答…' : '尚无回答'
           }</span>}</div>
           {result.question && <blockquote className="answer-source" aria-label={result.corrected?'纠正后的问题':'原始识别问题'}>{result.question}</blockquote>}

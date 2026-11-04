@@ -131,7 +131,9 @@ class IndexedDBService {
       try {
         const request = indexedDB.open(this.DB_NAME, this.DB_VERSION);
 
+        request.onblocked = () => { this.initPromise=null;reject(new Error('恢复缓存正被另一个窗口占用，请稍后重试')); };
         request.onerror = () => {
+          this.initPromise=null;
           console.error('Failed to open IndexedDB:', request.error);
           reject(request.error);
         };
@@ -219,7 +221,7 @@ class IndexedDBService {
   /**
    * Get all unsaved meetings (savedToSQLite = false)
    */
-  async getAllMeetings(): Promise<MeetingMetadata[]> {
+  async getAllMeetings(strict = false): Promise<MeetingMetadata[]> {
     try {
       if (!this.db) await this.init();
 
@@ -241,6 +243,7 @@ class IndexedDBService {
       });
     } catch (error) {
       console.error('Failed to get meetings from IndexedDB:', error);
+      if (strict) throw error;
       return [];
     }
   }
@@ -355,7 +358,7 @@ class IndexedDBService {
   /**
    * Get all transcripts for a meeting
    */
-  async getTranscripts(meetingId: string): Promise<StoredTranscript[]> {
+  async getTranscripts(meetingId: string, strict = false): Promise<StoredTranscript[]> {
     try {
       if (!this.db) await this.init();
 
@@ -375,6 +378,7 @@ class IndexedDBService {
       });
     } catch (error) {
       console.error('Failed to get transcripts from IndexedDB:', error);
+      if (strict) throw error;
       return [];
     }
   }

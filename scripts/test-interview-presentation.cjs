@@ -8,6 +8,7 @@ function load(file){
  const m={exports:{}};new Function('require','module','exports',code)(name=>{
   if(name==='@/components/ui/choice-menu')return {ChoiceMenu:'choice-menu',ChoiceOption:'choice-option'};
     if(name==='@/components/ui/button')return {Button:p=>React.createElement('button',p)};
+  if(name==='./ConversationFeed')return load('components/interview/ConversationFeed.tsx');
   if(name==='./WorkspaceFeed')return load('components/interview/WorkspaceFeed.tsx');
   if(name==='@/lib/interview-presentation')return load('lib/interview-presentation.ts');
   return req(name);
@@ -39,7 +40,7 @@ assert.deepEqual(visibleTurns(history,false).map(t=>t.id),['a']);assert.equal(hi
 const {AnswerConversation}=load('components/interview/AnswerConversation.tsx');
 const text=n=>typeof n==='string'?n:(n?.children||[]).map(text).join('');
 (async()=>{
- let tree,selected=null;let preferences={...presentationDefaults};
+ let tree,selected=null;let preferences={...presentationDefaults,focus:true};
  const render=()=>React.createElement(AnswerConversation,{history,preferences,selectedId:selected,onSelect:id=>{selected=id;},onEdit:()=>{}});
  await act(async()=>{tree=create(render());});
  assert.ok(!text(tree.toJSON()).includes('我实际说了幂等键'));

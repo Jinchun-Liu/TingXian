@@ -75,17 +75,17 @@ impl AudioError {
     /// Get user-friendly error message
     pub fn user_message(&self) -> &'static str {
         match self {
-            AudioError::DeviceDisconnected => "Audio device was disconnected",
-            AudioError::StreamFailed => "Audio stream encountered an error",
-            AudioError::ProcessingFailed => "Audio processing failed",
-            AudioError::TranscriptionFailed => "Speech transcription failed",
-            AudioError::TranscriptionBacklog => "Speech recognition backlog limit reached; capture stopped and transcription may be incomplete",
-            AudioError::ChannelClosed => "Audio channel was closed unexpectedly",
-            AudioError::InitializationFailed => "Failed to initialize audio system",
-            AudioError::ConfigurationError => "Audio configuration error",
-            AudioError::PermissionDenied => "Microphone permission denied",
-            AudioError::BufferOverflow => "Audio buffer overflow",
-            AudioError::SampleRateUnsupported => "Audio sample rate not supported",
+            AudioError::DeviceDisconnected => "音频设备已断开，请在音频设置中检查连接",
+            AudioError::StreamFailed => "音频输入中断，请检查设备后重试",
+            AudioError::ProcessingFailed => "音频处理失败",
+            AudioError::TranscriptionFailed => "本地转写失败",
+            AudioError::TranscriptionBacklog => "转写队列已满，采集已停止，末段可能不完整",
+            AudioError::ChannelClosed => "音频通道意外关闭",
+            AudioError::InitializationFailed => "无法初始化音频系统",
+            AudioError::ConfigurationError => "音频配置有误，请检查设备",
+            AudioError::PermissionDenied => "麦克风未获授权，请检查 macOS 隐私设置",
+            AudioError::BufferOverflow => "音频缓存已满",
+            AudioError::SampleRateUnsupported => "音频采样率不受支持",
         }
     }
 }

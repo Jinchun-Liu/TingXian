@@ -698,24 +698,16 @@ pub async fn interview_audio_start(app:tauri::AppHandle,state:State<'_,Interview
     crate::interview_exit::ensure_not_exiting(&app)?;
     let _guard=state.lifecycle.lock().await;
     crate::interview_exit::ensure_not_exiting(&app)?;
-    let bundled=crate::tingxian_runtime::prepare_model(&app).await?;
-    let existing=crate::api::api::api_get_transcript_config(app.clone(),app.state(),None).await?;
-    // Upstream seeds Parakeet on first launch. The interview entry point is
-    // explicitly Whisper-only; choose base unless a valid Whisper preference exists.
-    if existing.as_ref().map_or(true,|config|config.provider!="localWhisper") || (bundled.is_some() && existing.as_ref().is_some_and(|c|c.model=="base") && !app.path().app_data_dir().map_err(|e|e.to_string())?.join("models/ggml-base.bin").is_file()) {
-        crate::api::api::api_save_transcript_config(app.clone(),app.state(),"localWhisper".into(),bundled.unwrap_or("base").into(),None,None).await?;
-    }
-    let config=crate::api::api::api_get_transcript_config(app.clone(),app.state(),None).await?
-        .ok_or("请先在原生设置中下载并选择 Whisper 多语言模型")?;
+    let model = crate::tingxian_audio::selected_model(&app).await?;
+    crate::tingxian_audio::save_model(&app, &model).await?;
     let preferences=state.index(&app).await?.preferences().await?;
-    if config.provider!="localWhisper" {return Err("对话助手使用本地 Whisper，请在音频设置中选择本地模型".into());}
-    if config.model.contains(".en") && preferences.transcription_language!="en" {return Err("英文专用模型仅支持英文转写；请选择多语言模型，或将转写语言设为英文".into());}
+    if model.contains(".en") && preferences.transcription_language!="en" {return Err("英文专用模型仅支持英文转写".into());}
     let mut prefs=crate::audio::recording_preferences::load_recording_preferences(&app).await.map_err(|e|e.to_string())?;
     prefs.auto_save=false;
     crate::audio::recording_preferences::save_recording_preferences(&app,&prefs).await.map_err(|e|e.to_string())?;
     crate::set_language_preference(preferences.transcription_language).await?;
     let mic = if record_microphone { prefs.preferred_mic_device } else { Some("__interview_disabled__".into()) };
-    crate::audio::recording_commands::start_recording_with_devices_and_meeting(app.clone(),mic,prefs.preferred_system_device,Some("Dialogue session".into())).await?;
+    crate::audio::recording_commands::start_recording_with_devices_and_meeting(app.clone(),mic,prefs.preferred_system_device,Some("Interview practice".into())).await?;
     let status=crate::audio::recording_commands::microphone_status();
     // The generic recorder permits microphone-only capture after a system
     // stream error. An interview cannot claim to hear the remote participant.
@@ -747,6 +739,10 @@ pub async fn interview_session_export(state:State<'_,InterviewState>,snapshot:Va
 pub async fn interview_session_list<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,before:Option<i64>)->Result<crate::interview_sessions::SessionPage,String> {
     let _guard=state.lifecycle.lock().await;
     crate::interview_sessions::list(app.state::<crate::state::AppState>().db_manager.pool(),before).await
+}
+#[tauri::command]
+pub async fn tingxian_session_preview<R:tauri::Runtime>(app:tauri::AppHandle<R>,id:i64)->Result<crate::interview_sessions::Snapshot,String> {
+    crate::interview_sessions::load(app.state::<crate::state::AppState>().db_manager.pool(),id).await
 }
 #[tauri::command]
 pub async fn interview_session_load<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,id:i64)->Result<crate::interview_sessions::Snapshot,String> {

@@ -47,5 +47,39 @@ pub fn installation_check()->Result<(),String>{
     let model=resources.join("whisper/ggml-small.bin");
     let mut config=whisper_rs::WhisperContextParameters::default();config.use_gpu(false);
     let _model=whisper_rs::WhisperContext::new_with_params(model.to_str().ok_or("invalid model path")?,config).map_err(|e|format!("bundled ASR model: {e}"))?;
+    tauri::async_runtime::block_on(database_installation_check()).map_err(|e|format!("安装数据库检查：{e}"))?;
+    Ok(())
+}
+
+/// Rehearse a fresh database, a live WAL upgrade and restart with synthetic data only.
+async fn database_installation_check() -> anyhow::Result<()> {
+    use crate::{database::{manager::DatabaseManager,repositories::{meeting::MeetingsRepository,setting::SettingsRepository}},interview_sessions};
+    use anyhow::{ensure,Context};
+    let root=tempfile::tempdir()?;
+    let name=|s:&str|root.path().join(s).to_string_lossy().into_owned();
+    let legacy=name("meeting_minutes.db");
+    let modern=name("meeting_minutes.sqlite");
+    let first=DatabaseManager::new(&legacy,&name("absent.db")).await?;
+    let pool=first.pool();
+    ensure!(MeetingsRepository::get_meetings(pool).await?.is_empty());
+    sqlx::query("PRAGMA journal_mode=WAL").execute(pool).await?;
+    sqlx::query("INSERT INTO meetings(id,title,created_at,updated_at) VALUES('sample','合成旧会议',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)").execute(pool).await?;
+    sqlx::query("INSERT INTO transcripts(id,meeting_id,transcript,timestamp) VALUES('segment','sample','合成转写','00:01')").execute(pool).await?;
+    SettingsRepository::save_transcript_config(pool,"localWhisper","small").await?;
+    let snapshot=serde_json::from_value(serde_json::json!({"version":1,"history":[{"id":"q","role":"remote","question":"合成问题","suggestion":"合成回答","confirmed_answer":null,"status":"done","sources":[],"time":"00:01","timing":""}],"transcripts":[],"spoken_dialogue":[],"current":{"question":"","answer":""},"calls":1,"usage":"unknown"}))?;
+    let saved=interview_sessions::save(pool,snapshot,true).await.map_err(anyhow::Error::msg)?;
+    ensure!(std::path::Path::new(&(legacy.clone()+"-wal")).exists());
+    for _ in 0..2 {
+        let db=DatabaseManager::new(&modern,&legacy).await?;
+        let meeting=MeetingsRepository::get_meeting(db.pool(),"sample").await?.context("旧会议缺失")?;
+        ensure!(meeting.transcripts.len()==1 && meeting.transcripts[0].text=="合成转写");
+        let recovered=interview_sessions::load(db.pool(),saved.id).await.map_err(anyhow::Error::msg)?;
+        ensure!(recovered.history[0]["suggestion"]=="合成回答");
+        let config=SettingsRepository::get_transcript_config(db.pool()).await?.context("模型设置缺失")?;
+        ensure!(config.provider=="localWhisper" && config.model=="small");
+        db.pool().close().await;
+    }
+    ensure!(MeetingsRepository::get_meeting(pool,"sample").await?.is_some());
+    pool.close().await;
     Ok(())
 }

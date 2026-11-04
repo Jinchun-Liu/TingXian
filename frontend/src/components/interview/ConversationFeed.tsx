@@ -1,48 +1,56 @@
 'use client';
 
-import {ReactNode,useCallback,useEffect,useRef,useState} from 'react';
-import {Button} from '@/components/ui/button';
+import {ReactNode, useLayoutEffect, useRef, useState} from 'react';
 
-/** Reading and generation are independent: interaction pauses scrolling only. */
-export function ConversationFeed({children,revision,fill=false}:{children:ReactNode;revision:unknown;fill?:boolean}) {
-  const feed=useRef<HTMLDivElement>(null);
-  const follow=useRef(false);
-  const previous=useRef(revision);
-  const [following,setFollowing]=useState(false);
-  const [updated,setUpdated]=useState(false);
-  const pause=()=>{follow.current=false;setFollowing(false);};
-  const latest=useCallback(()=>{
-    if(feed.current)feed.current.scrollTop=feed.current.scrollHeight;
-    setUpdated(false);
-  },[]);
-  useEffect(()=>{
-    if(previous.current===revision)return;
-    previous.current=revision;
-    if(follow.current)latest();else setUpdated(true);
-  },[revision,latest]);
+type Props = {
+  children: ReactNode;
+  latest?: {id: string; text: string};
+  className?: string;
+  readingHistory?: boolean;
+  onRead?: () => void;
+  onReturn?: () => void;
+};
+
+export function ConversationFeed({children, latest, className = 'answer-scroll', readingHistory, onRead, onReturn}: Props) {
+  const feed = useRef<HTMLDivElement>(null);
+  const [paused, setPaused] = useState(false);
+  const [jump, setJump] = useState(0);
+  const following = !paused && !readingHistory;
+
+  useLayoutEffect(() => {
+    const region = feed.current;
+    const body = region?.querySelector<HTMLElement>('[data-latest-answer]');
+    if (!following || !latest?.text || !region || !body) return;
+    const answer = body.getBoundingClientRect();
+    const top = region.getBoundingClientRect().top + region.clientTop;
+    const bottom = top + region.clientHeight;
+    // Move only this window's feed. The corrected question can be much taller than its answer.
+    if (answer.bottom > bottom || answer.bottom < top || (answer.top < top && answer.height <= region.clientHeight)) {
+      region.scrollTop += answer.bottom - bottom;
+    }
+  }, [following, latest?.id, latest?.text, jump]);
+
+  const pause = () => {
+    if (!following) return;
+    setPaused(true);
+    onRead?.();
+  };
+  const resume = () => {
+    onReturn?.();
+    setPaused(false);
+    setJump(n => n + 1);
+  };
+
   return <>
     <div ref={feed} role="region" aria-label="面试对话记录" tabIndex={0} aria-live="off"
-      className={`${fill?'min-h-0 flex-1':'h-[58vh] min-h-80'} overflow-y-auto p-5 space-y-6 bg-slate-50/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500`}
-      onPointerDownCapture={pause} onFocusCapture={pause}
-      onWheel={event=>{if(event.deltaY<0)pause();}}
-      onTouchMove={pause}
-      onKeyDown={event=>{if(['ArrowUp','PageUp','Home'].includes(event.key))pause();}}
-      onScroll={()=>{
-        const el=feed.current;
-        // Reaching the bottom never opts into following. Explicit user action
-        // is required, so scrolling/selection cannot silently re-enable it.
-        if(follow.current && el && el.scrollHeight-el.scrollTop-el.clientHeight>2)pause();
-      }}>
+      className={className} style={{overflowAnchor:'none'}}
+      onWheel={event => { if (event.deltaY !== 0) pause(); }}
+      onTouchMove={pause} onPointerDownCapture={pause}
+      onKeyDown={event => { if (['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key)) pause(); }}>
       {children}
     </div>
-    <div className="shrink-0 flex flex-wrap items-center justify-between gap-2 border-t px-4 py-2 text-xs text-slate-500">
-      <span>{following?'正在跟随最新对话':'阅读模式 · 保留当前位置'}{!following && updated?' · 有新内容':''}</span>
-      <div className="flex flex-wrap gap-2">
-        <Button variant="outline" size="sm" onClick={latest}>回到最新对话</Button>
-        <Button variant={following?'default':'outline'} size="sm" aria-pressed={following} onClick={()=>{
-          if(follow.current)pause();else {follow.current=true;setFollowing(true);latest();}
-        }}>{following?'停止跟随':'跟随最新对话'}</Button>
-      </div>
-    </div>
+    {latest && <div className="answer-scroll-tools flex shrink-0 justify-end px-4 py-1">
+      <button type="button" className="text-sm" onClick={resume}>返回最新答复</button>
+    </div>}
   </>;
 }

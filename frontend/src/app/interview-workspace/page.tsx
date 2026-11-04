@@ -1,5 +1,9 @@
 'use client';
 
+import {SavedSessionPreview} from '@/components/interview/SavedSessionPreview';
+import {useSessionCommands} from '@/lib/session-commands';
+import {PreviousMeetings} from '@/components/interview/PreviousMeetings';
+import {AudioSettings} from '@/components/interview/AudioSettings';
 import {ChoiceMenu, ChoiceOption} from '@/components/ui/choice-menu';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
@@ -34,7 +38,7 @@ import { indexedDBService } from '@/services/indexedDBService';
 import { LatencyRecord, TurnLatency, latencyLabel } from '@/lib/interview-latency';
 import { AudioFault, InterviewAudioHealth } from '@/lib/interview-health';
 import { MicrophoneState, MicrophoneTranscriptGate, stopInterviewAudio } from '@/lib/interview-audio';
-import { AppWindow, Columns2, Play, Pause, Square, Search, Snowflake, FolderOpen, Settings2, FileText, Trash2 } from 'lucide-react';
+import { AudioLines, History as HistoryIcon, ChevronRight, Camera, AppWindow, Columns2, Play, Pause, Square, Search, Snowflake, FolderOpen, Settings2, FileText, Trash2 } from 'lucide-react';
 
 
 type File = { path: string; bytes: number; eligible: boolean; reason: string };
@@ -61,8 +65,9 @@ export default function InterviewPage() {
   const [phase, setPhase] = useState('就绪');
   const [notice, setNotice] = useState('');
   const [answerWarning,setAnswerWarning] = useState('');
+  const [compactControls,setCompactControls]=useState(false);
   const [settings, setSettings] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'资料库'|'事实与术语'|'模型接口'>('资料库');
+  const [settingsTab, setSettingsTab] = useState<'资料库'|'事实与术语'|'模型接口'|'音频'>('资料库');
   const [openBackground,setOpenBackground]=useState(false);
   const [openVision, setOpenVision] = useState(false);
   const settingsTrigger = useRef<HTMLButtonElement>(null);
@@ -98,6 +103,7 @@ export default function InterviewPage() {
   const acceptTranscripts = useRef(true);
   const [calls, setCalls] = useState(0);
   const [residueRevision,setResidueRevision]=useState(0);
+  const [initialMeetingId,setInitialMeetingId]=useState<string>();
   const [savedSessions, setSavedSessions] = useState<SavedSession[] | null>(null);
   const [allowReplaceSession, setAllowReplaceSession] = useState(false);
   const [savedBefore, setSavedBefore] = useState<number | null>(null);
@@ -119,6 +125,7 @@ export default function InterviewPage() {
   const [level, setLevel] = useState(0);
   const [micLevel, setMicLevel] = useState(0);
   const [recordMicrophone, setRecordMicrophone] = useState(true);
+  useEffect(()=>{try{setRecordMicrophone(localStorage.getItem('tingxian-microphone')!=='off');}catch{}},[]);
   const microphoneGate = useRef(new MicrophoneTranscriptGate());
   const microphoneChanging = useRef(false);
   const microphoneVersion = useRef(0);
@@ -473,9 +480,16 @@ export default function InterviewPage() {
     setNotice(`已保存到本机（${new Date(saved.saved_at).toLocaleString('zh-CN')}，${saved.turns} 条发言）。之后的新内容需再次保存；重启后可点击“查看已保存会话”。`);
   };
   const listSessions = (more=false) => run(async()=>{
+    if(!more)setSavedSessions([]);
     const page=await invoke<SessionPage>('interview_session_list',{before:more?savedBefore:null});
     setSavedSessions(old=>more?[...(old || []),...page.sessions]:page.sessions);setSavedBefore(page.next_before);
   });
+  useEffect(()=>{
+    if(typeof window==='undefined'||!window.location)return;
+    const q=new URLSearchParams(window.location.search),panel=q.get('panel');
+    if(panel==='audio'){setSettingsTab('音频');setSettings(true);}
+    if(panel==='history'){setInitialMeetingId(q.get('meeting')||undefined);void listSessions();}
+  },[]);
   const restoreSession = (id:number) => run(async()=>{
     if (sessionOperation.current || recording.isRecording || requests.current.size>0) throw Error('请先结束当前采集和回答，再恢复保存记录');
     if ((historyRef.current.length || question || confirmedAnswer) && !allowReplaceSession) throw Error('请先保存当前内容，再明确允许替换当前显示');
@@ -490,11 +504,12 @@ export default function InterviewPage() {
       microphoneGate.current.close();audioHealth.current.close();syncHealth();
       captureSession.current=Math.max(0,...saved.spoken_dialogue.map(t=>t.capture_session || 0),...saved.history.map(t=>t.capture_session || 0))+1;
       historyRef.current=saved.history;setHistory(saved.history);setTranscripts(saved.transcripts);spoken.current=saved.spoken_dialogue;
-      setFeedGeneration(v=>v+1);
+      presentationEpoch.current=crypto.randomUUID();setSelectedQuestion(null);setFeedGeneration(v=>v+1);
       current.current=saved.current;setCalls(saved.calls);setUsage(saved.usage);setLimit(Math.max(DEFAULT_REQUEST_LIMIT,saved.calls));
       usageLedger.current=new InterviewUsage(saved.usage_ledger??undefined,saved.calls);setUsageVersion(v=>v+1);
       setQuestion('');setAnswer('');setSources([]);setConflicts([]);setConfirmedAnswer('');setEditingSelfId(null);setTiming('');
       selfEditBase.current=null;
+      setSavedSessions(null);setSavedBefore(null);setCompactControls(false);
       setPhase('已恢复保存会话 · 采集和自动回答均未开启');setNotice('已载入保存时的双方发言、AI建议和来源。旧来源与事实版本仅供回顾；不会自动补发未完成问题。继续前请重新确认转写和外发许可。');
     } finally {sessionOperation.current=false;}
   });
@@ -545,7 +560,7 @@ export default function InterviewPage() {
       selfEditBase.current=null;
       usageLedger.current=new InterviewUsage();setUsageVersion(v=>v+1);
       setTiming(''); setUsage('未知'); setGenerating(false); setFrozen(false); setLevel(0); setMicLevel(0);
-      setFeedGeneration(v=>v+1);
+      presentationEpoch.current=crypto.randomUUID();setSelectedQuestion(null);setFeedGeneration(v=>v+1);
       setPhase('历史已清空 · 可重新开始');
       setNotice(`历史已移入废纸篓：${report.recording_folders} 个录音记录目录、${report.database_meetings} 条已保存会议、${report.saved_sessions || 0} 份会话快照，以及本次对话和恢复缓存。个人资料库已保留。点击“开始持续聆听与回答”进行新测试。`);
       await refresh();
@@ -580,6 +595,7 @@ export default function InterviewPage() {
       if (recording.isRecording) {
         applyMicrophoneState(await invoke<MicrophoneState>('interview_microphone_set', { enabled }));
       } else { setRecordMicrophone(enabled); }
+      try {localStorage.setItem('tingxian-microphone',enabled?'on':'off');} catch {}
       setMicLevel(0);
     } catch (e) {
       const levels = await invoke<{microphone_state:MicrophoneState}>('interview_audio_level').catch(() => null);
@@ -597,35 +613,18 @@ export default function InterviewPage() {
   );
   const panelOpen = settings || savedSessions !== null;
   const closeSettings = () => { setSettings(false); settingsTrigger.current?.focus(); };
-  const openSettings = () => {
-    setSavedSessions(null);
-    setOpenBackground(false);setOpenVision(false);
-    setSettings(!settings);
-  };
-
-  return <main aria-label="面试辅助工作区" className={`interview-desk${split ? ' desk-split' : ''}`}>
-    <aside aria-label="面试操作区" className="desk-rail">
-      <header className="desk-brand">
-        <img alt="" src="/tingxian.png" width="34" height="34"/><h1>听弦</h1>
-      </header>
-      <section aria-label="采集与回答操作" className="desk-controls">
-        <div className="desk-state" data-listening={recording.isRecording && !recording.isPaused}>
-          <span aria-hidden="true" className="desk-state-dot"/><span role="status">{phase}</span>
-        </div>
-      <Button type="button" variant="outline" className="w-full justify-start border-[#C5C7CA] bg-white" disabled={windowChanging} onClick={async () => {
-        setWindowChanging(true);
-        try { setSplit(await invoke<boolean>('interview_window_mode', { enabled: !split })); }
-        catch (e) { error(e); }
-        finally { setWindowChanging(false); }
-      }}>
-        {split ? <AppWindow aria-hidden="true"/> : <Columns2 aria-hidden="true"/>}
-        {split ? '合并窗口' : '拆分窗口'}
-      </Button>
-      <MeetingControls setup={meeting.setup} change={meeting.change}/>
-      <div className="desk-permissions"><label><input type="checkbox" checked={audioAllowed} onChange={e => setAudioAllowed(e.target.checked)} /> 已获允许使用转写</label><label><input type="checkbox" checked={cloudAllowed} onChange={e => { setCloudAllowed(e.target.checked); if (!e.target.checked) { setAutomatic(false); void cancel().catch(error); } }} /> 允许向已启用的 AI 发送对方发言、近期对话和选定资料</label></div>
-
-        <div className="desk-transport">
-        <Button hidden={recording.isRecording} disabled={!audioAllowed || recording.isRecording || busy} onClick={() => run(async () => {
+  const sendCommand=useSessionCommands(async(command)=>{
+    if(busy||sessionOperation.current)return;
+    if(command==='audio'){setSavedSessions(null);setSettingsTab('音频');setSettings(true);return;}
+    if(command==='history'){setSettings(false);await listSessions();return;}
+    if(command==='cancel'){await cancel().catch(error);return;}
+    if(command==='clear'){await clearHistory();return;}
+    if(command==='toggle')command=recording.isRecording?'stop':'start';
+    if(command==='start'){
+      if(recording.isRecording)return;
+      if(!audioAllowed){setNotice('请先勾选「已获允许使用转写」，再开始采集。');return;}
+      if(!status){setNotice('正在读取本机设置，请稍后重试。');return;}
+      await run(async()=>{
           audioHealth.current.prepareStart(); syncHealth();
           meeting.reset(); utterances.current.reset(); setQueued(0); setFrozen(false); setAutomatic(cloudAllowed && !!status?.key_configured);
           captureSession.current++;
@@ -638,17 +637,41 @@ export default function InterviewPage() {
             setPhase(live.current.automatic?(addressedOnly(meeting.current.current.mode)?'监听中 · 等待点名':'监听中 · 对方说完后回答'):'监听中 · 本地转写');
           } catch (e) { setAutomatic(false); live.current.automatic = false; audioHealth.current.close(); syncHealth(); throw e; }
           finally { microphoneChanging.current = false; }
-        })}><Play className="h-4 w-4 mr-1" />开始持续聆听</Button>
-        <Button variant="outline" hidden={!recording.isRecording} disabled={!recording.isRecording || busy} onClick={() => run(async () => {
-          if (recording.isPaused) { await invoke('resume_recording'); const enable = cloudAllowed && !audioHealth.current.paused; live.current.automatic = enable; setAutomatic(enable); }
-          else { live.current.automatic = false; setAutomatic(false); await cancel(); await invoke('pause_recording'); }
-        })}><Pause className="h-4 w-4 mr-1" />{recording.isPaused ? '恢复' : '暂停'}</Button>
-        <Button variant="outline" hidden={!recording.isRecording} disabled={!recording.isRecording || busy} onClick={() => run(async () => {
+        });
+    }else if(command==='stop'&&recording.isRecording){
+      await run(async()=>{
           live.current.automatic = false; setAutomatic(false); await cancel(); await stopInterviewAudio();
           microphoneGate.current.close(); audioHealth.current.close(); syncHealth(); setHistory(h => h.map(t => t.status === 'listening' ? {...t,status:'recorded'} : t)); setMicLevel(0); setLevel(0); setPhase('采集已停止 · 可直接重新开始');
-        })}><Square className="h-4 w-4 mr-1" />停止采集</Button>
-
+        });
+    }else if(recording.isRecording&&(command==='pause'&&!recording.isPaused||command==='resume'&&recording.isPaused)){
+      await run(async()=>{
+          if (recording.isPaused) { await invoke('resume_recording'); const enable = cloudAllowed && !audioHealth.current.paused; live.current.automatic = enable; setAutomatic(enable); }
+          else { live.current.automatic = false; setAutomatic(false); await cancel(); await invoke('pause_recording'); }
+        });
+    }
+  });
+  return <main aria-label="面试辅助工作区" className={`interview-desk${split ? ' desk-split' : ''}`}>
+    <aside aria-label="面试操作区" className="desk-rail" data-expanded={compactControls}>
+      <header className="desk-brand">
+        <img alt="" src="/tingxian.png" width="34" height="34"/><h1>听弦</h1>
+        <div className="desk-state" data-listening={recording.isRecording && !recording.isPaused}>
+          <span aria-hidden="true" className="desk-state-dot"/><span role="status" title={phase} aria-label={phase}>{phase.split(' · ')[0]}</span>
         </div>
+        <button className="tx-compact-toggle" type="button" aria-expanded={compactControls} onClick={()=>setCompactControls(v=>!v)}>{compactControls?'收起操作':'展开操作'}</button>
+      </header>
+      <section aria-label="采集与回答操作" className="desk-controls">
+      <Button type="button" variant="outline" className="w-full justify-start border-[#C5C7CA] bg-white" disabled={windowChanging} onClick={async () => {
+        setWindowChanging(true);
+        try { setSplit(await invoke<boolean>('interview_window_mode', { enabled: !split })); }
+        catch (e) { error(e); }
+        finally { setWindowChanging(false); }
+      }}>
+        {split ? <AppWindow aria-hidden="true"/> : <Columns2 aria-hidden="true"/>}
+        {split ? '合并窗口' : '拆分窗口'}
+      </Button>
+      <MeetingControls setup={meeting.setup} change={meeting.change}/>
+      <div className="desk-permissions"><label><input type="checkbox" checked={audioAllowed} onChange={e => setAudioAllowed(e.target.checked)} /> 已获允许使用转写</label><label><input type="checkbox" checked={cloudAllowed} onChange={e => { setCloudAllowed(e.target.checked); if (!e.target.checked) { setAutomatic(false); void cancel().catch(error); } }} /> 允许向已启用的 AI 发送对方发言、近期对话和选定资料</label></div>
+
         <label className="desk-check" title="本软件的麦克风独立于飞书静音">
           <input type="checkbox" checked={recordMicrophone} disabled={busy || recording.isStopping} onChange={e=>void toggleMicrophone(e.target.checked)}/> 记录我的声音
         </label>
@@ -656,14 +679,20 @@ export default function InterviewPage() {
           <input type="checkbox" checked={automatic} disabled={!cloudAllowed || !recording.isActive || healthView.paused}
             onChange={e=>{const enable=e.target.checked&&!audioHealth.current.paused;live.current.automatic=enable;setAutomatic(enable);}}/> {addressedOnly(meeting.setup.mode)?'点到我时自动回答':'对方说完后自动回答'}
         </label>
+        <div className="desk-transport">
+        <Button hidden={recording.isRecording} disabled={!audioAllowed || recording.isRecording || busy} onClick={()=>sendCommand('start')}><Play className="h-4 w-4 mr-1" />开始持续聆听</Button>
+        <Button variant="outline" hidden={!recording.isRecording} disabled={!recording.isRecording || busy} onClick={()=>sendCommand(recording.isPaused?'resume':'pause')}><Pause className="h-4 w-4 mr-1" />{recording.isPaused ? '恢复' : '暂停'}</Button>
+        <Button variant="outline" hidden={!recording.isRecording} disabled={!recording.isRecording || busy} onClick={()=>sendCommand('stop')}><Square className="h-4 w-4 mr-1" />停止采集</Button>
+
+        </div>
       {healthView.paused && <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm space-y-2"><p>{healthView.message}</p><Button size="sm" variant="outline" disabled={busy || !cloudAllowed || !recording.isActive || !healthView.canResume} onClick={() => {
         if (!cloudAllowed || !recording.isActive || !audioHealth.current.resume()) return;
         utterances.current.clear(); setQueued(0); syncHealth();
         live.current.automatic = true; setAutomatic(true); setPhase('监听已恢复 · 故障期间的发言可手动重问');
       }}>确认声音恢复，继续自动回答</Button><p className="text-xs">请确认音量和字幕已恢复。故障前排队及故障期间的发言不会自动补发；可编辑后重问。仍异常时点击“停止采集”再开始。</p></div>}
       {healthView.advisory && <p role="status" className="text-xs text-amber-800">{healthView.advisory}</p>}
-      <div className="grid gap-2" hidden={!recording.isActive && !generating && !queued && !frozen}><Button size="sm" variant={frozen ? 'default' : 'outline'} onClick={() => { const next = !frozen; setFrozen(next); if (next) { void cancel().catch(error); setPhase('我在回答 · 已冻结'); } }}>{frozen ? '解除冻结' : '我在回答 / 冻结'}</Button><Button size="sm" variant="outline" disabled={!generating && !queued} onClick={() => cancel().catch(error)}>取消当前与队列</Button></div>
-        <Button className="w-full" variant="outline" title={status?.vision_ready ? `向 ${status.vision_model} 发送所选整屏和近期对话` : "打开视觉模型配置"} disabled={busy||!!editingSelfId} onClick={()=>void submit(question.trim()||'请识别屏幕中的完整题目，并结合本次双方对话提供答案。',false,undefined,true)}>截屏并回答</Button>
+      <div className="grid gap-2" hidden={!recording.isActive && !generating && !queued && !frozen}><Button size="sm" variant={frozen ? 'default' : 'outline'} onClick={() => { const next = !frozen; setFrozen(next); if (next) { void cancel().catch(error); setPhase('我在回答 · 已冻结'); } }}>{frozen ? '解除冻结' : '我在回答 / 冻结'}</Button><Button size="sm" variant="outline" disabled={!generating && !queued} onClick={()=>sendCommand('cancel')}>取消当前与队列</Button></div>
+        <Button className="w-full" variant="outline" title={status?.vision_ready ? `向 ${status.vision_model} 发送所选整屏和近期对话` : "打开视觉模型配置"} disabled={busy||!!editingSelfId} onClick={()=>void submit(question.trim()||'请识别屏幕中的完整题目，并结合本次双方对话提供答案。',false,undefined,true)}><Camera size={16} aria-hidden="true"/>截屏并回答</Button>
 
       </section>
       <CallNotice text={split ? meeting.notice : null}/><div className="desk-tools">
@@ -676,11 +705,7 @@ export default function InterviewPage() {
 
           <small>截屏会将所选整屏和近期对话发送至视觉模型。</small>
         </div></details>
-        <details className="desk-fold"><summary>会话记录</summary><div>
-<Button variant="outline" size="sm" disabled={busy || !history.length} onClick={()=>run(saveSessionSnapshot)}>保存当前会话到本机</Button><Button variant="outline" size="sm" disabled={busy} onClick={()=>{setSettings(false);void listSessions();}}>查看已保存会话</Button><Button variant="outline" size="sm" onClick={exportSession}>导出本次记录</Button><Button variant="outline" size="sm" disabled={busy || !history.length} onClick={end}>结束会话并保留历史</Button>
-          <Button variant="outline" size="sm" disabled={busy} onClick={clearHistory}>清空历史，重新开始</Button>
-          <small>清空会将本机已保存会话一并移入废纸篓。</small>
-        </div></details>
+        {history.length>0&&<details className="desk-fold"><summary>本次会话</summary><div><Button variant="outline" size="sm" disabled={busy || !history.length} onClick={()=>run(saveSessionSnapshot)}>保存当前会话到本机</Button><Button variant="outline" size="sm" onClick={exportSession}>导出本次记录</Button><Button variant="outline" size="sm" disabled={busy || !history.length} onClick={end}>结束会话并保留历史</Button></div></details>}
         <details className="desk-fold"><summary>连接与用量</summary><div>
           <div className="desk-levels">
             <label>系统<meter min="0" max="1" value={Math.min(1,level)} /></label>
@@ -694,7 +719,11 @@ export default function InterviewPage() {
     </div>
 
         </div></details>
-        <button ref={settingsTrigger} type="button" className="desk-settings-button" aria-expanded={settings} onClick={openSettings}><Settings2 aria-hidden="true" size={16}/>资料与设置</button>
+        <nav className="tx-rail-nav" aria-label="工作台导航">
+          <button type="button" aria-current={savedSessions!==null?'page':undefined} onClick={()=>sendCommand('history')}><HistoryIcon/>会议记录<ChevronRight/></button>
+          <button type="button" aria-current={settings&&settingsTab==='音频'?'page':undefined} onClick={()=>sendCommand('audio')}><AudioLines/>音频设置<ChevronRight/></button>
+          <button ref={settingsTrigger} type="button" aria-current={settings&&settingsTab!=='音频'?'page':undefined} onClick={()=>{setSettingsTab('资料库');setSettings(true);setSavedSessions(null);}}><Settings2/>资料与模型<ChevronRight/></button>
+        </nav>
       </div>
       <footer className="desk-foot">
         <div className="desk-count">本次调用 {calls} / {limit}{queued>0 && <span> · 待处理 {queued} 段</span>}</div>
@@ -705,7 +734,7 @@ export default function InterviewPage() {
         {limit-calls<=REQUEST_LIMIT_WARNING && <Button variant="outline" size="sm" disabled={busy} onClick={()=>setLimit(l=>l+20)}>继续 20 次</Button>}
     <ResidueNotice blocked={busy || recording.isRecording || generating || history.length>0 || !!question || !!confirmedAnswer || !!status?.session_active} revision={residueRevision} onClear={clearResidue} />
 
-        <nav>{!recording.isRecording && !generating && !busy && !split && <Link href="/interview">对话助手</Link>}<Link href="/">会议记录</Link><Link href="/settings">音频设置</Link></nav>
+        {!recording.isRecording && !generating && !busy && !split && <Link className="tx-switch-workspace" href="/interview">通用对话助手 <span aria-hidden="true">↗</span></Link>}
       </footer>
       {split && <div className="desk-split-composer">
         {(notice||answerWarning) && <div role="status">{notice||answerWarning}</div>}
@@ -723,9 +752,10 @@ export default function InterviewPage() {
       <Button variant="outline" disabled={!importJob.ready || importJob.cancelPending || importJob.phase === 'committing'} onClick={cancelImport}>取消导入</Button>
     </section>}
     {settings && <section className="desk-panel" aria-label="资料与设置" onKeyDown={e=>{if(e.key==='Escape' && !e.nativeEvent.isComposing && !e.defaultPrevented && !(e.target as Element).closest('[role=listbox]'))closeSettings();}}>
-      <header className="desk-panel-heading"><h2>资料与设置</h2><Button autoFocus variant="ghost" size="sm" onClick={closeSettings}>收起资料与设置</Button></header>
-      <nav aria-label="设置分类" className="desk-tabs">{(['资料库','事实与术语','模型接口'] as const).map(tab=><button key={tab} type="button" aria-pressed={settingsTab===tab} onClick={()=>setSettingsTab(tab)}>{tab}</button>)}</nav>
+      <header className="desk-panel-heading"><h2>设置</h2><Button autoFocus variant="ghost" size="sm" onClick={closeSettings}>返回对话</Button></header>
+      <nav aria-label="设置分类" className="desk-tabs">{(['音频','资料库','事实与术语','模型接口'] as const).map(tab=><button key={tab} type="button" aria-pressed={settingsTab===tab} onClick={()=>setSettingsTab(tab)}>{tab}</button>)}</nav>
       <div className="desk-panel-body">
+      {settingsTab==='音频'&&<AudioSettings locked={busy || recording.isRecording} microphone={recordMicrophone} onMicrophone={enabled=>void toggleMicrophone(enabled)}/>}
       <div hidden={settingsTab!=='资料库'} className="space-y-4">
 
       <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
@@ -762,7 +792,13 @@ export default function InterviewPage() {
       <div hidden={settingsTab!=='模型接口'}><ProviderSettings openVision={openVision} openBackground={openBackground} locked={busy || !!status?.session_active || recording.isRecording || generating} onBusyChange={setBusy} onSaved={refresh} /></div>
       </div>
     </section>}
-    {savedSessions !== null && <section className="desk-panel desk-saved space-y-3"><Button variant="outline" size="sm" onClick={()=>setSavedSessions(null)}>收起已保存会话</Button><p>已保存会话</p>{(history.length>0 || question || confirmedAnswer) && <label className="block"><input type="checkbox" disabled={busy || recording.isRecording || generating} checked={allowReplaceSession} onChange={e=>setAllowReplaceSession(e.target.checked)} /> 我已保存需要的内容，允许替换当前显示（未保存内容会丢失）</label>}{!savedSessions.length && <p>暂无已保存会话</p>}{savedSessions.map(s=><div key={s.id} className="flex justify-between items-center gap-3"><span>{new Date(s.saved_at).toLocaleString('zh-CN')} · {s.turns} 条发言 · {s.calls} 次调用</span><Button size="sm" variant="outline" disabled={busy || recording.isRecording || generating || (!!(history.length || question || confirmedAnswer) && !allowReplaceSession)} onClick={()=>restoreSession(s.id)}>恢复这份会话</Button></div>)}{savedBefore!==null && <Button variant="outline" disabled={busy} onClick={()=>listSessions(true)}>更早的保存记录</Button>}</section>}
+    {savedSessions !== null && <section className="desk-panel" aria-label="会议记录">
+      <header className="desk-panel-heading"><h2>会议记录</h2><Button variant="ghost" size="sm" onClick={()=>setSavedSessions(null)}>返回对话</Button></header>
+      <div className="desk-panel-body"><div className="tx-history">
+      <section><header className="tx-section-head"><h3>已保存会话</h3></header>{(history.length>0 || question || confirmedAnswer) && <label className="block"><input type="checkbox" disabled={busy || recording.isRecording || generating} checked={allowReplaceSession} onChange={e=>setAllowReplaceSession(e.target.checked)} /> 我已保存需要的内容，允许替换当前显示（未保存内容会丢失）</label>}{!savedSessions.length && <p className="tx-empty-line">暂无已保存会话</p>}{savedSessions.map(s=><div key={s.id} className="tx-history-row"><span>{new Date(s.saved_at).toLocaleString('zh-CN')} · {s.turns} 条发言 · {s.calls} 次调用</span><Button size="sm" variant="outline" disabled={busy || recording.isRecording || generating || (!!(history.length || question || confirmedAnswer) && !allowReplaceSession)} onClick={()=>restoreSession(s.id)}>恢复这份会话</Button><SavedSessionPreview id={s.id}/></div>)}{savedBefore!==null && <Button variant="outline" disabled={busy} onClick={()=>listSessions(true)}>更早的保存记录</Button>}</section>
+      <PreviousMeetings initialId={initialMeetingId}/>
+      <div className="tx-session-actions">{history.length>0 && <div><Button variant="outline" size="sm" disabled={busy || !history.length} onClick={()=>run(saveSessionSnapshot)}>保存当前会话到本机</Button><Button variant="outline" size="sm" onClick={exportSession}>导出本次记录</Button><Button variant="outline" size="sm" disabled={busy || !history.length} onClick={end}>结束会话并保留历史</Button></div>}<details><summary>清理历史</summary><p>已保存会话将一并移入废纸篓。</p><Button variant="outline" size="sm" disabled={busy} onClick={()=>sendCommand('clear')}>清空历史，重新开始</Button></details></div>
+      </div></div></section>}
     {!split && <div className="desk-reading" hidden={panelOpen}>
       <AnswerConversation key={feedGeneration} history={history} preferences={preferences} selectedId={selectedQuestion} onSelect={setSelectedQuestion} onEdit={editTurn} />
       <div className="desk-compose-dock">{composer}

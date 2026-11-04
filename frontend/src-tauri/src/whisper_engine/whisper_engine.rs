@@ -82,32 +82,6 @@ pub struct WhisperEngine {
 }
 
 impl WhisperEngine {
-    /// Detect available GPU acceleration capabilities
-    fn detect_gpu_acceleration() -> bool {
-        match WhisperCompiledBackend::current() {
-            WhisperCompiledBackend::Metal => {
-                log::info!("macOS detected - attempting to enable Metal GPU acceleration");
-                true
-            }
-            WhisperCompiledBackend::Cuda => {
-                log::info!("CUDA feature enabled - attempting GPU acceleration");
-                true
-            }
-            WhisperCompiledBackend::Vulkan => {
-                log::info!("Vulkan feature enabled - attempting GPU acceleration");
-                true
-            }
-            WhisperCompiledBackend::HipBlas => {
-                log::info!("HIP BLAS feature enabled - attempting GPU acceleration");
-                true
-            }
-            WhisperCompiledBackend::Cpu => {
-                log::info!("No GPU acceleration features detected - using CPU processing");
-                false
-            }
-        }
-    }
-
     pub fn new() -> Result<Self> {
         Self::new_with_models_dir(None)
     }
@@ -159,12 +133,7 @@ impl WhisperEngine {
         log::info!("WhisperEngine using models directory: {}", models_dir.display());
         log::info!("Debug mode: {}", cfg!(debug_assertions));
 
-        // Log acceleration capabilities
-        let gpu_support = Self::detect_gpu_acceleration();
-        log::info!("Hardware acceleration support: {}", if gpu_support { "enabled" } else { "disabled" });
-
-        #[cfg(feature = "metal")]
-        log::info!("Apple Metal GPU support: enabled");
+        log::info!("Compiled Whisper backend: {}", WhisperCompiledBackend::current().as_str());
 
         #[cfg(feature = "openblas")]
         log::info!("OpenBLAS CPU optimization: enabled");
@@ -301,7 +270,8 @@ impl WhisperEngine {
         match model_info.status {
             ModelStatus::Available => {
                 // FIX 5: Check if this model is already loaded
-                if let Some(current_model) = self.current_model.read().await.as_ref() {
+                let previous = self.get_current_model().await;
+                if let Some(current_model) = previous.as_deref() {
                     if current_model == model_name {
                         log::info!("Model {} is already loaded, skipping reload", model_name);
                         return Ok(());

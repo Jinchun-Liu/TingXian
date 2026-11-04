@@ -151,8 +151,8 @@ impl AudioStream {
         info!("🔊 Stream: Creating Core Audio stream for device: {}", device.name);
 
         // Create Core Audio capture
-        info!("🔊 Stream: Calling CoreAudioCapture::new()...");
-        let capture_impl = CoreAudioCapture::new()
+        let target = device.pin_output.then_some(device.name.as_str());
+        let capture_impl = CoreAudioCapture::for_output(target)
             .map_err(|e| {
                 error!("❌ Stream: CoreAudioCapture::new() failed: {}", e);
                 anyhow::anyhow!("Failed to create Core Audio capture: {}", e)
@@ -414,7 +414,11 @@ impl AudioStreamManager {
                 }
                 Err(e) => {
                     warn!("⚠️ Failed to create system audio stream: {}", e);
-                    // Don't fail if only system audio fails
+                    #[cfg(target_os = "macos")]
+                    if sys_device.pin_output {
+                        return Err(e);
+                    }
+                    // A default output can be absent on microphone-only systems.
                 }
             }
         } else {

@@ -258,7 +258,7 @@ pub async fn whisper_validate_model_ready() -> Result<String, String> {
 
         if available_models.is_empty() {
             return Err(
-                "No Whisper models are available. Please download a model to enable transcription."
+                "本机没有可用的 Whisper 模型，请到听弦的音频设置下载后重试。"
                     .to_string(),
             );
         }
@@ -286,14 +286,6 @@ pub async fn whisper_validate_model_ready_with_config<R: tauri::Runtime>(
     };
 
     if let Some(engine) = engine {
-        // Check if a model is currently loaded
-        if engine.is_model_loaded().await {
-            if let Some(current_model) = engine.get_current_model().await {
-                log::info!("Model already loaded: {}", current_model);
-                return Ok(current_model);
-            }
-        }
-
         // No model loaded - try to load user's configured model from transcript config
         let model_to_load = match crate::api::api::api_get_transcript_config(
             app.clone(),
@@ -345,7 +337,7 @@ pub async fn whisper_validate_model_ready_with_config<R: tauri::Runtime>(
 
         if available_models.is_empty() {
             return Err(
-                "No Whisper models are available. Please download a model to enable transcription."
+                "本机没有可用的 Whisper 模型，请到听弦的音频设置下载后重试。"
                     .to_string(),
             );
         }
@@ -357,12 +349,7 @@ pub async fn whisper_validate_model_ready_with_config<R: tauri::Runtime>(
                 log::info!("Loading user's configured model: {}", configured_model);
                 configured_model
             } else {
-                log::warn!(
-                    "Configured model '{}' not found, falling back to first available: {}",
-                    configured_model,
-                    available_models[0].name
-                );
-                available_models[0].name.clone()
+                return Err(format!("本地模型 {configured_model} 缺失或损坏，请到听弦的音频设置下载后重试"));
             }
         } else {
             // No configured model, use first available
@@ -466,9 +453,14 @@ pub async fn whisper_download_model(
                 Ok(())
             }
             Err(e) if is_download_cancelled(&e) => {
-                // Cancellation is handled by the existing cancel command/UI path. Do not
-                // emit a terminal event or reject the original request, which would
-                // otherwise overwrite that path's Missing state with an error.
+                // The settings panel may have reopened since the request started.
+                // Notify it only after the worker has finished cancellation cleanup.
+                if let Err(error) = app_handle.emit(
+                    "model-download-cancelled",
+                    serde_json::json!({ "modelName": model_name }),
+                ) {
+                    log::warn!("Failed to emit cancellation for {}: {}", model_name, error);
+                }
                 log::info!("Download cancelled for {}", model_name);
                 Ok(())
             }

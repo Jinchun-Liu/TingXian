@@ -1,33 +1,29 @@
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
-const fromFrontend=require('node:module').createRequire(path.resolve(__dirname,'../frontend/package.json'));
-const React=fromFrontend('react'),{create,act}=fromFrontend('react-test-renderer'),ts=fromFrontend('typescript');
-const m={exports:{}};
+const req=require('node:module').createRequire(path.resolve(__dirname,'../frontend/package.json'));
+const React=req('react'),{create,act}=req('react-test-renderer'),ts=req('typescript');
+const mod={exports:{}};
 const code=ts.transpileModule(fs.readFileSync(path.resolve(__dirname,'../frontend/src/components/interview/ConversationFeed.tsx'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,jsx:ts.JsxEmit.ReactJSX}}).outputText;
-new Function('require','module','exports',code)(name=>name==='@/components/ui/button'?{Button:p=>React.createElement('button',p)}:fromFrontend(name),m,m.exports);
-const {ConversationFeed}=m.exports;
-const text=node=>typeof node==='string'?node:(node?.children||[]).map(text).join('');
+new Function('require','module','exports',code)(req,mod,mod.exports);
 (async()=>{
- let tree,revision=0,generation=0,top=100,scrollWrites=0;
- const element={scrollHeight:1400,clientHeight:400,get scrollTop(){return top;},set scrollTop(value){scrollWrites++;top=Math.min(value,this.scrollHeight-this.clientHeight);}};
- const render=()=>React.createElement(ConversationFeed,{revision,key:generation},React.createElement('p',null,'synthetic dialogue'));
- await act(async()=>{tree=create(render(),{createNodeMock:el=>el.props.role==='region'?element:null});});
- const region=()=>tree.root.findByProps({role:'region'});
- const click=async label=>{const button=tree.root.findAllByType('button').find(b=>text(b)===label);assert.ok(button,label);await act(async()=>button.props.onClick());};
- const update=async()=>{element.scrollHeight+=40;revision++;await act(async()=>tree.update(render()));};
- assert.match(text(tree.toJSON().at(-1)),/阅读模式/);
- await update();assert.equal(top,100);assert.equal(scrollWrites,0);assert.match(text(tree.toJSON().at(-1)),/有新内容/);
- await click('回到最新对话');const oneShot=top;assert.equal(top,1040);
- await update();assert.equal(top,oneShot,'one-shot navigation enabled automatic following');
- await click('跟随最新对话');await update();assert.equal(top,element.scrollHeight-400);
- for(const interaction of [p=>p.onPointerDownCapture(),p=>p.onFocusCapture(),p=>p.onWheel({deltaY:-1}),p=>p.onTouchMove(),p=>p.onKeyDown({key:'PageUp'}),p=>{top-=80;p.onScroll();}]){
-   await act(async()=>interaction(region().props));const held=top;await update();assert.equal(top,held);
-   top=element.scrollHeight-400;await act(async()=>region().props.onScroll());await update();assert.equal(top,element.scrollHeight-440,'near-bottom scroll opted into following');
-   await click('跟随最新对话');
- }
- const before=scrollWrites;await act(async()=>tree.update(render()));assert.equal(scrollWrites,before,'unrelated rerender moved the viewport');
- await click('停止跟随');await update();assert.match(text(tree.toJSON().at(-1)),/阅读模式/);
- await click('跟随最新对话');generation++;await act(async()=>tree.update(render()));
- assert.match(text(tree.toJSON().at(-1)),/阅读模式/);assert.ok(!text(tree.toJSON().at(-1)).includes('有新内容'));
- await act(async()=>tree.unmount());
- console.log('PASS: default reading mode, explicit follow/one-shot navigation, scroll/pointer/focus/wheel/touch/keyboard pause, no implicit re-enable, unrelated updates and reset');
+  let tree,end=1200,latest,search=false;
+  const region={scrollTop:0,clientTop:0,clientHeight:400,getBoundingClientRect:()=>({top:0}),querySelector:()=>({
+    getBoundingClientRect:()=>({bottom:end-region.scrollTop,top:end-region.scrollTop-60,height:60})
+  })};
+  const render=()=>React.createElement(mod.exports.ConversationFeed,{latest,readingHistory:search,onReturn:()=>{search=false;}},'history');
+  const update=()=>act(async()=>tree.update(render()));
+  await act(async()=>{tree=create(render(),{createNodeMock:el=>el.props.role==='region'?region:null});});
+  assert.equal(region.scrollTop,0);assert.equal(tree.root.findAllByType('button').length,0);
+  latest={id:'a',text:'first'};await update();assert.equal(region.scrollTop,800);
+  end+=100;latest={...latest};await update();assert.equal(region.scrollTop,800,'a transcript-only render scrolled');
+  latest.text+=' chunk';await update();assert.equal(region.scrollTop,900);
+  for(const deltaY of [-20,20]){
+    await act(async()=>tree.root.findByProps({role:'region'}).props.onWheel({deltaY}));
+    region.scrollTop=300;end+=100;latest={id:'b',text:'next answer'};await update();
+    assert.equal(region.scrollTop,300,'manual reading was displaced');
+    await act(async()=>tree.root.findByType('button').props.onClick());assert.equal(region.scrollTop,end-400);
+    end+=80;latest.text+=' more';await update();assert.equal(region.scrollTop,end-400);
+  }
+  search=true;await update();region.scrollTop=200;end+=90;latest.text+=' more';await update();assert.equal(region.scrollTop,200);
+  await act(async()=>tree.root.findByType('button').props.onClick());await update();assert.equal(region.scrollTop,end-400);
+  await act(async()=>tree.unmount());console.log('PASS: follows answer text only, wheel in both directions locks reading, return resumes, search is preserved');
 })().catch(e=>{console.error(e);process.exitCode=1;});
