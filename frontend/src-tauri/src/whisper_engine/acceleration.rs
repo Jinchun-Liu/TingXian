@@ -46,6 +46,9 @@ pub struct WhisperContextAcceleration {
 
 impl WhisperContextAcceleration {
     pub fn status_label(self) -> &'static str {
+        if !self.use_gpu {
+            return "CPU processing only";
+        }
         match (self.compiled_backend, self.flash_attn) {
             (WhisperCompiledBackend::Metal, true) => "Metal GPU with Flash Attention (Ultra-Fast)",
             (WhisperCompiledBackend::Metal, false) => "Metal GPU acceleration",
@@ -63,7 +66,11 @@ pub fn whisper_context_acceleration_for(
     runtime_detected_gpu: GpuType,
     performance_tier: PerformanceTier,
 ) -> WhisperContextAcceleration {
-    let use_gpu = !matches!(compiled_backend, WhisperCompiledBackend::Cpu);
+    let use_gpu = match compiled_backend {
+        WhisperCompiledBackend::Cpu => false,
+        WhisperCompiledBackend::Metal => runtime_detected_gpu == GpuType::Metal,
+        _ => true,
+    };
     let fast_tier = matches!(performance_tier, PerformanceTier::High | PerformanceTier::Ultra);
     let flash_attn = match compiled_backend {
         WhisperCompiledBackend::Metal | WhisperCompiledBackend::Cuda => fast_tier,
@@ -126,6 +133,16 @@ mod tests {
         assert!(high.flash_attn);
         assert!(ultra.use_gpu);
         assert!(ultra.flash_attn);
+    }
+
+    #[test]
+    fn metal_requires_a_device_available_to_this_process() {
+        for (device, available) in [(GpuType::None, false), (GpuType::Metal, true)] {
+            let params = whisper_context_acceleration_for(WhisperCompiledBackend::Metal, device, PerformanceTier::High);
+            assert_eq!(params.use_gpu, available);
+            assert_eq!(params.flash_attn, available);
+            assert_eq!(params.status_label().contains("Metal"), available);
+        }
     }
 
     #[test]
