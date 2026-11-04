@@ -18,15 +18,19 @@ export function PreviousMeetings({initialId}:{initialId?:string}){
   }
   useEffect(()=>{
     let live=true;setLoading(true);setMessage('');
-    async function read(){
-      const [sql,cache]=await Promise.allSettled([invoke<{id:string;title:string}[]>('api_get_meetings',{authToken:null}),indexedDBService.getAllMeetings(true)]);
-      if(!live)return;
-      setRows([...(sql.status==='fulfilled'?sql.value:[]).map(r=>({...r,kind:'meeting' as const})),...(cache.status==='fulfilled'?cache.value:[]).map(r=>({id:r.meetingId,title:r.title,kind:'recovery' as const}))]);
-      if(sql.status==='rejected'||cache.status==='rejected')setMessage('部分旧记录未能读取，请重试。');
-      setLoading(false);
-      if(initialId)void open({kind:'meeting',id:initialId,title:''});
-    }
-    void read();return()=>{live=false;seq.current++;};
+    setRows([]);
+    // SQLite history must remain readable even while WebKit is opening its separate recovery store.
+    let remaining=2;
+    const settled=()=>{if(live&&--remaining===0)setLoading(false);};
+    const failed=()=>{if(live)setMessage('部分旧记录未能读取，请重试。');};
+    void invoke<{id:string;title:string}[]>('api_get_meetings',{authToken:null}).then(data=>{
+      if(live)setRows(old=>[...data.map(r=>({...r,kind:'meeting' as const})),...old]);
+    }).catch(failed).finally(settled);
+    void indexedDBService.getAllMeetings(true).then(data=>{
+      if(live)setRows(old=>[...old,...data.map(r=>({id:r.meetingId,title:r.title,kind:'recovery' as const}))]);
+    }).catch(failed).finally(settled);
+    if(initialId)void open({kind:'meeting',id:initialId,title:''});
+    return()=>{live=false;seq.current++;};
   },[initialId,revision]);
   return <section aria-label="以往会议" className="space-y-2 border-t pt-3">
     <h3>以往会议</h3>{message&&<p role="alert">{message} <button onClick={()=>setRevision(n=>n+1)}>重试</button></p>}

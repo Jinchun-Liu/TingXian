@@ -131,7 +131,9 @@ class IndexedDBService {
       try {
         const request = indexedDB.open(this.DB_NAME, this.DB_VERSION);
 
+        request.onblocked = () => { this.initPromise=null;reject(new Error('恢复缓存正被另一个窗口占用，请稍后重试')); };
         request.onerror = () => {
+          this.initPromise=null;
           console.error('Failed to open IndexedDB:', request.error);
           reject(request.error);
         };
