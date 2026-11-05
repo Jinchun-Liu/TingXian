@@ -1,0 +1,74 @@
+name: Publish verified Windows preview
+on:
+  push:
+    branches: [feat/windows-prd-v2]
+    paths: ['.github/workflows/windows-publish.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: publish-windows-0.7.0-beta.1
+  cancel-in-progress: false
+jobs:
+  publish-verified:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: Jinchun-Liu/TingXian
+      RELEASE_TAG: v0.7.0-beta.1-windows
+      SOURCE_RUN: '41999633117'
+      SOURCE_SHA: d888e6156201636d1494c4387da295d66095ba1d
+      INSTALLER: TingXian-0.7.0-beta.1-Windows-x64-setup.exe
+      INSTALLER_SHA256: 53a255700ff0bc6c358864a0a8bc39e1c5a8272c470be8eba0713083ac1efbee
+    steps:
+      - name: Verify source run and intended draft
+        run: |
+          gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" > run.json
+          gh release view "$RELEASE_TAG" --json tagName,isDraft,isPrerelease,targetCommitish,assets > release.json
+          python3 - <<'PY'
+          import json, os
+          run=json.load(open('run.json'))
+          assert run['status']=='completed' and run['conclusion']=='success'
+          assert run['head_sha']==os.environ['SOURCE_SHA']
+          assert run['head_branch']=='feat/windows-prd-v2'
+          assert run['repository']['full_name']==os.environ['GH_REPO']
+          release=json.load(open('release.json'))
+          assert release['tagName']==os.environ['RELEASE_TAG'] and release['isPrerelease']
+          assert release['targetCommitish']==os.environ['SOURCE_SHA']
+          if not release['isDraft']:
+              raise SystemExit('Release is already published; no modification performed')
+          print('PASS successful source run and exact preview draft')
+          PY
+      - name: Download tested artifact and verify installer
+        run: |
+          gh run download "$SOURCE_RUN" --name TingXian-Windows-x64-preview --dir release
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, os
+          root=Path('release');p=root/os.environ['INSTALLER']
+          assert {p.name for p in root.iterdir()}=={os.environ['INSTALLER'],'SHA256SUMS.txt','README.md','THIRD-PARTY.md'}
+          assert p.stat().st_size==734767333
+          assert hashlib.file_digest(p.open('rb'),'sha256').hexdigest()==os.environ['INSTALLER_SHA256']
+          assert (root/'SHA256SUMS.txt').read_text().strip()==os.environ['INSTALLER_SHA256']+'  '+os.environ['INSTALLER']
+          print('PASS tested installer size and SHA-256')
+          PY
+      - name: Upload installer and verify all release assets
+        run: |
+          gh release upload "$RELEASE_TAG" "release/$INSTALLER" --clobber
+          gh release view "$RELEASE_TAG" --json assets > uploaded.json
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, hashlib
+          assets={a['name']:a for a in json.load(open('uploaded.json'))['assets']}
+          for p in Path('release').iterdir():
+              asset=assets[p.name]
+              assert asset['state']=='uploaded' and asset['size']==p.stat().st_size
+              assert asset['digest']=='sha256:'+hashlib.file_digest(p.open('rb'),'sha256').hexdigest()
+          print('PASS all four GitHub release assets match the tested artifact')
+          PY
+      - name: Publish preview without replacing stable release
+        run: |
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false
+          gh release view "$RELEASE_TAG" --json url,isDraft,isPrerelease,assets
