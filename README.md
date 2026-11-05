@@ -7,7 +7,7 @@
 
 [独立工作台迁移、旧数据兼容与验收](docs/听弦独立工作台迁移.md)。测试版在 GitHub Releases 中标为预发布；上方链接保留当前稳定版。
 
-[macOS 0.6.5 预发布](https://github.com/Jinchun-Liu/TingXian/releases/tag/v0.6.5) · [Windows 测试版构建与安装](packaging/windows/README.md) · [后续 PRD 与进度](docs/PRD-v2-progress.md)。Windows 以 11 x64 为首轮目标，真实设备验收状态见 [Windows 验收](docs/windows-validation.md)。
+[macOS 0.6.5 预发布](https://github.com/Jinchun-Liu/TingXian/releases/tag/v0.6.5) · [Windows 0.7.0-beta.1 测试版下载](https://github.com/Jinchun-Liu/TingXian/releases/tag/v0.7.0-beta.1-windows) · [Windows 安装与构建](packaging/windows/README.md) · [后续 PRD 与进度](docs/PRD-v2-progress.md)。Windows 以 11 x64 为首轮目标，真实设备验收状态见 [Windows 验收](docs/windows-validation.md)。
 
 适用于 Apple Silicon Mac、macOS 14.4 及以上。双击 .pkg，跟随 macOS 安装器完成后，从「应用程序 → 听弦」启动。安装包自带多语言 Whisper small、FFmpeg、Python 和文档解析依赖。首次采集按 macOS 提示允许屏幕与系统音频，需要记录自己时允许麦克风。AI 回答使用自己的模型接口与 Key。此个人开发版本使用本地应用签名，安装包未经 Apple 公证。如系统要求额外确认，请参照 [Apple 的安装说明](https://support.apple.com/en-us/102445)。
 
@@ -58,7 +58,7 @@ An experimental conversation assistant for interviews, learning, meetings and ge
 
 ## 从源码运行
 
-开发验证平台为 Apple Silicon macOS。系统音频路径要求 macOS 14.4+；本分支的 Windows/Linux 功能尚未验收。
+Apple Silicon macOS 的系统音频路径要求 macOS 14.4+。Windows x64 已通过 CI 编译、安装及离线自检，真实会议和设备验收仍在测试阶段；Windows 开发请按 [平台构建说明](packaging/windows/README.md)。Linux 尚未验收。
 
 准备 Node.js/npm、Python 3、Xcode Command Line Tools（`xcode-select --install`）。脚本在仓库相邻的 `.meetily-interview-tools` 中安装 Rust 1.99.1、pnpm 9.15.9 和 Python 依赖；可用 `INTERVIEW_TOOLS` 指定其他工具目录。首次构建需要网络和磁盘空间，会下载构建依赖及 FFmpeg。`--with-model` 下载并校验 Whisper base 多语言模型。
 

@@ -22,6 +22,8 @@ Windows 麦克风权限在「设置 → 隐私和安全性 → 麦克风」中�
 
 开发者需要 Windows 11 x64、Visual Studio 2022 C++ Build Tools 和 Windows SDK、Rust 1.99.1 MSVC、Node 22、pnpm 9.15.9、Python 3.12、LLVM/libclang 与 CMake。这是开发要求，普通安装者不需要这些工具。
 
+先打开 Visual Studio 2022 的 **Developer PowerShell**（x64 环境）。`VCToolsRedistDir` 必须指向已安装的 C++ 运行库目录，脚本据此打包普通用户所需的 DLL。
+
 ```powershell
 git clone https://github.com/Jinchun-Liu/TingXian.git
 cd TingXian
