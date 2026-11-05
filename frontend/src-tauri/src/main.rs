@@ -7,6 +7,14 @@ use log;
 use env_logger;
 
 fn main() {
+    #[cfg(windows)]
+    if std::env::args().nth(1).as_deref()==Some("--windows-platform-check") {
+        if let Err(e)=app_lib::tingxian_runtime::windows_platform_check() {
+            eprintln!("{e}");std::process::exit(1);
+        }
+        println!("OK: Windows recoverable archive and in-memory screenshot");
+        return;
+    }
     if std::env::args().nth(1).as_deref()==Some("--installation-check") {
         if let Err(e)=app_lib::tingxian_runtime::installation_check() {
             eprintln!("{e}");std::process::exit(1);

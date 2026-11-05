@@ -50,13 +50,40 @@ pub fn installation_check()->Result<(),String>{
     let resources=resource_root(&executable).ok_or("missing resource directory")?;
     let python=python_in(&resources);
     if !python.is_file() || PathBuf::from(document_python())!=python{return Err("bundled Python missing".into())}
-    let test="from io import BytesIO;from docx import Document;from pypdf import PdfReader,PdfWriter;import yaml;d=Document();d.add_paragraph('sample');b=BytesIO();d.save(b);b.seek(0);assert Document(b).paragraphs[0].text=='sample';w=PdfWriter();w.add_blank_page(width=50,height=50);p=BytesIO();w.write(p);p.seek(0);assert len(PdfReader(p).pages)==1 and yaml.safe_load('n: 2')['n']==2";
-    if !Command::new(python).args(["-I","-B","-c",test]).status().map_err(|e|e.to_string())?.success(){return Err("bundled document runtime failed".into())}
+    let test="from io import BytesIO;from docx import Document;from pypdf import PdfReader,PdfWriter;import yaml;d=Document();d.add_paragraph('中文契约测试');b=BytesIO();d.save(b);b.seek(0);assert Document(b).paragraphs[0].text=='中文契约测试';w=PdfWriter();w.add_blank_page(width=50,height=50);p=BytesIO();w.write(p);p.seek(0);assert len(PdfReader(p).pages)==1 and yaml.safe_load('n: 2')['n']==2";
+    if !Command::new(python).args(["-I","-X","utf8","-B","-c",test]).status().map_err(|e|e.to_string())?.success(){return Err("bundled document runtime failed".into())}
     if !Command::new(macos.join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" })).args(["-v","error","-f","lavfi","-i","anullsrc","-t","0.05","-f","null","-"]).stdin(Stdio::null()).status().map_err(|e|e.to_string())?.success(){return Err("bundled media runtime failed".into())}
     let model=resources.join("whisper/ggml-small.bin");
     let mut config=whisper_rs::WhisperContextParameters::default();config.use_gpu(false);
     let _model=whisper_rs::WhisperContext::new_with_params(model.to_str().ok_or("invalid model path")?,config).map_err(|e|format!("bundled ASR model: {e}"))?;
+    #[cfg(windows)]
+    {
+        ort::init_from(resources.join("onnxruntime.dll").to_string_lossy().into_owned())
+            .with_telemetry(false).commit().map_err(|e| format!("bundled ONNX Runtime: {e}"))?;
+        let mut vad=crate::audio::vad::ContinuousVadProcessor::new(16000,1500).map_err(|e|format!("bundled VAD: {e}"))?;
+        vad.process_audio(&vec![0.0;16000]).map_err(|e|format!("bundled VAD inference: {e}"))?;
+    }
     tauri::async_runtime::block_on(database_installation_check()).map_err(|e|format!("安装数据库检查：{e}"))?;
+    Ok(())
+}
+
+/// Explicit CI/diagnostic command. Captures a monitor into memory and recycles
+/// only a newly created synthetic archive. It never opens the user's database.
+#[cfg(windows)]
+pub fn windows_platform_check()->Result<(),String>{
+    let root=tempfile::tempdir().map_err(|e|e.to_string())?;
+    let archive=root.path().join(format!("TingXian-platform-check-{}",uuid::Uuid::new_v4()));
+    std::fs::create_dir(&archive).map_err(|e|e.to_string())?;
+    let content=b"synthetic recoverable archive";
+    std::fs::write(archive.join("check.txt"),content).map_err(|e|e.to_string())?;
+    let recycled=crate::interview_history::move_to_trash(&archive)?;
+    if std::fs::read(recycled.join("check.txt")).map_err(|e|e.to_string())?!=content {
+        return Err("recycled archive verification failed".into());
+    }
+    let screens=crate::interview_screenshot::interview_screenshot_displays()?;
+    if screens.is_empty(){return Err("no monitor available for screenshot check".into());}
+    let png=tauri::async_runtime::block_on(crate::interview_screenshot::capture(None,tokio_util::sync::CancellationToken::new()))?;
+    if !png.starts_with(b"\x89PNG\r\n\x1a\n"){return Err("invalid screenshot PNG".into());}
     Ok(())
 }
 

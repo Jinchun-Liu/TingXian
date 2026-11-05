@@ -21,7 +21,7 @@ async fn confirmation_is_bound_to_content_and_root_not_mtime() {
     index.update_document(update(&first,true,None,None)).await.unwrap();
     let reviewed=index.documents().await.unwrap().remove(0);assert_eq!(reviewed.metadata.confirmation,Confirmation::Confirmed);
     assert!(reviewed.metadata.confirmed_at.is_some());assert_eq!(reviewed.metadata.validity,Validity::Unknown);
-    std::fs::File::open(&file).unwrap().set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now()+std::time::Duration::from_secs(60))).unwrap();
+    std::fs::OpenOptions::new().write(true).open(&file).unwrap().set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now()+std::time::Duration::from_secs(60))).unwrap();
     let same=index.import(path.join("a").to_str().unwrap(),vec![selection("note.md")],"unused").await.unwrap();
     assert_eq!(same.unchanged,1);assert_eq!(index.documents().await.unwrap()[0].metadata.confirmation,Confirmation::Confirmed);
     assert!(index.documents().await.unwrap()[0].metadata.valid_from.is_none(),"mtime must not become a fact date");

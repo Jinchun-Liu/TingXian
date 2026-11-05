@@ -40,7 +40,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: windows-cpu-preview
+          cache-on-failure: true
       - uses: actions/cache@v4
+        id: runtime-cache
         with:
           path: .windows-downloads
           key: windows-runtime-${{ hashFiles('packaging/windows/runtime-lock.json', 'interview/requirements.txt') }}
@@ -48,7 +50,15 @@ jobs:
         run: pnpm install --frozen-lockfile
         working-directory: frontend
       - name: Stage verified offline runtime
-        run: python scripts/prepare-windows-runtime.py
+        run: |
+          python scripts/prepare-windows-runtime.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "INTERVIEW_PYTHON=$((Resolve-Path frontend/src-tauri/binaries/windows-runtime/python/python.exe).Path)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - uses: actions/cache/save@v4
+        if: steps.runtime-cache.outputs.cache-hit != 'true'
+        with:
+          path: .windows-downloads
+          key: windows-runtime-${{ hashFiles('packaging/windows/runtime-lock.json', 'interview/requirements.txt') }}
       - name: Frontend and source checks
         run: |
           node scripts/test-public-source.cjs

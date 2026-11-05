@@ -13,8 +13,10 @@ if ($LASTEXITCODE) { throw 'Installed runtime hashes differ' }
 $savedPath = $env:PATH
 try {
     $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$location"
-    $check = Start-Process -FilePath $exe -ArgumentList '--installation-check' -Wait -PassThru
-    if ($check.ExitCode -ne 0) { throw "Offline installation check failed: $($check.ExitCode)" }
+    $check = Start-Process -FilePath $exe -ArgumentList '--installation-check' -Wait -PassThru -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'tingxian-install-check.stderr')
+    if ($check.ExitCode -ne 0) { Get-Content (Join-Path $env:RUNNER_TEMP 'tingxian-install-check.stderr'); throw "Offline installation check failed: $($check.ExitCode)" }
+    $platform = Start-Process -FilePath $exe -ArgumentList '--windows-platform-check' -Wait -PassThru -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'tingxian-platform-check.stderr')
+    if ($platform.ExitCode -ne 0) { Get-Content (Join-Path $env:RUNNER_TEMP 'tingxian-platform-check.stderr'); throw "Windows screenshot/recycle check failed: $($platform.ExitCode)" }
 } finally { $env:PATH = $savedPath }
 # Synthetic sentinel outside the install folder verifies uninstall keeps app data.
 $data = Join-Path $env:APPDATA 'io.github.jinchunliu.meetilyinterview'

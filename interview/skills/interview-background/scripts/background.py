@@ -219,6 +219,10 @@ def process(req,emit):
     return {"bundle":out,"failures":errors,"metrics":metrics}
 
 def main():
+    # Exported agents also run this script directly in Windows terminals/pipes.
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     a=argparse.ArgumentParser()
     a.add_argument("action",choices=["list","read","pack","desktop"])
     a.add_argument("--root",type=Path);a.add_argument("--id");a.add_argument("--part",type=int,default=1)
@@ -234,7 +238,7 @@ def main():
         p,name=inv[args.id]; h,parts=source(p,name)
         if not 1<=args.part<=len(parts): raise ValueError("批次无效")
         emit({"id":args.id,"name":name,"hash":h,"part":args.part,"total":len(parts),"segments":parts[args.part-1]});return
-    cards=json.loads(args.cards.read_text()); docs=[]
+    cards=json.loads(args.cards.read_text(encoding="utf-8")); docs=[]
     if set(cards)!=set(inv): raise ValueError("清单与源目录不一致，每个文件必须有结果或跳过原因")
     skipped=[]
     for k,(p,name) in inv.items():
@@ -245,7 +249,7 @@ def main():
         rs=[r for part,result in zip(parts,c["parts"]) for r in records(result,part)]
         if rs: docs.append({"id":k,"name":name,"hash":h,"records":rs})
         else: skipped.append([name,"没有相关背景"])
-    result=pack(docs,json.loads(args.profile.read_text()))
+    result=pack(docs,json.loads(args.profile.read_text(encoding="utf-8")))
     with args.out.open("x",encoding="utf-8") as f: json.dump(result,f,ensure_ascii=False)
     emit({"documents":len(docs),"skipped":skipped})
 
