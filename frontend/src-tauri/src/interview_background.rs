@@ -116,7 +116,7 @@ pub async fn background_generate(window:Window,app:AppHandle,state:State<'_,Inte
 async fn worker(req:&Value,work:&Work)->Result<Value,String>{
     use std::process::Stdio;
     let python=crate::tingxian_runtime::document_python();
-    let mut child=tokio::process::Command::new(python).arg("-B").args(["-I","-u","-c",HARNESS,"desktop"]).env_remove("DEEPSEEK_API_KEY")
+    let mut child=tokio::process::Command::new(python).args(["-X","utf8","-B"]).args(["-I","-u","-c",HARNESS,"desktop"]).env_remove("DEEPSEEK_API_KEY")
         .kill_on_drop(true).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e|e.to_string())?;
     let mut input=child.stdin.take().ok_or("资料输入不可用")?;
     input.write_all(&serde_json::to_vec(req).map_err(|e|e.to_string())?).await.map_err(|e|e.to_string())?;drop(input);

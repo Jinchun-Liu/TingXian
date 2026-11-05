@@ -19,7 +19,7 @@ pub fn structured_format(path:&Path)->Option<&'static str> {
 }
 async fn parse(bytes:Vec<u8>,format:&str,python:&str)->Result<Vec<ParsedField>> {
     tokio::time::timeout(Duration::from_secs(30),async {
-        let mut child=tokio::process::Command::new(python).arg("-B").arg("-c").arg(include_str!("structured.py")).arg(format)
+        let mut child=tokio::process::Command::new(python).args(["-X","utf8","-B"]).arg("-c").arg(include_str!("structured.py")).arg(format)
             .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true)
             .spawn().map_err(|e|format!("结构化解析工具不可用：{e}"))?;
         let mut stdin=child.stdin.take().ok_or("解析输入通道不可用")?;
