@@ -64,9 +64,9 @@ pub fn trigger_audio_permission() -> Result<bool> {
     };
 
     // Build and start an input stream to trigger the permission request
-    let stream = match device.build_input_stream(
-        &config.into(),
-        |_data: &[f32], _: &cpal::InputCallbackInfo| {
+    let stream = match device.build_input_stream_raw(
+        &config.config(), config.sample_format(),
+        |_data: &cpal::Data, _: &cpal::InputCallbackInfo| {
             // Do nothing, we just want to trigger the permission request
         },
         |err| error!("Error in audio stream: {}", err),
@@ -130,9 +130,9 @@ pub async fn verify_microphone_access() -> anyhow::Result<()> {
         let callback_fired_clone = callback_fired.clone();
 
         let stream = device
-            .build_input_stream(
-                &config.into(),
-                move |_data: &[f32], _: &cpal::InputCallbackInfo| {
+            .build_input_stream_raw(
+                &config.config(), config.sample_format(),
+                move |_data: &cpal::Data, _: &cpal::InputCallbackInfo| {
                     callback_fired_clone.store(true, Ordering::SeqCst);
                 },
                 |err| warn!("[verify_microphone_access] test stream error: {}", err),

@@ -39,7 +39,28 @@ pub fn move_to_trash(path: &Path) -> Result<PathBuf, String> {
     // Windows shell parsing names must resolve to readable physical files so the
     // existing hash verification and rollback remain effective.
     let original = path.canonicalize().map_err(|e| e.to_string())?;
-    trash::delete(path).map_err(|e| format!("无法移入 Windows 回收站，已停止清理：{e}"))?;
+    // A dedicated apartment keeps COM initialization off the async runtime thread.
+    // Explicit RECYCLEONDELETE is required; ALLOWUNDO alone is only best effort.
+    let source=original.clone();
+    std::thread::spawn(move || -> Result<(),String> {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::{core::PCWSTR,Win32::{System::Com::*,UI::Shell::*}};
+        unsafe {
+            CoInitializeEx(None,COINIT_APARTMENTTHREADED).ok().map_err(|e|e.to_string())?;
+            struct Apartment;
+            impl Drop for Apartment { fn drop(&mut self){unsafe { CoUninitialize(); }} }
+            let _apartment=Apartment;
+            let operation:IFileOperation=CoCreateInstance(&FileOperation,None,CLSCTX_INPROC_SERVER).map_err(|e|e.to_string())?;
+            operation.SetOperationFlags(FOF_NO_UI|FOFX_RECYCLEONDELETE|FOFX_ADDUNDORECORD|FOFX_EARLYFAILURE).map_err(|e|e.to_string())?;
+            let wide:Vec<u16>=source.as_os_str().encode_wide().chain(Some(0)).collect();
+            let name=if wide.starts_with(&[92,92,63,92]) { &wide[4..] } else { &wide[..] };
+            let item:IShellItem=SHCreateItemFromParsingName(PCWSTR(name.as_ptr()),None).map_err(|e|e.to_string())?;
+            operation.DeleteItem(&item,None).map_err(|e|e.to_string())?;
+            operation.PerformOperations().map_err(|e|e.to_string())?;
+            if operation.GetAnyOperationsAborted().map_err(|e|e.to_string())?.as_bool(){return Err("回收操作已中止".into());}
+        }
+        Ok(())
+    }).join().map_err(|_|"回收站任务意外中断")?.map_err(|e|format!("无法移入 Windows 回收站，已停止清理：{e}"))?;
     let items = trash::os_limited::list().map_err(|e| format!("已请求回收，但无法核对回收站，未清除数据库：{e}"))?;
     for item in items {
         let same_name = item.name == original.file_name().ok_or("无效归档名")?;

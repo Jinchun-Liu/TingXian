@@ -191,6 +191,7 @@ whisper-rs = { version = "0.13.2", features = ["raw-api", "metal", "coreml"] }
 windows-sys = { version = "0.59.0", features = ["Win32_Foundation", "Win32_Graphics_Gdi"] }
 png = "0.17.16"
 trash = "=5.2.5"
+windows = { version = "0.56.0", features = ["Win32_System_Com", "Win32_UI_Shell"] }
 whisper-rs = { version = "0.13.2", features = ["raw-api"] }
 ort = { version = "2.0.0-rc.10", features = ["load-dynamic"] }
 futures-channel = "0.3.31"

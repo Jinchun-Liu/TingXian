@@ -127,7 +127,25 @@ pub fn trigger_system_audio_permission(device: Option<&str>) -> Result<bool> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+pub fn trigger_system_audio_permission(name: Option<&str>) -> Result<bool> {
+    use cpal::traits::{DeviceTrait,StreamTrait};
+    use std::sync::{Arc,atomic::{AtomicBool,Ordering}};
+    let selected=match name {
+        Some(name)=>super::devices::AudioDevice::new(name.into(),super::devices::DeviceType::Output),
+        None=>super::devices::default_output_device()?,
+    };
+    let (device,config)=super::devices::platform::get_windows_device(&selected)?;
+    let failed=Arc::new(AtomicBool::new(false));let failure=failed.clone();
+    let stream=device.build_input_stream_raw(&config.config(),config.sample_format(),|_,_|{},move |_|{failure.store(true,Ordering::SeqCst);},None)?;
+    stream.play()?;
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    drop(stream);
+    anyhow::ensure!(!failed.load(Ordering::SeqCst),"系统输出通道启动失败，请检查设备连接或独占使用状态");
+    Ok(true)
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 pub fn trigger_system_audio_permission(_device: Option<&str>) -> Result<bool> {
     // System audio permissions not required on other platforms
     info!("System audio permissions not required on this platform");
