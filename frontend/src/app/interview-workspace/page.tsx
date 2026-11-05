@@ -43,7 +43,7 @@ import { AudioLines, History as HistoryIcon, ChevronRight, Camera, AppWindow, Co
 
 type File = { path: string; bytes: number; eligible: boolean; reason: string };
 type Choice = { path: string; kind: string; allow_external: boolean; structured?: StructuredSelection | null };
-type Status = { workspace_ready?:boolean; key_configured: boolean; model?: string; answer_capacity?:number; vision_ready?:boolean; vision_model?:string; root: string; suggested_root: string; index_version: string; index_documents: number; index_chunks: number; documents: DocumentRecord[]; architecture: string; memory_bytes: number; system_version: string; aliases: string; facts: string; fact_card?: FactCard; whisper_model: string | null; session_active: boolean };
+type Status = { workspace_ready?:boolean; key_configured: boolean; model?: string; answer_capacity?:number; vision_ready?:boolean; vision_model?:string; root: string; suggested_root: string; index_version: string; index_documents: number; index_chunks: number; documents: DocumentRecord[]; architecture: string; os: string; memory_bytes: number; system_version: string; aliases: string; facts: string; fact_card?: FactCard; whisper_model: string | null; session_active: boolean };
 type ScreenDisplay={id:number;width:number;height:number;primary:boolean};
 
 type ImportEvent = { import_id: string; phase: string; completed: number; total: number; path: string | null; report: unknown; message: string | null };
@@ -607,7 +607,7 @@ export default function InterviewPage() {
     const next = { ...s }; if (on) next[file.path] = { path: file.path, kind: isStructuredPath(file.path) ? 'technical' : /面试资料|面试准备|练习/.test(file.path) ? 'practice' : 'personal', allow_external: true }; else delete next[file.path]; return next;
   });
 
-  const composer=<QuestionComposer value={question} editingSelf={!!editingSelfId} busy={busy} cloudAllowed={cloudAllowed} onChange={setQuestion} onSubmit={()=>void submit(question)} onLocalSearch={localSearch} onCancelEdit={()=>{selfEditBase.current=null;setEditingSelfId(null);setQuestion('');setNotice('已取消修改，原记录保留。');}} />;
+  const composer=<QuestionComposer os={status?.os} value={question} editingSelf={!!editingSelfId} busy={busy} cloudAllowed={cloudAllowed} onChange={setQuestion} onSubmit={()=>void submit(question)} onLocalSearch={localSearch} onCancelEdit={()=>{selfEditBase.current=null;setEditingSelfId(null);setQuestion('');setNotice('已取消修改，原记录保留。');}} />;
   const transcriptTools = (
     <details className="desk-transcripts"><summary>原始转写与本人回答记录</summary><div className="max-h-48 overflow-auto space-y-2 my-3">{transcripts.map(t => <button key={`${t.capture_session ?? 0}:${t.sequence_id}`} className="block text-left w-full p-2 rounded bg-slate-50" onClick={() => setQuestion(t.text)}>{t.timestamp} · {t.text}</button>)}</div><textarea aria-label="本轮实际回答" className="border rounded w-full h-20 p-2" value={confirmedAnswer} onChange={e => setConfirmedAnswer(e.target.value)} placeholder="可选：记录最近一轮自己实际说过的回答，供后续追问使用。" /><Button variant="outline" disabled={!confirmedAnswer.trim() || !history.length} onClick={() => { setHistory(h => { const last = h.map(t => t.role !== 'self' && t.status === 'done').lastIndexOf(true); return h.map((t,i) => i === last ? { ...t, confirmed_answer: confirmedAnswer } : t); }); setConfirmedAnswer(''); }}>确认本人实际回答</Button></details>
   );
@@ -762,7 +762,7 @@ export default function InterviewPage() {
         <p className="text-slate-500">已索引 {status?.index_documents ?? '…'} 份资料 · {status?.index_chunks ?? '…'} 个片段。</p>
         <Button variant="outline" size="sm" disabled={busy || !status || status.session_active} onClick={clearIndex}>移入废纸篓并清空索引</Button>
       </div>
-      <p className="text-xs text-slate-500">{status ? `${status.architecture} · macOS ${status.system_version} · ${(status.memory_bytes / 1024 ** 3).toFixed(0)} GB · Whisper：${status.whisper_model || '未加载'}` : '等待桌面自检'}</p>
+      <p className="text-xs text-slate-500">{status ? `${status.architecture} · ${status.os==='windows'?'Windows':status.os==='macos'?'macOS':status.os==='linux'?'Linux':status.os || '系统'} ${status.system_version} · ${(status.memory_bytes / 1024 ** 3).toFixed(0)} GB · Whisper：${status.whisper_model || '未加载'}` : '等待桌面自检'}</p>
       <BackgroundLibrary locked={busy || !status || !!status.session_active || recording.isRecording || generating} active={settingsTab==='资料库'} revision={status?.index_version} onBusy={setBusy} onApplied={refresh} onModels={()=>{setOpenVision(false);setOpenBackground(true);setSettingsTab('模型接口');}}/>
       <details><summary>手动选择文件与字段</summary><div className="space-y-3 pt-2">
       <div className="flex gap-2"><Input aria-label="资料根目录" disabled={busy || status?.session_active} placeholder="选择已有个人资料目录" value={root} onChange={e => { setRoot(e.target.value); setFiles([]); setSelected({}); }} /><Button variant="outline" disabled={busy || status?.session_active} onClick={() => run(async () => { const p = await invoke<string | null>('profile_choose'); if (p) { setRoot(p); setFiles([]); setSelected({}); } })}><FolderOpen className="h-4 w-4" aria-label="选择资料目录" /></Button><Button disabled={busy || !root || status?.session_active} onClick={() => run(async () => { setFiles(await invoke<File[]>('profile_scan', { root })); setSelected({}); })}>扫描预览</Button></div>

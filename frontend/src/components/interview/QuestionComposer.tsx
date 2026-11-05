@@ -3,7 +3,8 @@ import {useRef,useState} from 'react';
 import {Button} from '@/components/ui/button';
 import {Send} from 'lucide-react';
 
-export function QuestionComposer({value,editingSelf,busy,cloudAllowed,onChange,onSubmit,onLocalSearch,onCancelEdit}:{
+export function QuestionComposer({value,editingSelf,busy,cloudAllowed,os,onChange,onSubmit,onLocalSearch,onCancelEdit}:{
+  os?:string;
   value:string;editingSelf:boolean;busy:boolean;cloudAllowed:boolean;onChange:(text:string)=>void;
   onSubmit:()=>void;onLocalSearch:()=>void;onCancelEdit:()=>void;
 }) {
@@ -25,7 +26,7 @@ export function QuestionComposer({value,editingSelf,busy,cloudAllowed,onChange,o
         }}
         rows={2} placeholder={editingSelf?"修正我的发言":"输入问题…"} />
     <div className="composer-actions">
-      <kbd title="发送快捷键">⌘ ↵</kbd>
+      <kbd title="发送快捷键">{os==='macos'?'⌘':'Ctrl'} ↵</kbd>
       <Button disabled={disabled} onClick={submit}><Send className="h-4 w-4 mr-1" />{editingSelf?'保存修正':'发送'}</Button>
       {editingSelf && <Button variant="outline" disabled={busy || compositionActive} onClick={onCancelEdit}>取消修改</Button>}
       <Button variant="outline" disabled={!value.trim() || busy || compositionActive} onClick={onLocalSearch}>本地检索</Button>

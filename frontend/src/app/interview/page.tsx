@@ -43,7 +43,7 @@ import { Play, Pause, Square, Search, Snowflake, FolderOpen, Settings2, FileText
 
 type File = { path: string; bytes: number; eligible: boolean; reason: string };
 type Choice = { path: string; kind: string; allow_external: boolean; structured?: StructuredSelection | null };
-type Status = { preferences?: InterviewContext; key_configured: boolean; model?: string; root: string; suggested_root: string; index_version: string; index_documents: number; index_chunks: number; documents: DocumentRecord[]; architecture: string; memory_bytes: number; system_version: string; aliases: string; facts: string; fact_card?: FactCard; whisper_model: string | null; session_active: boolean };
+type Status = { preferences?: InterviewContext; key_configured: boolean; model?: string; root: string; suggested_root: string; index_version: string; index_documents: number; index_chunks: number; documents: DocumentRecord[]; architecture: string; os: string; memory_bytes: number; system_version: string; aliases: string; facts: string; fact_card?: FactCard; whisper_model: string | null; session_active: boolean };
 
 type ImportEvent = { import_id: string; phase: string; completed: number; total: number; path: string | null; report: unknown; message: string | null };
 type ImportView = ImportEvent & { ready: boolean; cancelPending: boolean };
@@ -645,7 +645,7 @@ export default function InterviewPage() {
         <p className="text-slate-500">已索引 {status?.index_documents ?? '…'} 份资料 · {status?.index_chunks ?? '…'} 个片段。清空索引保留原文件、事实卡、术语和会话历史。</p>
         <Button variant="outline" size="sm" disabled={busy || !status || status.session_active} onClick={clearIndex}>移入废纸篓并清空索引</Button>
       </div>
-      <p className="text-xs text-slate-500">{status ? `${status.architecture} · macOS ${status.system_version} · ${(status.memory_bytes / 1024 ** 3).toFixed(0)} GB · Whisper：${status.whisper_model || '未加载'}` : '等待桌面自检'}</p>
+      <p className="text-xs text-slate-500">{status ? `${status.architecture} · ${status.os==='windows'?'Windows':status.os==='macos'?'macOS':status.os==='linux'?'Linux':status.os || '系统'} ${status.system_version} · ${(status.memory_bytes / 1024 ** 3).toFixed(0)} GB · Whisper：${status.whisper_model || '未加载'}` : '等待桌面自检'}</p>
       <div className="flex gap-2"><Input aria-label="资料根目录" disabled={busy || status?.session_active} placeholder="选择已有个人资料目录" value={root} onChange={e => { setRoot(e.target.value); setFiles([]); setSelected({}); }} /><Button variant="outline" disabled={busy || status?.session_active} onClick={() => run(async () => { const p = await invoke<string | null>('profile_choose'); if (p) { setRoot(p); setFiles([]); setSelected({}); } })}><FolderOpen className="h-4 w-4" /></Button><Button disabled={busy || !root || status?.session_active} onClick={() => run(async () => { setFiles(await invoke<File[]>('profile_scan', { root })); setSelected({}); })}>扫描预览</Button></div>
       <Button variant="outline" disabled={busy || !root || status?.session_active} onClick={() => run(async () => {
         const paths = ['background.md', 'resume.md', 'reference-answers.md'];
@@ -696,7 +696,7 @@ export default function InterviewPage() {
       </ConversationFeed>
       <div className="shrink-0 border-t p-3 space-y-2 max-h-[35vh] overflow-y-auto">
       {(scenario==='meeting' || scenario==='learning') && <div className="space-y-1"><Button size="sm" variant="outline" disabled={busy || generating || !cloudAllowed || !status?.key_configured || !history.length || !!editingSelfId} onClick={()=>void submit(scenario==='meeting'?recentDiscussionRequest:learningExplanationRequest)}>{scenario==='meeting'?'整理最近讨论':'解释最近内容'}</Button><p className="text-xs text-slate-500">按需调用 AI；仅使用有限的近期上下文，不代表完整会议纪要或完整课程。也可在下方直接输入问题。</p></div>}
-      <QuestionComposer value={question} editingSelf={!!editingSelfId} busy={busy} cloudAllowed={cloudAllowed} onChange={setQuestion} onSubmit={()=>void submit(question)} onLocalSearch={localSearch} onCancelEdit={()=>{selfEditBase.current=null;setEditingSelfId(null);setQuestion('');setNotice('已取消修改，原记录保留。');}} />
+      <QuestionComposer os={status?.os} value={question} editingSelf={!!editingSelfId} busy={busy} cloudAllowed={cloudAllowed} onChange={setQuestion} onSubmit={()=>void submit(question)} onLocalSearch={localSearch} onCancelEdit={()=>{selfEditBase.current=null;setEditingSelfId(null);setQuestion('');setNotice('已取消修改，原记录保留。');}} />
         {phase.startsWith('仅本地') && <div className="text-xs space-y-2"><ConflictNotice conflicts={conflicts} onReview={()=>setSettings(true)} />{sources.map(source => <details key={source.source_id}><summary>{source.path} · {source.location} · {sourceStatusLabel(source.metadata)}</summary><p className="whitespace-pre-wrap">{source.text}</p></details>)}</div>}
       </div>
     </section>
