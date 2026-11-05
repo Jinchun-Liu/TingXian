@@ -1,13 +1,22 @@
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
+fn resource_root(executable: &std::path::Path) -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    { Some(executable.parent()?.parent()?.join("Resources")) }
+    #[cfg(not(target_os = "macos"))]
+    { Some(executable.parent()?.to_path_buf()) }
+}
+fn python_in(resources: &std::path::Path) -> PathBuf {
+    #[cfg(windows)]
+    { resources.join("python/python.exe") }
+    #[cfg(not(windows))]
+    { resources.join("python/bin/python3") }
+}
 pub fn document_python() -> String {
-    // Finder launches without the developer's shell environment.
-    let bundled = std::env::current_exe().ok().and_then(|exe| {
-        Some(exe.parent()?.parent()?.join("Resources/python/bin/python3"))
-    });
-    if let Some(path) = bundled.filter(|p|p.is_file()) {return path.to_string_lossy().into_owned()}
-    std::env::var("INTERVIEW_PYTHON").unwrap_or_else(|_|"python3".into())
+    let bundled = std::env::current_exe().ok().and_then(|exe| resource_root(&exe)).map(|root| python_in(&root));
+    if let Some(path) = bundled.filter(|p| p.is_file()) { return path.to_string_lossy().into_owned(); }
+    std::env::var("INTERVIEW_PYTHON").unwrap_or_else(|_| if cfg!(windows) { "python" } else { "python3" }.into())
 }
 
 pub async fn prepare_model(app:&AppHandle)->Result<Option<&'static str>,String>{
@@ -38,12 +47,12 @@ pub fn installation_check()->Result<(),String>{
     use std::process::{Command,Stdio};
     let executable=std::env::current_exe().map_err(|e|e.to_string())?;
     let macos=executable.parent().ok_or("invalid bundle path")?;
-    let resources=macos.parent().ok_or("missing Contents")?.join("Resources");
-    let python=resources.join("python/bin/python3");
+    let resources=resource_root(&executable).ok_or("missing resource directory")?;
+    let python=python_in(&resources);
     if !python.is_file() || PathBuf::from(document_python())!=python{return Err("bundled Python missing".into())}
     let test="from io import BytesIO;from docx import Document;from pypdf import PdfReader,PdfWriter;import yaml;d=Document();d.add_paragraph('sample');b=BytesIO();d.save(b);b.seek(0);assert Document(b).paragraphs[0].text=='sample';w=PdfWriter();w.add_blank_page(width=50,height=50);p=BytesIO();w.write(p);p.seek(0);assert len(PdfReader(p).pages)==1 and yaml.safe_load('n: 2')['n']==2";
     if !Command::new(python).args(["-I","-B","-c",test]).status().map_err(|e|e.to_string())?.success(){return Err("bundled document runtime failed".into())}
-    if !Command::new(macos.join("ffmpeg")).args(["-v","error","-f","lavfi","-i","anullsrc","-t","0.05","-f","null","-"]).stdin(Stdio::null()).status().map_err(|e|e.to_string())?.success(){return Err("bundled media runtime failed".into())}
+    if !Command::new(macos.join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" })).args(["-v","error","-f","lavfi","-i","anullsrc","-t","0.05","-f","null","-"]).stdin(Stdio::null()).status().map_err(|e|e.to_string())?.success(){return Err("bundled media runtime failed".into())}
     let model=resources.join("whisper/ggml-small.bin");
     let mut config=whisper_rs::WhisperContextParameters::default();config.use_gpu(false);
     let _model=whisper_rs::WhisperContext::new_with_params(model.to_str().ok_or("invalid model path")?,config).map_err(|e|format!("bundled ASR model: {e}"))?;

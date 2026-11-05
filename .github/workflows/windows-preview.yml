@@ -1,0 +1,92 @@
+name: Windows preview
+on:
+  push:
+    branches: [feat/windows-prd-v2]
+    tags: ['v*-windows*']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-preview-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  windows-x64:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_RELEASE_DEBUG: '0'
+      CARGO_PROFILE_RELEASE_STRIP: symbols
+      CARGO_BUILD_JOBS: '3'
+      NEXT_TELEMETRY_DISABLED: '1'
+      CMAKE_POLICY_VERSION_MINIMUM: '3.5'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.1
+      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-cpu-preview
+      - uses: actions/cache@v4
+        with:
+          path: .windows-downloads
+          key: windows-runtime-${{ hashFiles('packaging/windows/runtime-lock.json', 'interview/requirements.txt') }}
+      - name: Install frontend
+        run: pnpm install --frozen-lockfile
+        working-directory: frontend
+      - name: Stage verified offline runtime
+        run: python scripts/prepare-windows-runtime.py
+      - name: Frontend and source checks
+        run: |
+          node scripts/test-public-source.cjs
+          python scripts/check-public-source.py
+          python scripts/test-windows-packaging.py
+          Push-Location frontend
+          pnpm exec tsc --noEmit --incremental false
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Pop-Location
+      - name: Core regression tests
+        run: cargo test -p interview-core --locked
+      - name: Build CPU installer
+        shell: pwsh
+        run: |
+          $env:CMAKE_PROJECT_INCLUDE = (Resolve-Path .github/force-portable-ggml.cmake).Path.Replace('\', '/')
+          Push-Location frontend
+          pnpm exec tauri build --bundles nsis
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Pop-Location
+          node .github/verify-portable-ggml.cjs target/release
+      - name: Install, validate offline resources and uninstall
+        shell: pwsh
+        run: ./scripts/check-windows-install.ps1
+      - name: Collect release files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/windows | Out-Null
+          $installer = @(Get-ChildItem target/release/bundle/nsis/*-setup.exe)
+          if ($installer.Count -ne 1) { throw 'Expected exactly one NSIS installer' }
+          Copy-Item $installer[0].FullName dist/windows/TingXian-0.7.0-beta.1-Windows-x64-setup.exe
+          Copy-Item packaging/windows/README.md dist/windows/README.md
+          Copy-Item packaging/windows/THIRD-PARTY.md dist/windows/THIRD-PARTY.md
+          $file = Get-Item dist/windows/*-setup.exe
+          $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower()
+          "$hash  $($file.Name)" | Set-Content dist/windows/SHA256SUMS.txt -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TingXian-Windows-x64-preview
+          path: dist/windows/
+          if-no-files-found: error
+          retention-days: 30

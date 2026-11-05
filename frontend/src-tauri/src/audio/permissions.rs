@@ -54,9 +54,14 @@ pub fn request_screen_recording_permission() -> Result<()> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
 pub fn request_screen_recording_permission() -> Result<()> {
-    Ok(()) // Not required on other platforms
+    std::process::Command::new("explorer.exe").arg("ms-settings:privacy-microphone").spawn()?;
+    Ok(())
+}
+#[cfg(not(any(target_os = "macos", windows)))]
+pub fn request_screen_recording_permission() -> Result<()> {
+    Err(anyhow::anyhow!("请在系统设置中检查麦克风权限"))
 }
 
 /// Check and request Audio Capture permission if not granted

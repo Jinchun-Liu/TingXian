@@ -2,6 +2,10 @@
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
+#[cfg(windows)]
+#[path = "interview_screenshot_windows.rs"]
+mod windows;
+
 #[derive(Serialize)]
 pub struct Display { id:u32, width:u64, height:u64, primary:bool }
 
@@ -14,8 +18,10 @@ pub fn interview_screenshot_displays()->Result<Vec<Display>,String> {
         let ids=CGDisplay::active_displays().map_err(|_|"无法读取屏幕列表")?;
         Ok(ids.into_iter().map(|id|{let d=CGDisplay::new(id);Display{id,width:d.pixels_wide(),height:d.pixels_high(),primary:id==main}}).collect())
     }
-    #[cfg(not(target_os="macos"))]
-    Err("当前截屏实现仅支持 macOS 14.4 及以上".into())
+    #[cfg(windows)]
+    { windows::displays() }
+    #[cfg(not(any(target_os="macos", windows)))]
+    Err("当前平台尚未接入截屏".into())
 }
 
 fn bounded_size(width:usize,height:usize)->Result<(usize,usize),String> {
@@ -39,8 +45,19 @@ pub async fn capture(display_id:Option<u32>,cancel:CancellationToken)->Result<Ve
             result=&mut task=>result.map_err(|_|"截屏任务意外中断".to_string())?,
         }
     }
-    #[cfg(not(target_os="macos"))]
-    {let _=display_id;Err("当前截屏实现仅支持 macOS 14.4 及以上".into())}
+    #[cfg(windows)]
+    {
+        let task = tokio::task::spawn_blocking(move || windows::capture(display_id));
+        tokio::select! { biased;
+            _ = cancel.cancelled() => Err("已取消".into()),
+            result = tokio::time::timeout(std::time::Duration::from_secs(10), task) => {
+                result.map_err(|_| "截屏超过 10 秒，请检查桌面会话后重试")?
+                    .map_err(|_| "截屏任务意外中断")?
+            }
+        }
+    }
+    #[cfg(not(any(target_os="macos", windows)))]
+    {let _=display_id;Err("当前平台尚未接入截屏".into())}
 }
 
 #[cfg(target_os="macos")]

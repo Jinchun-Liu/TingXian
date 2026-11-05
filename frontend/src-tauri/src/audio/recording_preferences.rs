@@ -267,8 +267,7 @@ pub async fn get_available_audio_backends() -> Result<Vec<String>, String> {
 
     #[cfg(not(target_os = "macos"))]
     {
-        // Only ScreenCaptureKit available on non-macOS
-        Ok(vec!["screencapturekit".to_string()])
+        Ok(vec![native_audio_backend().to_string()])
     }
 }
 
@@ -283,7 +282,7 @@ pub async fn get_current_audio_backend() -> Result<String, String> {
 
     #[cfg(not(target_os = "macos"))]
     {
-        Ok("screencapturekit".to_string())
+        Ok(native_audio_backend().to_string())
     }
 }
 
@@ -334,7 +333,7 @@ pub async fn set_audio_backend(backend: String) -> Result<(), String> {
 
     #[cfg(not(target_os = "macos"))]
     {
-        if backend != "screencapturekit" {
+        if backend != native_audio_backend() {
             return Err(format!(
                 "Backend {} not available on this platform",
                 backend
@@ -378,10 +377,13 @@ pub async fn get_audio_backend_info() -> Result<Vec<BackendInfo>, String> {
     #[cfg(not(target_os = "macos"))]
     {
         Ok(vec![BackendInfo {
-            id: "screencapturekit".to_string(),
-            name: "ScreenCaptureKit".to_string(),
-            description: "Default system audio capture".to_string(),
+            id: native_audio_backend().to_string(),
+            name: if cfg!(windows) { "WASAPI" } else { "系统音频" }.to_string(),
+            description: "系统输出与麦克风分别采集".to_string(),
         }])
     }
 }
 
+
+#[cfg(not(target_os = "macos"))]
+fn native_audio_backend() -> &'static str { if cfg!(windows) { "wasapi" } else { "cpal" } }

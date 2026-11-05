@@ -101,3 +101,4 @@ __pycache__/
 
 # Public fork optional local tool directory
 .meetily-interview-tools/
+.windows-downloads/

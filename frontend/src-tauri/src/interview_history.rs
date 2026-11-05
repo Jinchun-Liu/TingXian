@@ -33,9 +33,30 @@ pub fn move_to_trash(path: &Path) -> Result<PathBuf, String> {
     })
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+pub fn move_to_trash(path: &Path) -> Result<PathBuf, String> {
+    // The uniquely named archive is recycled before committing any database deletion.
+    // Windows shell parsing names must resolve to readable physical files so the
+    // existing hash verification and rollback remain effective.
+    let original = path.canonicalize().map_err(|e| e.to_string())?;
+    trash::delete(path).map_err(|e| format!("无法移入 Windows 回收站，已停止清理：{e}"))?;
+    let items = trash::os_limited::list().map_err(|e| format!("已请求回收，但无法核对回收站，未清除数据库：{e}"))?;
+    for item in items {
+        let same_name = item.name == original.file_name().ok_or("无效归档名")?;
+        // Windows canonical paths may carry a verbatim prefix; compare the parent
+        // through the filesystem instead of comparing their spelling.
+        let same_parent = item.original_parent.canonicalize().ok() == original.parent().map(|p| p.to_path_buf());
+        if same_name && same_parent {
+            let destination = PathBuf::from(item.id);
+            if !path.exists() && destination.is_dir() { return Ok(destination); }
+        }
+    }
+    Err("无法核对 Windows 回收站中的归档，未清除数据库；请检查回收站".into())
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 pub fn move_to_trash(_path: &Path) -> Result<PathBuf, String> {
-    Err("当前清理功能需要 macOS 废纸篓；未删除任何记录".into())
+    Err("当前平台尚未接入可恢复清理；未删除任何记录".into())
 }
 
 const ARCHIVE_PREFIX:&str="Meetily-历史清理-";

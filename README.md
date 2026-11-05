@@ -7,6 +7,8 @@
 
 [独立工作台迁移、旧数据兼容与验收](docs/听弦独立工作台迁移.md)。测试版在 GitHub Releases 中标为预发布；上方链接保留当前稳定版。
 
+[macOS 0.6.5 预发布](https://github.com/Jinchun-Liu/TingXian/releases/tag/v0.6.5) · [Windows 测试版构建与安装](packaging/windows/README.md) · [后续 PRD 与进度](docs/PRD-v2-progress.md)。Windows 以 11 x64 为首轮目标，真实设备验收状态见 [Windows 验收](docs/windows-validation.md)。
+
 适用于 Apple Silicon Mac、macOS 14.4 及以上。双击 .pkg，跟随 macOS 安装器完成后，从「应用程序 → 听弦」启动。安装包自带多语言 Whisper small、FFmpeg、Python 和文档解析依赖。首次采集按 macOS 提示允许屏幕与系统音频，需要记录自己时允许麦克风。AI 回答使用自己的模型接口与 Key。此个人开发版本使用本地应用签名，安装包未经 Apple 公证。如系统要求额外确认，请参照 [Apple 的安装说明](https://support.apple.com/en-us/102445)。
 
 参会模式支持一对一、多对一、一对多、多对多、复合会议。后三种模式可预填姓名、昵称或候选人编号。对端直接叫到自己时出现提醒，其他发言留作上下文。[多人场景及点名示例](docs/group-meetings.md)
