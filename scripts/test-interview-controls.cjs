@@ -344,6 +344,18 @@ function text(node) { return typeof node === 'string' ? node : (node?.children||
 
 
   const beforeSaveCalls=calls.filter(c=>c.name==='answer_start').length;const priorSaved=savedRows.length;
+  const questionDraft='尚未提交：StockMarketAgent 的 null、零和缺失字段';
+  const answerDraft='尚未确认：事务提交后超时，先用幂等键查询';
+  await act(async()=>{
+    tree.root.findByProps({id:'question'}).props.onChange({target:{value:questionDraft}});
+    tree.root.findByProps({'aria-label':'本轮实际回答'}).props.onChange({target:{value:answerDraft}});
+  });
+  const clearsBeforeFailedEnd=calls.filter(c=>c.name==='session_clear').length;
+  failSave=true;await click('结束会话并保留历史');
+  assert.ok(text(tree.toJSON()).includes('synthetic save failure'));
+  assert.equal(tree.root.findByProps({id:'question'}).props.value,questionDraft,'failed end discarded the unsubmitted question');
+  assert.equal(tree.root.findByProps({'aria-label':'本轮实际回答'}).props.value,answerDraft,'failed end discarded the unconfirmed answer');
+  assert.equal(calls.filter(c=>c.name==='session_clear').length,clearsBeforeFailedEnd,'native session cleared before persistence succeeded');
   failSave=true;await click('保存当前会话到本机');assert.ok(text(tree.toJSON()).includes('synthetic save failure'));assert.equal(savedRows.length,priorSaved);
   failSave=false;await click('保存当前会话到本机');assert.equal(savedRows.length,priorSaved+1);
   assert.equal(savedRows[0].snapshot.usage_ledger.version,1);
@@ -362,6 +374,9 @@ function text(node) { return typeof node === 'string' ? node : (node?.children||
   await click('查看已保存会话');corruptLoad=true;await click('恢复这份会话');
   assert.ok(text(tree.toJSON()).includes('格式无效'));assert.ok(!text(tree.toJSON()).includes('容量故障重开后的完整问题'));
   corruptLoad=false;await click('恢复这份会话');assert.ok(text(tree.toJSON()).includes('容量故障重开后的完整问题'));
+  assert.equal(tree.root.findByProps({id:'question'}).props.value,questionDraft);
+  assert.equal(tree.root.findByProps({'aria-label':'本轮实际回答'}).props.value,answerDraft);
+  assert.ok(!savedRows[0].snapshot.spoken_dialogue.some(t=>t.text===answerDraft),'unconfirmed answer entered actual speech');
   assert.equal(native.recording,false);assert.equal(calls.filter(c=>c.name==='answer_start').length,beforeSaveCalls);
   assert.ok(!text(tree.toJSON()).includes('对方仍在说话'));
   await check('已获允许使用转写',true);await check('允许向 DeepSeek',true);await click('开始持续聆听与回答');

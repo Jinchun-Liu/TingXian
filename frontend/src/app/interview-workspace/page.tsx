@@ -26,7 +26,7 @@ import { isStructuredPath, StructuredSelection } from '@/lib/interview-structure
 import { SourceConflict } from '@/lib/interview-conflicts';
 import { FactCard, legacyFactCard } from '@/lib/interview-facts';
 import { DocumentMetadata, DocumentRecord, sourceStatusLabel } from '@/lib/interview-documents';
-import { Source, Turn, SessionSnapshot, SessionPage, SavedSession, parseSessionSnapshot, recoverSessionSnapshot } from '@/lib/interview-session';
+import { Source, Turn, SessionSnapshot, SessionInputDrafts, SessionPage, SavedSession, hasSessionInput, parseSessionSnapshot, recoverSessionSnapshot } from '@/lib/interview-session';
 import {InterviewUsage,usageLabel} from '@/lib/interview-usage';
 import { Input } from '@/components/ui/input';
 import {MeetingControls, CallNotice, useMeetingMode} from '@/components/interview/MeetingMode';
@@ -146,6 +146,11 @@ export default function InterviewPage() {
   useEffect(()=>{try{setPreferences(readPresentationPreferences(JSON.parse(localStorage.getItem('interview-presentation')||'null')));}catch{}},[]);
   const changePreferences=(next:PresentationPreferences)=>{setPreferences(next);localStorage.setItem('interview-presentation',JSON.stringify(next));};
   const current = useRef({ question: '', answer: '' });
+  const inputDrafts=useRef<SessionInputDrafts>({question:'',confirmed_answer:'',self_edit:null});
+  inputDrafts.current={question,confirmed_answer:confirmedAnswer,self_edit:editingSelfId?selfEditBase.current:null};
+  const transcriptSnapshot=useRef(transcripts),usageSnapshot=useRef(usage);
+  transcriptSnapshot.current=transcripts;usageSnapshot.current=usage;
+  const hasSessionContent=history.length>0 || hasSessionInput(inputDrafts.current);
   const utterances = useRef(new RemoteUtteranceQueue());
   const meeting = useMeetingMode(()=>{
     const pending=new Set(utterances.current.list().map(turn=>turn.id));
@@ -465,19 +470,32 @@ export default function InterviewPage() {
   const run = async (work: () => Promise<unknown>) => { setBusy(true); setNotice(''); try { await work(); } catch (e) { error(e); } finally { setBusy(false); } };
   const localSearch = () => run(async () => { setAutomatic(false); await cancel(); const result=await invoke<{evidence:Source[];conflicts:SourceConflict[]}>('rag_search', { question }); setSources(result.evidence); setConflicts(result.conflicts); setPhase('仅本地检索 · 未请求模型'); });
   const end = () => run(async () => {
-    setAutomatic(false); live.current.automatic = false; await cancel();
-    await stopInterviewAudio();
-    microphoneGate.current.close(); audioHealth.current.close(); syncHealth(); setHistory(h => h.map(t => t.status === 'listening' ? {...t,status:'recorded'} : t)); setMicLevel(0); setLevel(0);
-    await invoke('session_clear');
-    setQuestion(''); setConfirmedAnswer(''); meeting.reset(); utterances.current.reset(); setQueued(0);
-    await saveSessionSnapshot();
-    current.current = { question: '', answer: '' }; setPhase('会话已结束 · 已保存到本机，可恢复'); await refresh();
+    if(sessionOperation.current)throw Error('请等待当前会话操作完成');
+    sessionOperation.current=true;
+    try {
+      setAutomatic(false); live.current.automatic = false; await cancel();
+      await stopInterviewAudio();
+      acceptTranscripts.current=false;
+      microphoneGate.current.close(); audioHealth.current.close(); syncHealth(); setMicLevel(0); setLevel(0);
+      historyRef.current=historyRef.current.map(t=>t.status==='listening'?{...t,status:'recorded'}:t);setHistory(historyRef.current);
+      // Persist before clearing native state or any input. A failed save is retryable.
+      const saved=await saveSessionSnapshot();
+      await invoke('session_clear');
+      const savedInputs=saved.input_drafts??{question:'',confirmed_answer:'',self_edit:null};
+      if(JSON.stringify(inputDrafts.current)===JSON.stringify(savedInputs)){
+        setQuestion('');setConfirmedAnswer('');setEditingSelfId(null);selfEditBase.current=null;
+      }else setNotice('会话已保存；保存期间新输入的文字仍留在输入框，尚未保存。');
+      meeting.reset(); utterances.current.reset(); setQueued(0);
+      current.current = { question: '', answer: '' }; setPhase('会话已结束 · 已保存到本机，可恢复'); await refresh();
+    } finally {sessionOperation.current=false;}
   });
-  const sessionSnapshot = (): SessionSnapshot => parseSessionSnapshot({version:1,history:historyRef.current,transcripts,spoken_dialogue:spoken.current,current:current.current,calls:usageLedger.current.acceptedCalls(),usage,usage_ledger:usageLedger.current.snapshot()});
+  const sessionSnapshot = (): SessionSnapshot => parseSessionSnapshot({version:1,history:historyRef.current,transcripts:transcriptSnapshot.current,spoken_dialogue:spoken.current,current:current.current,calls:usageLedger.current.acceptedCalls(),usage:usageSnapshot.current,usage_ledger:usageLedger.current.snapshot(),...(hasSessionInput(inputDrafts.current)?{input_drafts:inputDrafts.current}:{})});
   const saveSessionSnapshot = async () => {
-    const saved = await invoke<SavedSession>('interview_session_save',{snapshot:sessionSnapshot(),confirmed:true});
+    const snapshot=sessionSnapshot();
+    const saved = await invoke<SavedSession>('interview_session_save',{snapshot,confirmed:true});
     setSavedSessions(null);setSavedBefore(null);
     setNotice(`已保存到本机（${new Date(saved.saved_at).toLocaleString('zh-CN')}，${saved.turns} 条发言）。之后的新内容需再次保存；重启后可点击“查看已保存会话”。`);
+    return snapshot;
   };
   const listSessions = (more=false) => run(async()=>{
     if(!more)setSavedSessions([]);
@@ -494,10 +512,11 @@ export default function InterviewPage() {
     if (sessionOperation.current || recording.isRecording || requests.current.size>0) throw Error('请先结束当前采集和回答，再恢复保存记录');
     if ((historyRef.current.length || question || confirmedAnswer) && !allowReplaceSession) throw Error('请先保存当前内容，再明确允许替换当前显示');
     const previousHistory=historyRef.current;
+    const previousInputs=JSON.stringify(inputDrafts.current);
     sessionOperation.current=true;acceptTranscripts.current=false;
     try {
       const saved=recoverSessionSnapshot(await invoke<unknown>('interview_session_load',{id}),crypto.randomUUID());
-      if (historyRef.current !== previousHistory) throw Error('当前内容发生变化，未替换；请重新选择恢复');
+      if (historyRef.current !== previousHistory || JSON.stringify(inputDrafts.current)!==previousInputs) throw Error('当前内容发生变化，未替换；请重新选择恢复');
       setAllowReplaceSession(false);
       live.current.automatic=false;setAutomatic(false);setAudioAllowed(false);setCloudAllowed(false);setFrozen(false);
       requests.current.clear();meeting.reset(); utterances.current.reset();latencies.current.clear();setQueued(0);setGenerating(false);
@@ -507,14 +526,15 @@ export default function InterviewPage() {
       presentationEpoch.current=crypto.randomUUID();setSelectedQuestion(null);setFeedGeneration(v=>v+1);
       current.current=saved.current;setCalls(saved.calls);setUsage(saved.usage);setLimit(Math.max(DEFAULT_REQUEST_LIMIT,saved.calls));
       usageLedger.current=new InterviewUsage(saved.usage_ledger??undefined,saved.calls);setUsageVersion(v=>v+1);
-      setQuestion('');setAnswer('');setSources([]);setConflicts([]);setConfirmedAnswer('');setEditingSelfId(null);setTiming('');
-      selfEditBase.current=null;
+      const draft=saved.input_drafts;
+      setQuestion(draft?.question??'');setAnswer('');setSources([]);setConflicts([]);setConfirmedAnswer(draft?.confirmed_answer??'');setEditingSelfId(draft?.self_edit?.id??null);setTiming('');
+      selfEditBase.current=draft?.self_edit??null;
       setSavedSessions(null);setSavedBefore(null);setCompactControls(false);
-      setPhase('已恢复保存会话 · 采集和自动回答均未开启');setNotice('已载入保存时的双方发言、AI建议和来源。旧来源与事实版本仅供回顾；不会自动补发未完成问题。继续前请重新确认转写和外发许可。');
+      setPhase('已恢复保存会话 · 采集和自动回答均未开启');setNotice('已载入保存时的会话与输入草稿。草稿仍未提交或确认；旧来源与事实版本仅供回顾，不会自动补发问题。继续前请重新确认转写和外发许可。');
     } finally {sessionOperation.current=false;}
   });
   const exportSession = () => run(async () => {
-    const snapshot = { exported_at: new Date().toISOString(), latency_notes: '各阶段为稳定转写到达界面（手动为提交时刻）起的毫秒数；发声结束为VAD估计，非人工标注。native到界面使用系统时钟桥接，其余界面阶段使用单调时钟；无效桥接或强制停止时缺失，不补零。request_sent为界面收到原生发送事件的时刻；首句为建议回答中首个句末标点到达，不等于人工语义验收。', mode: 'AI 建议不等于本人实际回答', spoken_dialogue: spoken.current, transcripts, history, current: current.current, calls:usageLedger.current.acceptedCalls(), usage, usage_ledger:usageLedger.current.snapshot() };
+    const snapshot = { input_drafts:inputDrafts.current, exported_at: new Date().toISOString(), latency_notes: '各阶段为稳定转写到达界面（手动为提交时刻）起的毫秒数；发声结束为VAD估计，非人工标注。native到界面使用系统时钟桥接，其余界面阶段使用单调时钟；无效桥接或强制停止时缺失，不补零。request_sent为界面收到原生发送事件的时刻；首句为建议回答中首个句末标点到达，不等于人工语义验收。', mode: 'AI 建议不等于本人实际回答', spoken_dialogue: spoken.current, transcripts, history, current: current.current, calls:usageLedger.current.acceptedCalls(), usage, usage_ledger:usageLedger.current.snapshot() };
     const result = await invoke<{content:string;credentials_redacted:boolean}>('interview_session_export',{snapshot});
     const url = URL.createObjectURL(new Blob([result.content], { type: 'application/json' }));
     try {const a = document.createElement('a'); a.href = url; a.download = 'interview-session.json'; a.click();}
@@ -547,7 +567,7 @@ export default function InterviewPage() {
       microphoneGate.current.close(); audioHealth.current.close(); syncHealth();
       const recovery = await indexedDBService.snapshotInterviewHistory();
       const report = await invoke<{archive_path:string; recording_folders:number; database_meetings:number; saved_sessions?:number}>('interview_history_clear', {
-        snapshot: { current_session: { history: historyRef.current, transcripts, spoken_dialogue: spoken.current, current: current.current, calls:usageLedger.current.acceptedCalls(), usage, usage_ledger:usageLedger.current.snapshot() }, recovery }
+        snapshot: { current_session: { input_drafts:inputDrafts.current, history: historyRef.current, transcripts, spoken_dialogue: spoken.current, current: current.current, calls:usageLedger.current.acceptedCalls(), usage, usage_ledger:usageLedger.current.snapshot() }, recovery }
       });
       archivePath = report.archive_path;
       await indexedDBService.removeArchivedInterviewHistory(recovery);
@@ -705,7 +725,7 @@ export default function InterviewPage() {
 
           <small>截屏会将所选整屏和近期对话发送至视觉模型。</small>
         </div></details>
-        {history.length>0&&<details className="desk-fold"><summary>本次会话</summary><div><Button variant="outline" size="sm" disabled={busy || !history.length} onClick={()=>run(saveSessionSnapshot)}>保存当前会话到本机</Button><Button variant="outline" size="sm" onClick={exportSession}>导出本次记录</Button><Button variant="outline" size="sm" disabled={busy || !history.length} onClick={end}>结束会话并保留历史</Button></div></details>}
+        {hasSessionContent&&<details className="desk-fold"><summary>本次会话</summary><div><Button variant="outline" size="sm" disabled={busy || !hasSessionContent} onClick={()=>run(saveSessionSnapshot)}>保存当前会话到本机</Button><Button variant="outline" size="sm" onClick={exportSession}>导出本次记录</Button><Button variant="outline" size="sm" disabled={busy || !hasSessionContent} onClick={end}>结束会话并保留历史</Button></div></details>}
         <details className="desk-fold"><summary>连接与用量</summary><div>
           <div className="desk-levels">
             <label>系统<meter min="0" max="1" value={Math.min(1,level)} /></label>
@@ -797,7 +817,7 @@ export default function InterviewPage() {
       <div className="desk-panel-body"><div className="tx-history">
       <section><header className="tx-section-head"><h3>已保存会话</h3></header>{(history.length>0 || question || confirmedAnswer) && <label className="block"><input type="checkbox" disabled={busy || recording.isRecording || generating} checked={allowReplaceSession} onChange={e=>setAllowReplaceSession(e.target.checked)} /> 我已保存需要的内容，允许替换当前显示（未保存内容会丢失）</label>}{!savedSessions.length && <p className="tx-empty-line">暂无已保存会话</p>}{savedSessions.map(s=><div key={s.id} className="tx-history-row"><span>{new Date(s.saved_at).toLocaleString('zh-CN')} · {s.turns} 条发言 · {s.calls} 次调用</span><Button size="sm" variant="outline" disabled={busy || recording.isRecording || generating || (!!(history.length || question || confirmedAnswer) && !allowReplaceSession)} onClick={()=>restoreSession(s.id)}>恢复这份会话</Button><SavedSessionPreview id={s.id}/></div>)}{savedBefore!==null && <Button variant="outline" disabled={busy} onClick={()=>listSessions(true)}>更早的保存记录</Button>}</section>
       <PreviousMeetings initialId={initialMeetingId}/>
-      <div className="tx-session-actions">{history.length>0 && <div><Button variant="outline" size="sm" disabled={busy || !history.length} onClick={()=>run(saveSessionSnapshot)}>保存当前会话到本机</Button><Button variant="outline" size="sm" onClick={exportSession}>导出本次记录</Button><Button variant="outline" size="sm" disabled={busy || !history.length} onClick={end}>结束会话并保留历史</Button></div>}<details><summary>清理历史</summary><p>已保存会话将一并移入废纸篓。</p><Button variant="outline" size="sm" disabled={busy} onClick={()=>sendCommand('clear')}>清空历史，重新开始</Button></details></div>
+      <div className="tx-session-actions">{hasSessionContent && <div><Button variant="outline" size="sm" disabled={busy || !hasSessionContent} onClick={()=>run(saveSessionSnapshot)}>保存当前会话到本机</Button><Button variant="outline" size="sm" onClick={exportSession}>导出本次记录</Button><Button variant="outline" size="sm" disabled={busy || !hasSessionContent} onClick={end}>结束会话并保留历史</Button></div>}<details><summary>清理历史</summary><p>已保存会话将一并移入废纸篓。</p><Button variant="outline" size="sm" disabled={busy} onClick={()=>sendCommand('clear')}>清空历史，重新开始</Button></details></div>
       </div></div></section>}
     {!split && <div className="desk-reading" hidden={panelOpen}>
       <AnswerConversation key={feedGeneration} history={history} preferences={preferences} selectedId={selectedQuestion} onSelect={setSelectedQuestion} onEdit={editTurn} />

@@ -8,11 +8,24 @@ const MAX_SNAPSHOT:usize=16*1024*1024;
 pub struct Current { pub question:String,pub answer:String }
 #[derive(Clone,Debug,Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SelfEdit {pub id:String,pub text:String}
+#[derive(Clone,Debug,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputDrafts {pub question:String,pub confirmed_answer:String,pub self_edit:Option<SelfEdit>}
+impl InputDrafts {
+    fn has_content(&self)->bool {!self.question.is_empty() || !self.confirmed_answer.is_empty() || self.self_edit.is_some()}
+}
+#[derive(Clone,Debug,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Snapshot {
     pub version:u32,pub history:Vec<Value>,pub transcripts:Vec<Value>,pub spoken_dialogue:Vec<Value>,
     pub current:Current,pub calls:u32,pub usage:String,
     #[serde(default,skip_serializing_if="Option::is_none")]
     pub usage_ledger:Option<Value>,
+    // Additive to version 1: old saved sessions remain readable and unchanged.
+    // Drafts never enter the spoken dialogue or confirmed answers implicitly.
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub input_drafts:Option<InputDrafts>,
 }
 #[derive(Debug,Serialize,Deserialize)]
 pub struct SavedSession {pub id:i64,pub saved_at:String,pub turns:i64,pub calls:i64}
@@ -24,7 +37,7 @@ pub async fn init(pool:&SqlitePool)->Result<(),String> {
 }
 fn valid_text(v:&Value,key:&str)->bool {v.get(key).and_then(Value::as_str).is_some()}
 fn validate(snapshot:&Snapshot)->Result<(),String> {
-    if snapshot.version!=1 || snapshot.history.is_empty() || snapshot.history.len()>10000 || snapshot.transcripts.len()>120 || snapshot.spoken_dialogue.len()>120 {return Err("会话版本或记录数量无效；未保存或替换当前记录".into());}
+    if snapshot.version!=1 || (snapshot.history.is_empty() && !snapshot.input_drafts.as_ref().is_some_and(InputDrafts::has_content)) || snapshot.history.len()>10000 || snapshot.transcripts.len()>120 || snapshot.spoken_dialogue.len()>120 {return Err("会话版本或记录数量无效；未保存或替换当前记录".into());}
     let mut ids=std::collections::HashSet::new();
     for t in &snapshot.history {
         if !["remote","self","manual"].contains(&t["role"].as_str().unwrap_or("")) || !["listening","queued","generating","done","error","cancelled","recorded"].contains(&t["status"].as_str().unwrap_or(""))

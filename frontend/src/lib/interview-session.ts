@@ -6,7 +6,9 @@ import type {TranscriptInput} from './interview-scheduler';
 import {parseUsageSnapshot,UsageSnapshot} from '@/lib/interview-usage';
 export type Source = { source_id: string; path: string; location: string; text: string; kind: string; allow_external: boolean; hash?: string; root?: string; metadata?: DocumentMetadata };
 export type Turn = { passive?:boolean; meeting_mode?:string; scenario?:ConversationScenario; restored_from?: string; role: 'remote' | 'self' | 'manual'; sequence_id?: number; utterance_id?: number | null; microphone_epoch?: number | null; capture_session?: number; id: string; question: string; confirmed_answer: string | null; suggestion: string; status: 'listening' | 'queued' | 'generating' | 'done' | 'error' | 'cancelled' | 'recorded'; sources: Source[]; conflicts?: SourceConflict[]; fact_version?: number; time: string; timing: string; latency?: LatencyRecord };
-export type SessionSnapshot={version:1;history:Turn[];transcripts:TranscriptInput[];spoken_dialogue:TranscriptInput[];current:{question:string;answer:string};calls:number;usage:string;usage_ledger?:UsageSnapshot|null};
+/** Unsubmitted input is not dialogue, a confirmed answer, or an AI request. */
+export type SessionInputDrafts={question:string;confirmed_answer:string;self_edit:{id:string;text:string}|null};
+export type SessionSnapshot={version:1;history:Turn[];transcripts:TranscriptInput[];spoken_dialogue:TranscriptInput[];current:{question:string;answer:string};calls:number;usage:string;usage_ledger?:UsageSnapshot|null;input_drafts?:SessionInputDrafts|null};
 export type SavedSession={id:number;saved_at:string;turns:number;calls:number};
 export type SessionPage={sessions:SavedSession[];next_before:number|null};
 const object=(v:any)=>v!==null && typeof v==='object' && !Array.isArray(v);
@@ -28,13 +30,20 @@ function transcriptValid(v:any):boolean {
     && typeof v.is_partial==='boolean' && number(v.audio_start_time) && number(v.audio_end_time)
     && ['utterance_id','microphone_epoch','capture_session','native_session_id','confidence'].every(k=>v[k]==null || number(v[k]));
 }
+export function hasSessionInput(draft:SessionInputDrafts):boolean {
+  return !!(draft.question || draft.confirmed_answer || draft.self_edit);
+}
+function inputDraftsValid(v:any):boolean {
+  return strings(v,['question','confirmed_answer']) && (v.self_edit===null || strings(v.self_edit,['id','text']));
+}
 /** Validate the full payload before changing the live window. No best-effort
  * partial recovery that could silently mix or drop dialogue. */
 export function parseSessionSnapshot(raw:unknown):SessionSnapshot {
   const v:any=raw;
-  if(!object(v) || v.version!==1 || !Array.isArray(v.history) || !v.history.length || v.history.length>10000
+  if(!object(v) || v.version!==1 || !Array.isArray(v.history) || v.history.length>10000
     || !strings(v.current,['question','answer']) || !Number.isSafeInteger(v.calls) || v.calls<0 || typeof v.usage!=='string'
     || ![v.transcripts,v.spoken_dialogue].every(a=>Array.isArray(a) && a.length<=120 && a.every(transcriptValid)))throw Error('保存的会话格式无效，当前记录保留');
+  if((v.input_drafts!=null && !inputDraftsValid(v.input_drafts)) || (!v.history.length && !(v.input_drafts && hasSessionInput(v.input_drafts))))throw Error('保存的输入格式无效或会话为空，当前记录保留');
   const ids=new Set<string>();
   for(const t of v.history){
     if((t.scenario!==undefined && !['general','interview','learning','meeting'].includes(t.scenario)) || !strings(t,['id','question','suggestion','time','timing']) || ids.has(t.id) || !nullableString(t.confirmed_answer)
@@ -49,6 +58,7 @@ export function parseSessionSnapshot(raw:unknown):SessionSnapshot {
 export function recoverSessionSnapshot(raw:unknown,prefix:string):SessionSnapshot {
   const s=parseSessionSnapshot(raw);
   s.history=s.history.map(t=>({...t,restored_from:prefix,id:`restored-${prefix}-${t.id}`,status:t.status==='generating'?'cancelled':['queued','listening'].includes(t.status)?'recorded':t.status}));
+  if(s.input_drafts?.self_edit)s.input_drafts.self_edit.id=`restored-${prefix}-${s.input_drafts.self_edit.id}`;
   if(s.usage_ledger)s.usage_ledger.requests=s.usage_ledger.requests.map(r=>({...r,question_id:`restored-${prefix}-${r.question_id}`,state:r.state==='pending'?'cancelled':r.state}));
   return parseSessionSnapshot(s);
 }
