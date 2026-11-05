@@ -165,7 +165,7 @@ GUI 证据位于 `gui-installed-original/01-home.png` / `.txt`、`02-audio-setti
 - 同一命令行上下文读取的 HKCU 卸载登记仍指向完整的 `D:/Applications/TingXian`，显示版本/卸载命令/路径均未改变；该上下文所见 8 个资料文件摘要与安装前副本逐项一致。它们后来被确认属于 Codex 缓存副本，不能据此推断桌面资料逐文件未变；实际桌面应用重启后仍恢复五份合成资料并可检索。
 - **安装失败返回正确错误码的修复通过实机验证；新包完整安装未通过。** 这次没有重复 WPR，不能把前一包的内核事件写成新包重新采样结果；新包失败形态与此前一致，原防护状态下的新装仍是待处理的兼容性问题。
 
-证据：`ci-fb5b8f7/verified.json`、`workflow.log`、`preview-fb5b8f7-install/installation.json`。已在本地准备 `360-compatibility-report-draft.md`，尚未提交或上传；原始 PML/ETL 不进入公开日志或厂商反馈草稿。[360 官方反馈页](https://open.soft.360.cn/report.php)现场显示文件上限 512 MB，并要求短信验证码和邮箱；完整安装器超过限额，因此不能直接声称已完成官方误报申诉。
+证据：`ci-fb5b8f7/verified.json`、`workflow.log`、`preview-fb5b8f7-install/installation.json`。已在本地准备 `360-compatibility-report-draft.md`，尚未提交或上传；原始 PML/ETL 不进入公开日志或厂商反馈草稿。[360 官方反馈页](https://open.soft.360.cn/report.php)现场显示文件上限 512 MB，并要求短信验证码和邮箱。完整安装器超过此表单限额；后续找到官方大文件链接受理说明，见下一节，不再把表单限额当作唯一渠道。
 
 ## 续测：桌面资料路径与合成回收核对
 
@@ -183,9 +183,29 @@ GUI 证据位于 `gui-installed-original/01-home.png` / `.txt`、`02-audio-setti
 - 安装版重新扫描五格式原文，JSON 预览分别显示数字 0 与 null 空值，JSON/YAML 未选字段时导入按钮禁用。嵌套滚动中的自动化定位偏差曾先导入四份合成文件；记录该中间状态后补齐 YAML，并关闭五份文件的片段外发。最终报告为 discovered/included/success 均 5、unchanged 4、excluded 0、chunks 5、failures 空、耗时 605 ms、索引版本 4（`07-reimport-result.txt`）。这是从保留原文重新导入，不是回收站归档回导或会话恢复验收。
 - 恢复后再次执行同一合成本地查询，五种格式及页/段落/字段来源全部返回，AI 调用仍为 0；证据 `08-recovered-local-search.jpg` / `.txt`。应用保持运行且无采集，未退出或丢弃输入；输入框只保留本轮已留证的合成检索词。
 
+## 续测：无可见拦截记录与 ONNX 来源复核
+
+用户已检查 21:09 左右的产品防护记录，回复“未找到相关条目”。记录为产品界面未提供规则信息，不能据此排除同日原包的 WPR 归因。尚未取得规则名或厂商处置结果；没有再次运行同条件安装、关闭防护或添加信任。
+
+假设：新安装包的 ONNX 组件与项目锁定的上游文件一致。该核对决定是否需要修复构建取包/打包链；三个已声明组件任一不符即停止并定位。全部一致则停止重复重打包试探，转向产品规则核查。每个组件最多 90 秒，只在内存读取 NSIS 内容，不把 DLL 写入失败安装目录、不运行新程序。
+
+| 核对 | 实际结果 |
+| --- | --- |
+| 新包 `onnxruntime.dll` | 12,418,080 bytes，SHA-256 `579b636403983254346a5c1d80bd28f1519cd1e284cd204f8d4ff41f8d711559`；与 `build/onnxruntime.rs` 的上游锁定值、原完整安装中的文件逐字节一致 |
+| 共享 DLL / 许可证 | `onnxruntime_providers_shared.dll` 与 `onnxruntime-LICENSE.txt` 的大小及 SHA-256 也全部匹配源码锁定值和原完整安装 |
+| 原完整安装中首个 ONNX DLL | Authenticode `Valid`，发布者 Microsoft Corporation，文件版本 `1.22.20250508.2.f217402` |
+| 应用 / 新安装器 | `NotSigned`，与测试版配置一致；没有证据证明“未签名”就是本次 360 规则条件，不能以购买或自签证书替代归因 |
+| 原公开发布资产 | GitHub 元数据再次核对大小 734,767,333 bytes 及原 SHA-256 一致，取得不需要登录的公开下载地址 |
+
+以上证据支持“组件未在此打包链中被改写”，不等于安全软件已审核、没有任何风险或安装已修复。上游来源为 [Microsoft ONNX Runtime v1.22.0](https://github.com/microsoft/onnxruntime/releases/tag/v1.22.0)；项目锁定压缩包及逐文件摘要，未临时换版本。
+
+[360 官方上传须知](https://open.soft.360.cn/guide/guide_2.php?i=3)允许较大软件提供最终文件下载链接，并要求避免需注册登录的中转地址。已据此准备原发布资产的直接链接及脱敏邮件正文，请厂商确认大文件受理渠道、拒绝规则与保持防护开启的处置办法。原始 PML/ETL、个人资料、会话数据库和凭证均不包含在待审阅材料中；未经用户确认不发送邮件。反馈准备不等于已受理或已解除拦截。
+
+本地证据：`provenance-followup/verify-payload.py`、`payload-verification.json`、`signatures.json`、`public-release-asset.json`。可审阅正文为 `360-feedback-email.txt`；材料 ZIP `360-review-materials-20261105.zip` 含正文与两份摘要 JSON，共 4,191 bytes，SHA-256 `649ae20bc1dccb9dbee9baf21eaa78fc4b8562a3fb870b8d5c046e13960ca39a`，逐项检查及 ZIP 完整性核对通过。该 ZIP 是诊断材料，不是替代安装包。听弦仍在原完整安装目录运行，本轮未操作 GUI、音频或 AI。
+
 ## 待继续
 
-1. 已确认 360FsFlt 回调返回拒绝；继续取得产品规则/拦截处置证据并验证普通用户安装。保持原失败目录和日志，不能把关闭防护后的对照算成防护开启时通过。
+1. 已确认 360FsFlt 回调返回拒绝；用户未找到产品界面条目，组件来源核对通过。取得用户外部联系授权后向官方核查规则与处置方法，再验证普通用户安装。保持原失败目录和日志，不能把关闭防护后的对照算成防护开启时通过。
 2. 新包已构建并校验；解除产品拦截原因后验证完整普通安装、修正后的 GUI 系统提示、音频模型和保存恢复。当前原安装版的通过项不能代替新包验收。
 3. 补齐合成资料卸载保留、重装及旧格式兼容。原安装版索引回收归档核对已通过，含会话的保存退出仍未验证；任何后续升级前先核对备份的实际路径和内容。
 4. 使用者允许后开展本地系统声/麦克风分流、独立开关、三次停止再启与清空后再启，保持 AI 调用数 0。
