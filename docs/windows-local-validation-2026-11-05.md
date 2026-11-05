@@ -83,6 +83,28 @@ Windows 11 Pro x64，10.0.26200；Ryzen 7 9700X（8 核/16 线程）；32 GB 物
 
 源码修正：两个工作区使用后端已有 `os` 字段显示 Windows/macOS/Linux；输入框按 OS 提示 Ctrl/⌘，原有快捷键处理不变。现有输入框回归及 TypeScript 检查通过。当前发布二进制未重建，**修正后的安装版 GUI 尚未验证**。
 
+## 续测：DLL 创建失败的底层返回（20:15—20:36）
+
+用户要求继续定位根因，保持防护开启、暂不采集，后续下载与测试默认位于 D 盘。安装包仍为原 beta.1，摘要未变；当前源码基于 `c043caa`，未回退远端后续提交。
+
+假设与决策：在原 NSIS 3.11 安装器的文件创建返回点记录系统错误，可区分解压损坏、共享冲突和创建拒绝；补充原生调用参数可判定是否为安装器传参错误。每次只使用全新合成目录，首个写入失败即结束本轮拥有的安装器进程，90 秒为上限。仅临时设置该进程的调试断点，未改动安装 EXE、用户资料或防护设置。
+
+| 层级 | 证据 | 结论边界 |
+| --- | --- | --- |
+| NSIS 文件打开 | `CreateFileW(onnxruntime.dll, GENERIC_WRITE, FILE_SHARE_READ, CREATE_ALWAYS)` 返回无效句柄，`GetLastError = 5` | 拒绝发生于内容写入/解压之前，不是本次被文件占用所报告的共享冲突 32 |
+| Windows 原生调用 | `NtCreateFile` 返回 `0xc0000022` (`STATUS_ACCESS_DENIED`) | 原生文件创建被拒绝；仍不足以判定具体驱动或权限规则 |
+| 参数对照 | EXE、许可证文本和 DLL 的 DesiredAccess 均 `0x40100080`，属性 `0`，ShareAccess `1`，Disposition `5`，Options `0x60`，ObjectAttributes `0x40`；前两项成功，仅 DLL 失败 | 未发现 DLL 专用访问参数或加密属性异常 |
+| 防护信息 | 只读枚举发现多家文件/网络过滤组件；可读的 360 文件日志未匹配到安装器/ONNX，Defender 查询亦无相关事件 | 没有用户可见提示或日志匹配，均不能排除或认定拦截来源；未关闭/排除任何防护 |
+| 启动身份 | 工具子进程、Explorer 与安装器的 `GetPackageFullName` 均返回无包身份 15700 | 不能只用父进程名或这一 API 证明已脱离路径重定向；之前实际模型准备的启动差异仍独立保留 |
+
+证据位于仓库外 `artifacts/2026-11-05/trace-installer-open.jsonl`、`trace-installer-native.jsonl`、`trace-installer-parameters.jsonl`，及对应限时诊断脚本。三份失败目录保留。交互安装再次停在同一 DLL 后，通过“中止”进入“安装程序未能完成安装”，未选择忽略。
+
+已从微软下载 Process Monitor 4.12 至 D 盘，Authenticode 为 Valid、签名者 Microsoft Corporation；用户允许管理员诊断授权。将限定安装器事件并检查内核调用栈，尚无这一步的根因结论。原始系统日志只保留本地，不上传公开仓库。
+
+另外修正了可独立确认的安装器错误处理：通过 Tauri NSIS hook 设置 `AllowSkipFiles off`，防止静默安装跳过必要文件仍返回成功。CI 增加真实安装器失败回归：在全新合成目录用文件夹占据 `onnxruntime.dll`，断言非零退出且未创建卸载器；然后继续完整安装检查。这是源码修复，等待新构建与实机验证，**不能记为 DLL 拒绝写入已修复**。
+
+补充开发环境：VS 2022 Community 虽存在，本机未发现 C++ `VC/Tools/MSVC` 工具链，不能认为本机已具备构建条件。
+
 ## 待继续
 
 1. 定位 NSIS 写 DLL 的具体失败机制，取得系统文件操作证据；保留当前不完整目录和日志，不重复同条件安装，不因未看到提示排除或认定安全软件。

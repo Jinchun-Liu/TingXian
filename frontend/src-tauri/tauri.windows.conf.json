@@ -16,6 +16,7 @@
       "webviewInstallMode": {"type": "offlineInstaller"},
       "nsis": {
         "installMode": "currentUser",
+        "installerHooks": "../../packaging/windows/installer-hooks.nsh",
         "languages": ["SimpChinese", "English"],
         "displayLanguageSelector": true
       }

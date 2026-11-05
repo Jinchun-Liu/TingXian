@@ -1,6 +1,16 @@
 $ErrorActionPreference = 'Stop'
 $installers = @(Get-ChildItem "$PSScriptRoot/../target/release/bundle/nsis/*-setup.exe")
 if ($installers.Count -ne 1) { throw 'Expected one installer' }
+# A synthetic directory occupying a required DLL path forces a real File error.
+# This must abort before uninstall registration instead of silently ignoring it.
+# Retain the failed directory as evidence; never use an existing installation.
+$blockedLocation = Join-Path $env:RUNNER_TEMP '听弦 Windows 安装失败验收'
+if (Test-Path -LiteralPath $blockedLocation) { throw "Test destination already exists: $blockedLocation" }
+New-Item -ItemType Directory -Path (Join-Path $blockedLocation 'onnxruntime.dll') | Out-Null
+$blocked = Start-Process -FilePath $installers[0].FullName -ArgumentList @('/S', "/D=$blockedLocation") -Wait -PassThru
+if ($blocked.ExitCode -eq 0) { throw 'Installer reported success when a required DLL could not be written' }
+if (Test-Path -LiteralPath (Join-Path $blockedLocation 'uninstall.exe')) { throw 'Failed installation continued to create an uninstaller' }
+Write-Host "PASS installer stops on a required-file write failure (exit $($blocked.ExitCode))"
 $location = Join-Path $env:RUNNER_TEMP '听弦 Windows 安装验收'
 if (Test-Path $location) { throw "Test destination already exists: $location" }
 $process = Start-Process -FilePath $installers[0].FullName -ArgumentList @('/S', "/D=$location") -Wait -PassThru
