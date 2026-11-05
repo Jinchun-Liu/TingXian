@@ -20,7 +20,7 @@ unsafe extern "system" fn collect(monitor: HMONITOR, _: HDC, _: *mut RECT, data:
 }
 
 fn monitors() -> Result<Vec<Monitor>, String> {
-    let mut items = Vec::new();
+    let mut items: Vec<Monitor> = Vec::new();
     let ok = unsafe { EnumDisplayMonitors(null_mut(), null(), Some(collect), &mut items as *mut _ as LPARAM) };
     if ok == 0 || items.is_empty() { return Err("无法读取 Windows 显示器，请检查当前桌面会话".into()); }
     items.sort_by_key(|m| (!m.primary, m.id));

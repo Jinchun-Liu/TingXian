@@ -88,6 +88,17 @@ def main():
     shutil.copy2(media / "ffmpeg.exe", binaries / "ffmpeg-x86_64-pc-windows-msvc.exe")
     for dll in media.glob("*.dll"):
         shutil.copy2(dll, binaries / dll.name)
+    # ONNX Runtime requires the MSVC runtime even when the Rust executable is static.
+    # App-local redistribution keeps ordinary installation free of developer tools/UAC.
+    redist_value = os.environ.get("VCToolsRedistDir")
+    if not redist_value:
+        raise RuntimeError("Run from an MSVC developer shell (VCToolsRedistDir is required)")
+    redist = Path(redist_value)
+    crt = list(redist.glob("x64/Microsoft.VC*.CRT/*.dll"))
+    if not {"msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"}.issubset({p.name.lower() for p in crt}):
+        raise RuntimeError("MSVC x64 redistributable runtime is incomplete")
+    for library in crt + list(redist.glob("x64/Microsoft.VC*.OpenMP/*.dll")):
+        shutil.copy2(library, media / library.name)
     notices = stage / "licenses"
     notices.mkdir(exist_ok=True)
     shutil.copy2(ROOT / "LICENSE.md", notices / "TingXian-MIT.txt")
@@ -96,6 +107,7 @@ def main():
     shutil.copy2(ROOT / "packaging/windows/THIRD-PARTY.md", notices / "THIRD-PARTY.md")
     shutil.copy2(LOCK, notices / "runtime-lock.json")
     (notices / "ffmpeg-build.txt").write_text(config, encoding="utf-8")
+    (notices / "msvc-runtime.txt").write_text("Microsoft Visual C++ runtime " + redist.name + "\nApp-local redistributable DLLs from Visual Studio Redist x64 CRT/OpenMP.\nhttps://visualstudio.microsoft.com/license-terms/vs2022-cruntime/\n", encoding="utf-8")
     for child in ffmpeg.parent.parent.iterdir():
         if child.name == "bin":
             continue
