@@ -4,6 +4,8 @@
 
 ## 自动验证
 
+设备生命周期的[组件检查](video-session-validation-2026-11-06.md)：ddada3c 在 CI 与本机通过 15+10+13 组及只读诊断。13 组中 OS 设备操作是故障注入，实际管道撤销/中性输出另测；本机 API 导出存在而 COM 媒体源未安装。未执行真实设备注册或摄像头采集，不能推导安装/FrameServer 已通过。
+
 受限 IPC 的[最新组件检查](video-ipc-validation-2026-11-06.md)：7abcfcf 在 Windows CI 与本机各通过 15 组媒体源、10 组双进程检查。实际传输合成像素，验证错误身份拒绝、停止/断线中性化及显式恢复；尚未注册虚拟设备或验证 LocalService/FrameServer、真实摄像头和会议。
 
 原生输出组件另有[无设备注册检查](video-source-validation-2026-11-06.md)：6ba5a80 的独立 DLL 在 Windows CI 与本机各通过 15 组真实 COM/MF 合成样本检查。它证明组件字节输出及生命周期，不证明虚拟摄像头已安装、会议软件已接收或眼部处理已完成。
