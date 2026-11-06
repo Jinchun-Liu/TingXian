@@ -109,18 +109,23 @@ class LivePortraitRenderer:
         )
         self._prepared = False
 
-    def prepare(self, rgb):
+    def prepare(self, rgb, *, landmarks=None):
         import numpy as np
         if rgb.dtype != np.uint8 or rgb.ndim != 3 or rgb.shape[2] != 3:
             raise ValueError("portrait must be an RGB uint8 array")
         if rgb.shape[0] != rgb.shape[1] or not 256 <= rgb.shape[0] <= 2048:
             raise ValueError("provide a prepared square face crop, 256..2048 pixels")
+        if landmarks is not None:
+            landmarks = np.asarray(landmarks, dtype=np.float32)
+            if landmarks.shape != (203, 2) or not np.isfinite(landmarks).all() or (landmarks < 0).any() or (landmarks > rgb.shape[0]).any():
+                raise ValueError("registered landmarks must lie inside the portrait crop")
         self._prepared = False
         image = self.wrapper.prepare_source(rgb)
         self.info = self.wrapper.get_kp_info(image)
         self.source_kp = self.wrapper.transform_keypoint(self.info)
         self.feature = self.wrapper.extract_feature_3d(image)
-        landmarks = self.landmark.run(rgb)
+        if landmarks is None:
+            landmarks = self.landmark.run(rgb)
         self.eye_ratios = self.wrapper.calc_combined_eye_ratio([[0.0]], landmarks)
         self.eye_open = float(self.eye_ratios[0, :2].mean().item())
         if not math.isfinite(self.eye_open) or not 0.03 < self.eye_open < 0.8:

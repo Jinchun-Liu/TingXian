@@ -66,7 +66,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--weights", type=Path, required=True)
-    parser.add_argument("--portrait", type=Path, required=True)
+    portrait_source = parser.add_mutually_exclusive_group(required=True)
+    portrait_source.add_argument("--portrait", type=Path)
+    portrait_source.add_argument("--profile", type=Path, help="load a complete, verified local portrait profile")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seconds", type=int, default=10, choices=range(1, 11))
     parser.add_argument("--cudnn-benchmark", action="store_true",
@@ -81,7 +83,7 @@ def main():
     import torch
     torch.backends.cudnn.benchmark = args.cudnn_benchmark
 
-    report = {"scope": "offline_synthetic_frame_render", "upstream_commit": UPSTREAM_COMMIT,
+    report = {"scope": "offline_frame_render_with_synthetic_motion", "upstream_commit": UPSTREAM_COMMIT,
               "capture": False, "playback": False, "network_inference": False,
               "audio": False, "virtual_device": False, "meeting": False,
               "target_fps": 25, "native_size": [512, 512], "status": "started",
@@ -92,11 +94,20 @@ def main():
     rows = []
     snapshots = {}
     try:
-        report["portrait_sha256"] = hashlib.sha256(args.portrait.read_bytes()).hexdigest()
+        registered_landmarks = None
+        if args.profile:
+            from avatar.portrait_profile import load_profile
+            rgb, registered_landmarks, profile = load_profile(args.profile)
+            report["profile_id"] = profile["profile_id"]
+            report["portrait_source_kind"] = profile.get("source_kind", "unclassified_local_file")
+            report["portrait_sha256"] = profile["files"]["portrait.png"]
+        else:
+            report["portrait_source_kind"] = "unclassified_local_file"
+            report["portrait_sha256"] = hashlib.sha256(args.portrait.read_bytes()).hexdigest()
+            rgb = np.array(Image.open(args.portrait).convert("RGB"))
         t0 = time.perf_counter()
         renderer = LivePortraitRenderer(args.source, args.weights)
-        rgb = np.array(Image.open(args.portrait).convert("RGB"))
-        renderer.prepare(rgb)
+        renderer.prepare(rgb, landmarks=registered_landmarks)
         torch.cuda.synchronize()
         report["load_and_prepare_ms"] = (time.perf_counter() - t0) * 1000
         report["source_eye_ratio"] = renderer.eye_open
