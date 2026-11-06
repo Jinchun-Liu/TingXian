@@ -112,3 +112,12 @@
 - 采样证据将停止阻塞定位到设备监测循环中的`cpal::input_devices → supported_input_configs → AudioUnitGetProperty → AudioDeviceGetPropertyInfo`。源码修复改为直接读取CoreAudio名称/通道，枚举放到独立阻塞任务并限制并发与3秒等待，停止可取消等待；这不宣称已解决首次AudioDeviceStart等待或未收到音频的全部原因。
 - 上述修复的原生回归构建因`No space left on device`失败，新增测试尚未运行，修复尚未装入beta.1。失败时可用空间约102MiB，编译器临时文件释放后约1.8GiB。源码修改保留待验证，未删除缓存。beta.1不作为已通过音频验收的推荐版本。
 - 本地证据：`/tmp/tingxian-beta1-installed-check.log`、`/tmp/tingxian-beta1-installed-recovery-1106.png`、`/tmp/tingxian-beta1-start-sample.txt`、`/tmp/tingxian-beta1-stop-sample.txt`、`/tmp/tingxian-beta1-discovery-tests.log`。原始采样仅本机保留，不上传其中的本机路径与进程环境。
+
+## 设备扫描隔离与 macOS 原生 CI（2026-11-06）
+
+- `b65634f` 将设备枚举移出 async 执行器；同一进程最多保留一个扫描工作线程，调用方3秒超时后返回错误，不伪装成空设备列表。监测停止可立即取消等待，超时后未结束的驱动调用继续持有扫描名额，防止反复刷新堆积线程。无法强行终止系统驱动调用，仍需实机确认整个采集生命周期。
+- Mac 枚举直接读取 CoreAudio 的设备名称和输入/输出通道，不再为列出设备而打开 AudioUnit；保留内置扬声器和双向设备，排除应用自建的聚合 tap。本机独立只读诊断使用同类属性调用，74毫秒返回4个设备；该诊断不录音，也不是新版 Rust 安装包的实测。
+- 新增标准 Apple Silicon macOS runner 的生产前端构建、共享核心、设备超时/停止、会话恢复和面试 IPC 回归。没有采集权限、真实音频、真实 API 或安装器步骤；不能把这条 CI 作为完整通话验收。
+- 首轮 CI 因缺少 YAML 解析依赖失败，已在工作流安装项目固定文档依赖。第二轮 [42188577165](https://github.com/Jinchun-Liu/TingXian/actions/runs/42188577165) 中68项共享核心、4项设备扫描/监测测试通过；面试原生组39项通过、1项失败、1项真实废纸篓测试跳过。失败是旧断言未包括正常补齐的默认预算字段，`a9e316e` 改为明确验证旧调用者获得262144/8192/2048预算，并保留忙碌、会话、非法配置与退出隔离检查。
+- `a9e316e` 的完整重跑 [42190037410](https://github.com/Jinchun-Liu/TingXian/actions/runs/42190037410) 已成功：生产前端、共享核心、设备扫描/停止与面试原生回归全部通过。当前安装版仍是此前的beta.1，未替换，也未将上述修复宣称为真实收音已通过。
+- 用户补充首次启动曾出现系统录音权限提示。这可能解释部分启动等待，需在下次短测分别记录授权前后状态；现有证据不能将权限提示与设备扫描阻塞视为同一个原因。
