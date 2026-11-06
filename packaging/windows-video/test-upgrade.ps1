@@ -10,8 +10,8 @@ Set-StrictMode -Version Latest
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
     throw 'Run only on a disposable GitHub-hosted Windows runner.'
 }
-# Decision: can 0.1.0 be safely replaced, and does the new DLL fix premature
-# shutdown? Stop on any unexpected failure, data change, or incomplete rollback.
+# Decision: can 0.1.1 be safely replaced, and do format probes leave the producer
+# untouched? Stop on unexpected failure, data change, or incomplete rollback.
 # No device is created; all retained data is synthetic.
 $baseline = (Resolve-Path -LiteralPath $BaselineDirectory).Path
 $package = (Resolve-Path -LiteralPath $PackageDirectory).Path
@@ -19,8 +19,8 @@ $bin = (Resolve-Path -LiteralPath $BinaryDirectory).Path
 $evidence = [IO.Path]::GetFullPath($EvidenceDirectory)
 if (Test-Path -LiteralPath $evidence) { throw 'Preserve existing evidence.' }
 New-Item -ItemType Directory -Path $evidence | Out-Null
-$oldProduct = '{2265B958-40D3-48B6-8670-6402EB4F03EB}'
-$newProduct = '{8DA8F4D7-398C-4C94-856F-CF4482DA6D0D}'
+$oldProduct = '{8DA8F4D7-398C-4C94-856F-CF4482DA6D0D}'
+$newProduct = '{CDA85B35-A484-4930-B288-07F4BB9A5D8C}'
 $install = Join-Path $env:ProgramW6432 'TingXian\VideoSource'
 $serverKey = 'SOFTWARE\Classes\CLSID\{44D20DA7-55EC-4B4A-A767-99E97D6E5A90}\InprocServer32'
 $machine = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryView]::Registry64)
@@ -64,9 +64,9 @@ try {
             Assert-True ((Get-FileHash -LiteralPath (Join-Path $folder $item.file)).Hash.ToLowerInvariant() -ceq $item.sha256) 'Package digest differs.'
         }
     }
-    $old = Join-Path $baseline 'TingXian-VideoSource-0.1.0-experimental-x64.msi'
-    $new = Join-Path $package 'TingXian-VideoSource-0.1.1-experimental-x64.msi'
-    $rollback = Join-Path $package 'TingXian-VideoSource-0.1.1-ROLLBACK-FIXTURE-x64.msi'
+    $old = Join-Path $baseline 'TingXian-VideoSource-0.1.1-experimental-x64.msi'
+    $new = Join-Path $package 'TingXian-VideoSource-0.1.2-experimental-x64.msi'
+    $rollback = Join-Path $package 'TingXian-VideoSource-0.1.2-ROLLBACK-FIXTURE-x64.msi'
     Assert-True ((Run-Msi $old 'baseline-install') -eq 0) 'Baseline install failed.'
     Assert-True ($installer.ProductState($oldProduct) -eq 5) 'Baseline not installed.'
     $syntheticFile = Join-Path $install 'synthetic-upgrade-preserve.json'
@@ -77,10 +77,10 @@ try {
     try { $key.SetValue('SyntheticUpgradeSetting','keep') } finally { $key.Dispose() }
     Verify-Payload $baseline
     # A differential regression must fail for the known old bug, not any error.
-    & (Join-Path $bin 'tingxian-video-registration-test.exe') --registered-no-device 1> (Join-Path $evidence 'baseline-regression.stdout.log') 2> (Join-Path $evidence 'baseline-regression.stderr.log')
-    Assert-True ($LASTEXITCODE -eq 1) 'Old DLL unexpectedly passed the new lifetime regression.'
-    Assert-True ((Get-Content -LiteralPath (Join-Path $evidence 'baseline-regression.stderr.log') -Raw) -match '0xc00d3e85') 'Old DLL did not reproduce MF_E_SHUTDOWN.'
-    Passed 'pinned old DLL reproduces premature shutdown without a device'
+    & (Join-Path $bin 'tingxian-video-ipc-test.exe') (Join-Path $install 'TingXianVideoSource.dll') 1> (Join-Path $evidence 'baseline-regression.stdout.log') 2> (Join-Path $evidence 'baseline-regression.stderr.log')
+    Assert-True ($LASTEXITCODE -eq 1) 'Old DLL unexpectedly passed deferred-connection regression.'
+    Assert-True ((Get-Content -LiteralPath (Join-Path $evidence 'baseline-regression.stderr.log') -Raw) -match 'format probe consumed producer connection') 'Old DLL failed for an unexpected reason.'
+    Passed 'pinned old DLL reproduces producer consumption by a format probe'
 
     Assert-True ((Run-Msi $rollback 'upgrade-rollback') -eq 1603) 'Upgrade failure fixture did not fail.'
     Assert-True ($installer.ProductState($oldProduct) -eq 5 -and $installer.ProductState($newProduct) -eq -1) 'Upgrade rollback did not restore old product.'
@@ -94,7 +94,9 @@ try {
     Assert-True ($LASTEXITCODE -eq 0) 'Upgraded COM lifetime regression failed.'
     & (Join-Path $bin 'tingxian-video-source-test.exe') (Join-Path $install 'TingXianVideoSource.dll') | Set-Content -LiteralPath (Join-Path $evidence 'upgraded-source.log') -Encoding utf8
     Assert-True ($LASTEXITCODE -eq 0) 'Upgraded DLL source regressions failed.'
-    Passed 'upgrade preserves data and fixes installed COM lifetime'
+    & (Join-Path $bin 'tingxian-video-ipc-test.exe') (Join-Path $install 'TingXianVideoSource.dll') | Set-Content -LiteralPath (Join-Path $evidence 'upgraded-ipc.log') -Encoding utf8
+    Assert-True ($LASTEXITCODE -eq 0) 'Upgraded DLL IPC regressions failed.'
+    Passed 'upgrade preserves data and fixes installed probe/stream IPC lifetime'
 
     Assert-True ((Run-Msi $old 'downgrade-rejected') -eq 1603) 'Downgrade was not rejected.'
     Verify-Payload $package
@@ -113,7 +115,7 @@ try {
     Passed 'upgraded uninstall preserves unknown data'
     $success = $true
 } finally {
-    [ordered]@{result=$(if($success){'pass'}else{'fail'});checks=$checks;baseline_commit='9eb55d3db58489f5f96eadfcb311f86013b6bc9b';device_created=$false;physical_camera_opened=$false} |
+    [ordered]@{result=$(if($success){'pass'}else{'fail'});checks=$checks;baseline_commit='745d16fcfcede42218529cb3ab5748bc51a123b2';device_created=$false;physical_camera_opened=$false} |
         ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $evidence 'result.json') -Encoding utf8
     $machine.Dispose()
     [Runtime.InteropServices.Marshal]::FinalReleaseComObject($installer) | Out-Null

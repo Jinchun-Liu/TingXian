@@ -201,7 +201,7 @@ struct SourceFixture {
     ComPtr<IMFMediaStream> stream;
     ComPtr<IFrameReceiver> receiver;
     ComPtr<IFrameTransport> transport;
-    explicit SourceFixture(const wchar_t* path, const VideoPipeEndpoint* endpoint = nullptr) {
+    explicit SourceFixture(const wchar_t* path, const VideoPipeEndpoint* endpoint = nullptr, bool start_stream = true) {
         library = LoadLibraryExW(path, nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
         expect(library, "load media source");
         auto get_class = reinterpret_cast<HRESULT(__stdcall*)(REFCLSID, REFIID, void**)>(GetProcAddress(library, "DllGetClassObject"));
@@ -211,6 +211,9 @@ struct SourceFixture {
         if (endpoint) check(activation->SetBlob(PipeEndpointAttribute, reinterpret_cast<const BYTE*>(endpoint), sizeof(*endpoint)), "configure transient endpoint");
         check(activation->ActivateObject(IID_PPV_ARGS(&source)), "source");
         check(source.As(&receiver), "receiver"); check(source.As(&transport), "transport");
+        if (start_stream) start();
+    }
+    void start() {
         ComPtr<IMFSampleAllocatorControl> control; check(source.As(&control), "allocator control");
         ComPtr<IMFVideoSampleAllocator> allocator;
         check(MFCreateVideoSampleAllocatorEx(IID_PPV_ARGS(&allocator)), "allocator");
@@ -346,6 +349,16 @@ void run(const wchar_t* dll) {
     }
     {
         Child child;
+        {
+            SourceFixture probe(dll, &child.ready.endpoint, false);
+            expect(probe.status().state == TransportState::disconnected,
+                "format probe consumed producer connection");
+            expect(!probe.metrics().enabled && probe.metrics().accepted == 0,
+                "format probe enabled frame input");
+            DWORD available = 0;
+            expect(PeekNamedPipe(child.report.value, nullptr, 0, nullptr, &available, nullptr)
+                && available == 0, "format probe completed a producer handshake");
+        }
         SourceFixture configured(dll, &child.ready.endpoint);
         check(child.accepted(), "activation-configured handshake");
         ComPtr<IMFMediaSourceEx> extended; check(configured.source.As(&extended), "source attributes interface");
@@ -355,7 +368,18 @@ void run(const wchar_t* dll) {
         check(child.send({StartEpoch}), "activation begin"); check(child.send({Pixels}), "activation frame");
         configured.wait([&] { return configured.metrics().accepted == 1; }, "activation-configured frame missing");
         configured.pixels(160, 96);
+        passed("format probing preserves the producer for actual streaming activation");
         passed("MF activation config connects IPC without exposing its capability");
+    }
+    {
+        Child child;
+        SourceFixture stopped(dll, &child.ready.endpoint, false);
+        check(stopped.receiver->StopVideo(), "revoke pending activation endpoint");
+        stopped.start();
+        expect(stopped.status().state == TransportState::disconnected,
+            "late MF start reconnected after explicit video stop");
+        stopped.pixels(32, 128);
+        passed("explicit stop revokes an endpoint before delayed stream start");
     }
 }
 }

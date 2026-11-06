@@ -7,6 +7,14 @@ no camera or audio is opened by this transport.
 
 ## Identity and activation
 
+Activation validates and privately retains the endpoint without connecting.
+FrameServer may create temporary sources solely to inspect formats; these probes
+must not consume the producer's single connection. The first actual source Start
+attempts that connection once, after validating the selected stream and allocator.
+It then erases the cached endpoint. Shutdown, StopVideo and DisconnectPipe also
+erase an unconsumed endpoint, so a delayed Start cannot undo an explicit stop.
+There is no automatic reconnect after a transport fault or stream teardown.
+
 An explicit publisher `open()` creates one `\\.\pipe\TingXian.Video.<32 hex>`
 instance with `FILE_FLAG_FIRST_PIPE_INSTANCE` and `PIPE_REJECT_REMOTE_CLIENTS`.
 The protected DACL allows only the producer's logon SID and LocalService. The

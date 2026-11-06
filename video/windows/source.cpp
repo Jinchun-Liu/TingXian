@@ -209,6 +209,12 @@ class Source final : public RuntimeClass<RuntimeClassFlags<ClassicCom>,
     ComPtr<Stream> stream_;
     std::shared_ptr<FrameMailbox> mailbox_ = std::make_shared<FrameMailbox>();
     PipeReceiver transport_{mailbox_};
+    VideoPipeEndpoint pending_endpoint_{};
+    bool has_pending_endpoint_ = false;
+    void clear_pending_endpoint() noexcept {
+        has_pending_endpoint_ = false;
+        SecureZeroMemory(&pending_endpoint_, sizeof(pending_endpoint_));
+    }
     HRESULT event_queue(IMFMediaEventQueue** queue) {
         std::lock_guard guard(lock_);
         return shutdown_ ? MF_E_SHUTDOWN : events_.CopyTo(queue);
@@ -244,9 +250,11 @@ public:
                 if (bytes != sizeof(VideoPipeEndpoint)) return E_INVALIDARG;
                 VideoPipeEndpoint endpoint{};
                 TX_CHECK(activation->GetBlob(PipeEndpointAttribute, reinterpret_cast<BYTE*>(&endpoint), sizeof(endpoint), &bytes));
-                // Connection failure leaves a usable neutral source and a queryable
-                // fault. It never opens a camera, reconnects, or selects another peer.
-                transport_.connect(endpoint);
+                if (!valid_video_endpoint(endpoint)) { SecureZeroMemory(&endpoint, sizeof(endpoint)); return E_INVALIDARG; }
+                // FrameServer creates temporary sources to inspect formats. Such
+                // probes must not consume the single-use producer connection.
+                pending_endpoint_ = endpoint;
+                has_pending_endpoint_ = true;
                 SecureZeroMemory(&endpoint, sizeof(endpoint));
             }
         }
@@ -284,6 +292,12 @@ public:
         TX_CHECK(handler->GetCurrentMediaType(&type));
         // Initialize the allocator before advertising a stream that might fail.
         TX_CHECK(stream_->start(type.Get(), false));
+        if (has_pending_endpoint_) {
+            // One attempt only, when the source actually starts streaming. A
+            // failure stays neutral/queryable; no automatic reconnect or fallback.
+            transport_.connect(pending_endpoint_);
+            clear_pending_endpoint();
+        }
         TX_CHECK(events_->QueueEventParamUnk(announced_ ? MEUpdatedStream : MENewStream, GUID_NULL, S_OK, stream_.Get()));
         TX_CHECK(stream_->QueueEvent(MEStreamStarted, GUID_NULL, S_OK, nullptr));
         PROPVARIANT start{}; start.vt = VT_I8; start.hVal.QuadPart = MFGetSystemTime();
@@ -295,6 +309,7 @@ public:
         std::lock_guard guard(lock_);
         if (shutdown_) return MF_E_SHUTDOWN;
         if (!started_) return MF_E_INVALID_STATE_TRANSITION;
+        clear_pending_endpoint();
         transport_.disconnect();
         TX_CHECK(stream_->stop());
         started_ = false;
@@ -305,6 +320,7 @@ public:
         std::lock_guard guard(lock_);
         if (shutdown_) return S_OK;
         shutdown_ = true; started_ = false;
+        clear_pending_endpoint();
         transport_.disconnect();
         mailbox_->stop();
         if (stream_) stream_->shutdown();
@@ -358,6 +374,7 @@ public:
     STDMETHODIMP StopVideo() override {
         std::lock_guard guard(lock_);
         if (shutdown_) return MF_E_SHUTDOWN;
+        clear_pending_endpoint();
         transport_.disconnect();
         mailbox_->stop(); return S_OK;
     }
@@ -370,11 +387,14 @@ public:
     STDMETHODIMP ConnectPipe(const VideoPipeEndpoint* endpoint) override {
         if (!endpoint) return E_POINTER;
         std::lock_guard guard(lock_);
-        return shutdown_ ? MF_E_SHUTDOWN : transport_.connect(*endpoint);
+        if (shutdown_) return MF_E_SHUTDOWN;
+        clear_pending_endpoint();
+        return transport_.connect(*endpoint);
     }
     STDMETHODIMP DisconnectPipe() override {
         std::lock_guard guard(lock_);
         if (shutdown_) return MF_E_SHUTDOWN;
+        clear_pending_endpoint();
         transport_.disconnect(); return S_OK;
     }
     STDMETHODIMP GetTransportStatus(TransportStatus* status) override {

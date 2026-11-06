@@ -28,10 +28,10 @@ jobs:
         run: ./packaging/windows-video/build.ps1 -BinaryDirectory "$env:RUNNER_TEMP/video-install-build/Release" -OutputDirectory "$env:RUNNER_TEMP/video-msi" -BuildRollbackFixture
       - name: Disposable-runner install, rollback, uninstall and reinstall
         run: ./packaging/windows-video/test-install.ps1 -PackageDirectory "$env:RUNNER_TEMP/video-msi" -BinaryDirectory "$env:RUNNER_TEMP/video-install-build/Release" -EvidenceDirectory "$env:RUNNER_TEMP/video-install-evidence"
-      - name: Check out installed 0.1.0 baseline for upgrade regression
+      - name: Check out installed 0.1.1 baseline for upgrade regression
         uses: actions/checkout@v4
         with:
-          ref: 9eb55d3db58489f5f96eadfcb311f86013b6bc9b
+          ref: 745d16fcfcede42218529cb3ab5748bc51a123b2
           path: component-baseline
       - name: Rebuild pinned baseline component
         run: |
@@ -50,7 +50,7 @@ jobs:
         with:
           name: TingXian-video-component-experimental
           path: |
-            ${{ runner.temp }}/video-msi/TingXian-VideoSource-0.1.1-experimental-x64.msi
+            ${{ runner.temp }}/video-msi/TingXian-VideoSource-0.1.2-experimental-x64.msi
             ${{ runner.temp }}/video-msi/build-manifest.json
             ${{ runner.temp }}/video-msi/payload/component-manifest.json
             ${{ runner.temp }}/video-install-evidence/
