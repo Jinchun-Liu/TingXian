@@ -22,12 +22,21 @@
       <label for="mouth">口型</label><select id="mouth"><option value="sil">闭口</option><option value="aa">啊</option><option value="O">哦</option><option value="PP">唔</option></select>
       <div class="actions"><button id="reset">复位</button><button id="pause">暂停动作</button></div>
     </fieldset>
+    <details class="audio-panel"><summary>语音口型</summary>
+      <p>无声查看 · PCM16 单声道 WAV，最长 60 秒</p>
+      <label class="file-label" for="audio-file">导入测试 WAV<input id="audio-file" type="file" accept=".wav"></label>
+      <p id="audio-status" role="status">未导入语音</p>
+      <label for="audio-seek">位置 <output id="audio-position">0.0 秒</output></label>
+      <input id="audio-seek" type="range" min="0" max="1" step="1" value="0" disabled>
+      <div class="actions"><button id="audio-toggle" disabled>查看口型</button><button id="audio-clear" disabled>清除语音</button></div>
+    </details>
     <p class="scope">仅本地预览 · 无声音</p>
     <details><summary>验证信息</summary>
       <p>示例形象用于检查控制能力。未连接摄像头、麦克风或会议输出。</p>
       <button id="measure" disabled>测量 10 秒绘制提交</button>
       <output id="measurement" aria-live="polite">尚未测量</output>
       <pre id="diagnostics" tabindex="0"></pre>
+      <pre id="audio-diagnostics" tabindex="0"></pre>
     </details>
     <footer><a href="/fixtures/LICENSE.txt" target="_blank" rel="noreferrer">示例素材许可</a></footer>
   </aside>

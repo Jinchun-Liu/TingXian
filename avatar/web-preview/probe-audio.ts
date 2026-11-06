@@ -1,0 +1,14 @@
+import {readFileSync,writeFileSync,existsSync} from "node:fs";
+import {resolve} from "node:path";
+import {readPcmWav} from "./src/pcm-wav";
+import {analyzePcm,verifiedVisemeModel,VISEME_MODEL_SHA256} from "./src/viseme-analysis";
+const [input,output]=process.argv.slice(2);
+const source=process.env.TINGXIAN_AVATAR_SOURCE;
+if(!input||!output||!source) throw new Error("Usage: TINGXIAN_AVATAR_SOURCE=... tsx probe-audio.ts input.wav new-report.json");
+if(existsSync(output)) throw new Error("Preserve existing evidence; choose a new report path.");
+const bytes=(path:string)=>{const b=readFileSync(path);return b.buffer.slice(b.byteOffset,b.byteOffset+b.byteLength);};
+const model=await verifiedVisemeModel(bytes(resolve(source,"model/viseme-model.bin")));
+const result=analyzePcm(model,readPcmWav(bytes(input)));
+const report={scope:"offline_synthetic_pcm_inference",modelSha256:VISEME_MODEL_SHA256,...result,visemeIds:[...new Set(result.events.map(e=>e.id))],capture:false,audioPlayback:false,virtualOutput:false};
+writeFileSync(output,JSON.stringify(report,null,2),{flag:"wx"});
+console.log(JSON.stringify({seconds:result.durationMs/1000,inferenceMs:result.inferenceMs,chunkP95Ms:result.chunkP95Ms,events:result.events.length,visemeIds:report.visemeIds}));

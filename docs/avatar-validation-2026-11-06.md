@@ -110,3 +110,25 @@ E04c 是计时边界修正：复查发现 probe-02/03 把 PNG 落盘计入总墙
 所有证据位于 `D:\Desktop\听弦\artifacts\2026-11-06\avatar\browser-preview-01`。开发服务器配置热重启曾使工具标签页停在 `ERR_CONNECTION_RESET`，本机 HTTP 200 核对后，新标签页成功恢复；没有改代理/安全防护。旧错误页的关闭也受工具 URL 策略限制，停止对该页重复操作。
 
 构建保留约 914 KB JS 的体积提示，未调高阈值隐藏 warning。此轮只是开发预览：没有个人 3D 建模、音频推断模型、身体动作、摄像头眼动、虚拟输出、安装版验收或 API 付费调用。缩放/窄窗、慢加载竞态注入、GPU 上下文丢失与长期资源回收仍需专门验证，不因有相应源码处理就标为通过。
+
+## E10：离线 PCM 推断与无声口型预览
+
+基于 `894f0f5` 续作，仍在 `feat/windows-avatar-20261106`。假设：轻量口型模型可以在分片变化下保持时间线一致，且计算负担值得继续接实时原声。决策价值：判断是否保留浏览器本地口型后端。停止条件：上游参考输出、静音/结束、分片一致性、取消隔离或短片计算明显失败，先定位而不进入长测；本轮通过后停止重复性能短跑。受影响产物为独立 `avatar/web-preview`，不改主应用与安装包。
+
+纯 PCM 模块移植自 Talking Avatar `d3e4dcf`；未复制其音频播放器。口型权重 1,040,276 bytes，SHA-256 `f1cdf2b76b9f2da8730b1d3e47d7e05a2b79c9b92d00dd00c595d64e471f419c`，保存在 D 盘外部 checkout。运行环境沿用 E07 的 Node 22.14.0 / Vite 7.3.7、1280×720 浏览器；此次推断为 CPU JavaScript，不使用 GPU 计时冒充结果。
+
+通过 `scripts/avatar-create-speech-fixtures.ps1` 使用已安装 Windows Huihui / Zira，将 SAPI 输出绑定文件流生成工程语音，**没有声音播放或采集**。文本包含 StockMarketAgent、契约测试、JSON Schema、null、零、缺失字段、幂等键和提交后超时；这不是产品替本人发言的 TTS。夹具 SHA-256：中文 `cd9d58cb203421458dc6a4c1ba329d9f82f1883125218408080222b160b45228`；英文 `989edf029b40ca546bf53456377af1aeee1c820666e1a238b6cbc692d6521d69`。
+
+| 验证 | 预期与实际 | 证据 / 范围 |
+| --- | --- | --- |
+| PCM / 时钟 / 模型回归 | **17 项通过**（原 8 项 + 新 9 项）；拒绝不合法 WAV、静音/结束闭口、时钟暂停和非法时间保护；16kHz 与 44.1kHz 分片变化分别保持事件时间线 | `tests-final.txt`；移植推断逐帧符合上游提供的 PyTorch 参考输出，未重新运行 PyTorch |
+| 中文离线推断 | 16kHz、379,280 samples、23.705s；Node 总计算 **518.69ms**，20ms 分片计算 P95 **0.589ms**，308 事件 | `zh.json`；浏览器 Worker 总计算 **613.80ms** / 分片 P95 **0.700ms**，见 `browser-zh.json` |
+| 英文离线推断 | 16kHz、301,040 samples、18.815s；Node 总计算 **405.50ms**，分片 P95 **0.527ms**，231 事件 | `en.json`；浏览器 **499.80ms** / **0.700ms**，见 `browser-en.json`；没有以两次运行比较语言速度 |
+| 实际画面与暂停 | 拖动到 1s 出现语音驱动嘴部变化；中文拖至结束闭口；单独暂停约 22s 后采样位置仍为 4,240；全局暂停约 16s 后仍为 20,446，继续后推进 | `zh-at-1s.png`、`zh-end.png`、`preview-final.png`、`pause.json`、`global-pause.json`；未听声音，不能判断音画偏移或发音准确 |
+| 清除 / 错误恢复 | 清除恢复闭口、手动口型可用、位置 0；4-byte 损坏 WAV 拒绝且形象仍可操作；60s 零样本文件在观察到“正在本地分析”后清除，后续仍无旧结果、播放按钮禁用 | `clear.json`、`invalid-import.json`、`cancel-analysis.json`；没有向用户资料写入或清理 |
+| 布局根因修复 | 隐藏文件输入绝对定位但父标签未定位，脱离侧栏滚动，聚焦后文档高度 760 / scrollY 40，裁去顶部。将输入定位在标签内部，复测文档 1280×720 / scrollY 0，输入边界位于按钮内 | 早期两张中文截图保留；修正后 `layout-fixed.json` / `preview-final.png`。不是隐藏滚动条掩盖溢出 |
+| 构建与日志 | TypeScript（含 CLI probe）及生产构建通过；约 920.52 KB JS 体积 warning 保留。浏览器无 error，保留 THREE.Clock 弃用 warning | `build-final.txt`、`browser-console.json`；构建不清空旧 dist，不将生成权重/夹具提交 Git |
+
+本地证据：`D:\Desktop\听弦\artifacts\2026-11-06\avatar\audio-inference-01`；合成 WAV 及来源 manifest：同级 `speech-fixtures-01`。最终源码提交记录在本地交付 manifest。开发服务器和本轮浏览器页已关闭。TypeScript 配置热更新触发页面重载，重新导入后完成 UI 检查；不将开发热重载的状态保留记作产品恢复能力。
+
+结论：保留轻量 3D / 口型后端，继续设计实时入口。当前**先分析整段文件，再按无声视觉时钟预览**；没有音频设备共同时间线、实际延迟音频输出或虚拟设备。25ms 模型窗、20ms lookahead 之外，事件稳定、重采样及口型映射还使用后续信息（最多 250ms 邻域），不能把计算 P95 当成输入到输出延迟。中文模型准确度、个人形象、摄像头/身体动作、安装版、30/60 分钟会议和所有商业 API 仍待验收。本轮没有外发声音/形象、调用 API、变更防护或安装应用。

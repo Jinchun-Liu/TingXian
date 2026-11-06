@@ -9,12 +9,13 @@ function localFixtures(): Plugin {
   if (!source) throw new Error("Set TINGXIAN_AVATAR_SOURCE to the pinned talking-avatar checkout.");
   const root = realpathSync(source);
   const actual = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-  const changed = execFileSync("git", ["-C", root, "status", "--porcelain", "--", "avatars"], { encoding: "utf8" }).trim();
+  const changed = execFileSync("git", ["-C", root, "status", "--porcelain", "--", "avatars", "model"], { encoding: "utf8" }).trim();
   if (actual !== revision || changed) throw new Error("Avatar fixtures are not the reviewed clean revision.");
   const files = new Map([
     ["fixtures/male.glb", readFileSync(resolve(root, "avatars/male.glb"))],
     ["fixtures/female.glb", readFileSync(resolve(root, "avatars/female.glb"))],
     ["fixtures/LICENSE.txt", readFileSync(resolve(root, "avatars/LICENSE"))],
+    ["fixtures/viseme-model.bin", readFileSync(resolve(root, "model/viseme-model.bin"))],
     ["tingxian.png", readFileSync(new URL("../../frontend/public/icon_128x128.png", import.meta.url))],
   ]);
   for (const name of ["TalkingAvatar-MIT.txt", "Rocketbox-MIT.txt", "Three-MIT.txt", "Meshoptimizer-MIT.txt"]) {
@@ -27,7 +28,7 @@ function localFixtures(): Plugin {
         const path = (request.url ?? "").split("?")[0].replace(/^\//, "");
         const bytes = files.get(path);
         if (!bytes) return next();
-        response.setHeader("Content-Type", path.endsWith(".glb") ? "model/gltf-binary" : path.endsWith(".png") ? "image/png" : "text/plain; charset=utf-8");
+        response.setHeader("Content-Type", path.endsWith(".glb") ? "model/gltf-binary" : path.endsWith(".bin") ? "application/octet-stream" : path.endsWith(".png") ? "image/png" : "text/plain; charset=utf-8");
         response.end(bytes);
       });
     },

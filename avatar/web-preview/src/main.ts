@@ -1,6 +1,7 @@
 import "./style.css";
 import { AvatarRenderer, type ControlFrame } from "./vendor/TalkingAvatarRenderer";
 import { MAX_GLB_BYTES, validateLocalGlb } from "./local-glb";
+import { SilentAudioPreview } from "./audio-preview";
 
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const controls = element<HTMLFieldSetElement>("controls");
@@ -27,7 +28,8 @@ function cancelMeasurement(reason: string) {
   measure.disabled = controls.disabled || paused;
 }
 let renderer: AvatarRenderer;
-try { renderer = new AvatarRenderer(element("viewport"), () => ({ ...state, blink: closed.checked ? 1 : paused ? 0 : undefined }), row => {
+let audioPreview: SilentAudioPreview | undefined;
+try { renderer = new AvatarRenderer(element("viewport"), () => ({ ...state, ...audioPreview?.frame(), blink: closed.checked ? 1 : paused ? 0 : undefined }), row => {
   const run = activeMeasurement;
   if (!run) return;
   if (run.rows.length && (row.width !== run.rows[0].width || row.height !== run.rows[0].height)) {
@@ -59,6 +61,11 @@ try { renderer = new AvatarRenderer(element("viewport"), () => ({ ...state, blin
 }
 renderer.setPaused(paused);
 pause.textContent = paused ? "继续动作" : "暂停动作";
+audioPreview=new SilentAudioPreview(()=> {
+  if (!audioPreview?.hasClip) { mouth.value="sil"; state={...state,visemes:{}}; }
+  mouth.disabled=!renderer.capabilities.mouth || !!audioPreview?.hasClip;
+  cancelMeasurement("测量已中断：语音预览变化"); renderer.redraw();
+},()=> { paused=false; renderer.setPaused(false); pause.textContent="暂停动作"; status.textContent="本地预览"; measure.disabled=controls.disabled; });
 
 function update() {
   for (const input of ranges) element(`${input.id}-value`).textContent = input.value + (input.id === "yaw" || input.id === "pitch" ? "°" : "");
@@ -69,11 +76,13 @@ function update() {
 }
 for (const input of [...ranges, closed, mouth]) input.addEventListener("input", update);
 element("reset").addEventListener("click", () => {
+  audioPreview?.clear();
   for (const input of ranges) input.value = "0";
   mouth.value = "sil"; closed.checked = false; update();
 });
 pause.addEventListener("click", () => {
   paused = !paused; renderer.setPaused(paused);
+  audioPreview?.setRendererPaused(paused);
   cancelMeasurement("测量已中断：动作暂停");
   pause.textContent = paused ? "继续动作" : "暂停动作";
   status.textContent = paused ? "已暂停" : "本地预览";
@@ -87,7 +96,7 @@ measure.addEventListener("click", () => {
   measurementTimer = setTimeout(() => cancelMeasurement("测量超时，请重新检查预览"), 14000);
 });
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) cancelMeasurement("测量已中断：预览不在前台");
+  if (document.hidden) { cancelMeasurement("测量已中断：预览不在前台"); audioPreview?.pause(); }
 });
 
 function restoreControls() {
@@ -95,7 +104,8 @@ function restoreControls() {
   measure.disabled = controls.disabled || paused;
   ranges[0].disabled = ranges[1].disabled = !renderer.capabilities.head;
   ranges[2].disabled = ranges[3].disabled = !renderer.capabilities.gaze;
-  closed.disabled = !renderer.capabilities.blink; mouth.disabled = !renderer.capabilities.mouth;
+  closed.disabled = !renderer.capabilities.blink; mouth.disabled = !renderer.capabilities.mouth || !!audioPreview?.hasClip;
+  audioPreview?.setEnabled(loaded && !unavailable && renderer.capabilities.mouth);
 }
 function fail(reason: unknown) {
   clearTimeout(loadTimer);
@@ -106,6 +116,7 @@ function fail(reason: unknown) {
 }
 function beginLoad() {
   const token = ++generation; renderer.cancelPendingLoad();
+  audioPreview?.setEnabled(false);
   clearTimeout(loadTimer);
   cancelMeasurement("测量已中断：形象切换");
   measurement.textContent = "尚未测量";
@@ -165,6 +176,7 @@ element("viewport").addEventListener("webglcontextlost", () => {
   status.textContent = "预览已停止";
 }, true);
 window.addEventListener("pagehide", event => {
+  if (event.persisted) audioPreview?.pause(); else audioPreview?.dispose();
   cancelMeasurement("测量已中断：离开预览");
   if (event.persisted) renderer.setPaused(true);
   else { clearTimeout(loadTimer); renderer.dispose(); if (blob) URL.revokeObjectURL(blob); }
