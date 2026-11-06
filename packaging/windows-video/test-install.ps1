@@ -5,6 +5,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'acl-check.ps1')
 # This script deliberately injects failures into a synthetic installation. It is
 # not a maintenance/cleanup script for user PCs, and never touches app databases.
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
@@ -48,16 +49,6 @@ function Assert-Absent {
     Assert-True ($installer.ProductState($product) -eq -1) 'Product remains installed.'
     Assert-True (!(Test-Path -LiteralPath (Join-Path $install 'tingxian-video-device-probe.exe'))) 'Installed probe survived rollback/uninstall.'
     Assert-True (!(Test-Path -LiteralPath (Join-Path $install 'component-manifest.json'))) 'Installed manifest survived rollback/uninstall.'
-}
-function Assert-Protected([string]$Path) {
-    $acl = Get-Acl -LiteralPath $Path
-    $allowedWriters = @('S-1-5-18','S-1-5-32-544',([Security.Principal.NTAccount]'NT SERVICE\TrustedInstaller').Translate([Security.Principal.SecurityIdentifier]).Value)
-    $writeRights = [Security.AccessControl.FileSystemRights]::Write -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership -bor [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles
-    foreach ($rule in $acl.Access) {
-        if ($rule.AccessControlType -ne 'Allow' -or ($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly)) { continue }
-        $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
-        if (($rule.FileSystemRights -band $writeRights) -and $sid -notin $allowedWriters) { throw 'Component path grants write rights to a non-system/admin identity.' }
-    }
 }
 try {
     $existing = $machine.OpenSubKey($sourceKey)
@@ -124,7 +115,7 @@ try {
             Assert-True ((Get-Item -LiteralPath $installed).Length -eq $file.bytes) 'Installed size differs.'
             Assert-True ((Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $file.sha256) 'Installed file hash differs.'
         }
-        foreach ($path in @($dll, $install, (Split-Path -Parent $install))) { Assert-Protected $path }
+        foreach ($path in @($dll, $install, (Split-Path -Parent $install), $env:ProgramW6432)) { Assert-VideoComponentPathProtected $path }
         & (Join-Path $install 'tingxian-video-device-probe.exe') --probe | Set-Content -LiteralPath (Join-Path $evidence "installed-probe-$cycle.json") -Encoding utf8
         Assert-True ($LASTEXITCODE -eq 0) 'Installed diagnostic failed.'
         $probe = Get-Content -LiteralPath (Join-Path $evidence "installed-probe-$cycle.json") -Raw | ConvertFrom-Json
