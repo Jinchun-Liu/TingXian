@@ -4,6 +4,8 @@
 
 ## 自动验证
 
+受限 IPC 的[最新组件检查](video-ipc-validation-2026-11-06.md)：7abcfcf 在 Windows CI 与本机各通过 15 组媒体源、10 组双进程检查。实际传输合成像素，验证错误身份拒绝、停止/断线中性化及显式恢复；尚未注册虚拟设备或验证 LocalService/FrameServer、真实摄像头和会议。
+
 原生输出组件另有[无设备注册检查](video-source-validation-2026-11-06.md)：6ba5a80 的独立 DLL 在 Windows CI 与本机各通过 15 组真实 COM/MF 合成样本检查。它证明组件字节输出及生命周期，不证明虚拟摄像头已安装、会议软件已接收或眼部处理已完成。
 
 眼部可选组件的独立完整性检查见 [组件与输出决策](eye-local-runtime-design.md)。本机 20 项合成回归通过，涵盖中文路径、组件依赖、摘要、PE 架构和目录重定向拒绝；`Eye runtime integrity contracts` CI 仅检查这些脚本。两者都没有加载 NVIDIA SDK，不是 GPU、摄像头、虚拟设备或安装版验收。
