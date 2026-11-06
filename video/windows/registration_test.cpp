@@ -20,6 +20,9 @@ int wmain(int argc, wchar_t** argv) {
         if (SUCCEEDED(hr)) hr = activation->ActivateObject(IID_PPV_ARGS(&source));
         ComPtr<IFrameReceiver> frames;
         if (SUCCEEDED(hr)) hr = source.As(&frames);
+        // FrameServer may release its activation while retaining the source.
+        // The installed DLL must leave shutdown authority with that consumer.
+        activation.Reset();
         FrameMetrics metrics{};
         if (SUCCEEDED(hr)) hr = frames->GetFrameMetrics(&metrics);
         if (SUCCEEDED(hr) && (metrics.enabled || metrics.accepted)) hr = E_UNEXPECTED;
@@ -34,6 +37,6 @@ int wmain(int argc, wchar_t** argv) {
     }
     MFShutdown(); CoUninitialize();
     if (FAILED(hr)) { std::cerr << "registered COM activation failed: 0x" << std::hex << unsigned(hr) << '\n'; return 1; }
-    std::cout << "{\"registered_com_activation\":true,\"default_output_enabled\":false,\"device_created\":false,\"physical_camera_opened\":false}\n";
+    std::cout << "{\"registered_com_activation\":true,\"source_survives_activation_release\":true,\"default_output_enabled\":false,\"device_created\":false,\"physical_camera_opened\":false}\n";
     return 0;
 }

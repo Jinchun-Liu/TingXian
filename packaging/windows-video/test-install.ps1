@@ -22,7 +22,7 @@ $install = Join-Path $env:ProgramW6432 'TingXian\VideoSource'
 $dll = Join-Path $install 'TingXianVideoSource.dll'
 $sourceKey = 'SOFTWARE\Classes\CLSID\{44D20DA7-55EC-4B4A-A767-99E97D6E5A90}'
 $serverKey = $sourceKey + '\InprocServer32'
-$product = '{2265B958-40D3-48B6-8670-6402EB4F03EB}'
+$product = '{8DA8F4D7-398C-4C94-856F-CF4482DA6D0D}'
 $machine = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryView]::Registry64)
 $installer = New-Object -ComObject WindowsInstaller.Installer
 $checks = [Collections.Generic.List[object]]::new()
@@ -60,8 +60,8 @@ try {
         $path = Join-Path $package $item.file
         Assert-True ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -eq $item.sha256) 'Package hash mismatch.'
     }
-    $msi = Join-Path $package 'TingXian-VideoSource-0.1.0-experimental-x64.msi'
-    $fixtureMsi = Join-Path $package 'TingXian-VideoSource-0.1.0-ROLLBACK-FIXTURE-x64.msi'
+    $msi = Join-Path $package 'TingXian-VideoSource-0.1.1-experimental-x64.msi'
+    $fixtureMsi = Join-Path $package 'TingXian-VideoSource-0.1.1-ROLLBACK-FIXTURE-x64.msi'
 
     # A fresh install must not overwrite an unrelated/stale registration.
     $foreign = 'C:\TingXianSyntheticFixture\preserve-this.dll'

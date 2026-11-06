@@ -197,6 +197,21 @@ void run(HMODULE library) {
         check(activation->ShutdownObject(), "activation shutdown");
         passed("shutdown is idempotent and rejects further work");
     }
+    {
+        ComPtr<IMFActivate> activation;
+        check(factory->CreateInstance(nullptr, IID_PPV_ARGS(&activation)), "lifetime activation");
+        ComPtr<IMFMediaSource> source;
+        check(activation->ActivateObject(IID_PPV_ARGS(&source)), "lifetime source");
+        activation.Reset();
+        DWORD flags = 0;
+        const HRESULT live = source->GetCharacteristics(&flags);
+        const HRESULT shutdown = source->Shutdown(); // clean up even on a regression
+        check(live, "source must survive activation release");
+        expect(flags == MFMEDIASOURCE_IS_LIVE, "source lost live characteristic");
+        check(shutdown, "consumer-owned source shutdown");
+        expect(source->GetCharacteristics(&flags) == MF_E_SHUTDOWN, "explicit shutdown ignored");
+        passed("source remains live until its consumer explicitly shuts it down");
+    }
     check(factory->LockServer(TRUE), "server lock"); factory.Reset();
     expect(unload() == S_FALSE, "server lock ignored");
     check(get_class(SourceClass, IID_PPV_ARGS(&factory)), "factory for unlock");

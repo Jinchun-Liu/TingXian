@@ -37,6 +37,7 @@ jobs:
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-session-test.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-device-probe.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-device-synthetic-test.exe
+            ${{ runner.temp }}/video-source-build/Release/tingxian-video-registration-test.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-session.lib
             ${{ runner.temp }}/video-source-build/Testing/Temporary/LastTest.log
             video/windows/LICENSE-Microsoft.txt

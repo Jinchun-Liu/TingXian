@@ -391,7 +391,9 @@ class Activation final : public RuntimeClass<RuntimeClassFlags<ClassicCom>,
     ComPtr<Source> source_;
     std::mutex lock_;
 public:
-    ~Activation() { if (source_) source_->Shutdown(); }
+    // The caller of ActivateObject owns the returned source's shutdown. Releasing
+    // this activation must not invalidate a source still held by FrameServer.
+    // Explicit ShutdownObject below retains its shutdown/release contract.
     HRESULT initialize() { return MFCreateAttributes(&attributes_, 8); }
     STDMETHODIMP ActivateObject(REFIID iid, void** output) override {
         if (!output) return E_POINTER;

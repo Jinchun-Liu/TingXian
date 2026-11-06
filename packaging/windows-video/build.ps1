@@ -37,12 +37,12 @@ foreach ($name in @('LICENSE.md','NOTICE.md')) {
 $files = @(Get-ChildItem -LiteralPath $payload -File | Sort-Object Name | ForEach-Object {
     [ordered]@{path=$_.Name;bytes=$_.Length;sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
 })
-[ordered]@{schema_version=1;component='tingxian_windows_video_source';version='0.1.0';channel='experimental';commit=$commit;files=$files} |
+[ordered]@{schema_version=1;component='tingxian_windows_video_source';version='0.1.1';channel='experimental';commit=$commit;files=$files} |
     ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $payload 'component-manifest.json') -Encoding utf8
 $packages = @()
 foreach ($fixture in @($false, $true)) {
     if ($fixture -and !$BuildRollbackFixture) { continue }
-    $name = if ($fixture) { 'TingXian-VideoSource-0.1.0-ROLLBACK-FIXTURE-x64' } else { 'TingXian-VideoSource-0.1.0-experimental-x64' }
+    $name = if ($fixture) { 'TingXian-VideoSource-0.1.1-ROLLBACK-FIXTURE-x64' } else { 'TingXian-VideoSource-0.1.1-experimental-x64' }
     $obj = Join-Path $output ($name+'.wixobj')
     $msi = Join-Path $output ($name+'.msi')
     $arguments = @('-nologo','-arch','x64',"-dPayloadDir=$payload",'-out',$obj)
