@@ -3,6 +3,7 @@ import {useEffect,useRef,useState} from 'react';
 import {invoke} from '@tauri-apps/api/core';
 import {Button} from '@/components/ui/button';
 import {BackgroundSettings} from '@/components/interview/BackgroundSettings';
+import {BackgroundChanges} from '@/components/interview/BackgroundChanges';
 type Profile={overview:string;role:string;aliases:string};
 type Metrics={peak_prompt_tokens:number|null;sum_prompt_tokens?:number;calls:number};
 type Draft={id:string;job?:string;profile:Profile;documents:{id:string;name:string;count:number}[];failures:[string,string][];metrics:Metrics|null};
@@ -15,11 +16,14 @@ const num=(n:number)=>n.toLocaleString('zh-CN');
 export function BackgroundLibrary({locked,onBusy,onApplied,onModels,revision,active,names,applyNames}:{locked:boolean;onBusy:(v:boolean)=>void;onApplied:()=>Promise<void>;onModels:()=>void;revision?:string;active:boolean;names?:string;applyNames?:(expected:string,value:string)=>boolean}){
   const [v,setV]=useState<View|null>(null),[selected,select]=useState<Selection|null>(null),[msg,setMsg]=useState(''),[progress,setProgress]=useState(''),[working,setWorking]=useState(false);
   const [edit,setEdit]=useState<Profile|null>(null),[base,setBase]=useState(''),[share,setShare]=useState(false),[terms,setTerms]=useState(true),[include,setInclude]=useState(true);
-  const [preview,setPreview]=useState<{id:string;offset:number;more:boolean;rows:{location:string;quote:string;note:string}[]}|null>(null);
+  type Preview={more:boolean;rows:{location:string;quote:string;note:string}[];previous?:{name:string;rows:{location:string;quote:string;note:string}[]}|null};
+  const [preview,setPreview]=useState<(Preview&{id:string;offset:number})|null>(null);
   const [jobFiles,setJobFiles]=useState<{id:string;files:JobFile[]}|null>(null);
-  const running=useRef(false), draftKey=useRef('');
+  const running=useRef(false), draftKey=useRef(''),previewRequest=useRef(0);
+  useEffect(()=>()=>{previewRequest.current++;},[]);
   const sync=async()=>{const x=await invoke<View>('background_status');setV(x);
     const d=x.work.draft;if(d&&d.id!==draftKey.current){setPreview(null);draftKey.current=d.id;setBase(x.library.version);setEdit(d.profile);setShare(false);setTerms(true);}
+    if(!d&&draftKey.current){draftKey.current='';previewRequest.current++;setPreview(null);setEdit(null);}
     return x;
   };
   useEffect(()=>{if(active)void sync().catch(e=>setMsg(String(e)));},[revision,active]);
@@ -44,9 +48,11 @@ export function BackgroundLibrary({locked,onBusy,onApplied,onModels,revision,act
     finally{clearInterval(timer);setProgress('');await sync();}
   });
   const draft=v?.work.draft;
-  const inspect=async(id:string,offset:number)=>{try{
-    const result=await invoke<{more:boolean;rows:{location:string;quote:string;note:string}[]}>('background_preview',{draft:draft?.id,document:id,offset});setPreview({...result,id,offset});
-  }catch(e){setMsg(String(e));}};
+  const inspect=async(id:string,offset:number)=>{
+    const key=draft?.id,request=++previewRequest.current;
+    try{const result=await invoke<Preview>('background_preview',{draft:key,document:id,offset});if(key!==draftKey.current||request!==previewRequest.current)return;setPreview({...result,id,offset});}
+    catch(e){if(key===draftKey.current&&request===previewRequest.current)setMsg(String(e));}
+  };
   const apply=()=>op(async()=>{if(!edit)return;
     await invoke(draft?'background_apply':'background_edit',draft?{id:draft.id,profile:edit,share,mergeTerms:terms}:{version:base,profile:edit,share,mergeTerms:terms});
     draftKey.current='';setEdit(null);await sync();await onApplied();setMsg('背景与检索索引已保存。');
@@ -77,9 +83,10 @@ export function BackgroundLibrary({locked,onBusy,onApplied,onModels,revision,act
     </details>}
     {edit&&<div className="space-y-2 rounded border p-3">
       <h4>{draft?'核对整理结果':'编辑已保存背景'}</h4>
+      {draft&&<BackgroundChanges draft={draft.id}/>}
       {draft&&<details><summary>{draft.documents.length} 份资料 · {draft.failures.length} 份未处理</summary>
         <ul>{draft.documents.map(f=><li key={f.id}><button type="button" className="underline" onClick={()=>inspect(f.id,0)}>{f.name} · {f.count} 条引文</button></li>)}
-        {draft.failures.map(([f,e])=><li key={f}>{f}：{e}</li>)}</ul>{preview&&<div className="max-h-64 overflow-auto space-y-2 border-l pl-3">{preview.rows.map((r,i)=><div key={i}><p>{r.note}</p><blockquote className="text-xs">{r.location} · {r.quote}</blockquote></div>)}{preview.offset>0&&<button onClick={()=>inspect(preview.id,preview.offset-20)}>上一页</button>} {preview.more&&<button onClick={()=>inspect(preview.id,preview.offset+20)}>下一页</button>}</div>}</details>}
+        {draft.failures.map(([f,e])=><li key={f}>{f}：{e}</li>)}</ul>{preview&&<div className="max-h-96 overflow-auto space-y-2 border-l pl-3"><div className={preview.previous?'grid md:grid-cols-2 gap-4':''}>{[...(preview.previous?[['上次保存',preview.previous.rows] as const]:[]),['本次引文',preview.rows] as const].map(([label,rows])=><div key={label}><h5 className="font-medium mb-2">{label}</h5>{rows.map((r,i)=><div className="mb-3" key={i}><p>{r.note}</p><blockquote className="text-xs">{r.location} · {r.quote}</blockquote></div>)}</div>)}</div>{preview.offset>0&&<button onClick={()=>inspect(preview.id,preview.offset-20)}>上一页</button>} {preview.more&&<button onClick={()=>inspect(preview.id,preview.offset+20)}>下一页</button>}</div>}</details>}
       {(['overview','role','aliases'] as const).map((k,i)=><label className="block" key={k}>{['背景综述','面试岗位','术语别名'][i]}
         <textarea className="block w-full rounded border p-2" rows={[7,1,3][i]} maxLength={[8000,200,2000][i]} disabled={off} value={edit[k]} onChange={e=>setEdit({...edit,[k]:e.target.value})}/></label>)}
       <label className="block"><input type="checkbox" checked={share} disabled={off} onChange={e=>setShare(e.target.checked)}/> {draft?'允许回答接口使用本批引文、综述和岗位':'允许回答接口使用综述和岗位'}</label>

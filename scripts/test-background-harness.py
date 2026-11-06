@@ -15,6 +15,21 @@ class Response:
     def __exit__(self,*a): pass
     def read(self,n): return self.body[:n]
 class Test(unittest.TestCase):
+    def test_incremental_synthesis_deduplicates_quotes_without_erasing_sources_or_conflicts(self):
+        old={"id":"a","file":"old.md","source_hash":"before","kind":"personal","location":"行 1","quote":"Orchid 生产经验：无","source_status":{"confirmation":"confirmed","validity":"expired"}}
+        same={**old,"id":"copy","file":"copy.md"}
+        new={"id":"a","name":"new.md","hash":"after","records":[{"kind":"personal","location":"行 1","quote":"Orchid 生产经验：有","note":"待本人核实"}]}
+        rows=m.merge_inputs([old,same], [new],18000)
+        self.assertEqual(len(rows),2);self.assertEqual(len(rows[0]["sources"]),2)
+        self.assertEqual([s["version_state"] for s in rows[0]["sources"]],["superseded","indexed"])
+        self.assertEqual(rows[0]["sources"][0]["source_status"]["validity"],"expired")
+        self.assertEqual(rows[1]["sources"][0]["version_state"],"current")
+        repeated={**old,"source_hash":"after","quote":new["records"][0]["quote"]}
+        self.assertEqual(len(m.merge_inputs([repeated],[new],18000)[0]["sources"]),1)
+        rows=m.merge_inputs([old,{**old,"kind":"practice"}],[],18000);self.assertEqual(len(rows),2,"practice became personal evidence")
+        many=[{**old,"id":str(i),"file":str(i)+".md"} for i in range(50)]
+        rows=m.merge_inputs(many,[],1000);self.assertGreater(len(rows),1);self.assertEqual(sum(len(r["sources"]) for r in rows),50)
+        self.assertTrue(all(len(m.dumps(r).encode())+2<=1000 for r in rows))
     def test_portable_bundle_runs_outside_repository_and_rejects_invalid_input(self):
         import shutil
         root=Path(tempfile.mkdtemp());exported=root/"interview-background"

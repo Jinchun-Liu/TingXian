@@ -14,6 +14,7 @@ function load(relative) {
       return Array.from({length:12},(_,i)=>({location:'段落 '+(i+1),text:'合成内容 '+(i+1)}));
     }};
     if(name.startsWith('@/lib/'))return load(name.slice(2)+'.ts');
+    if(name==='@/components/interview/BackgroundVersions')return load('components/interview/BackgroundVersions.tsx');
     return frontend(name);
   };
   new Function('require','module','exports',code)(req,module,module.exports);return module.exports;

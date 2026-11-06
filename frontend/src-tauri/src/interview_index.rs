@@ -96,12 +96,13 @@ mod tests {
         let doc=index.documents().await.unwrap().remove(0);
         index.update_document(interview_core::DocumentUpdate {path:doc.path,expected_root:doc.root,expected_hash:doc.hash,confirmed:true,valid_from:Some("2026-01-01".into()),valid_until:Some("2026-12-31".into())}).await.unwrap();
         index.correct_facts(interview_core::FactCorrection {expected_version:0,text:"synthetic confirmed fact".into(),source_note:"Synthetic fixture, not real personal data".into(),sources:vec![],reason:"Synthetic fixture setup".into(),confirmed:true}).await.unwrap();index.set("aliases","synthetic,alias").await.unwrap();
+        sqlx::query("INSERT INTO background_library VALUES('revision/synthetic-old','{\"quote\":\"synthetic archived source\"}')").execute(&index.pool).await.unwrap();
         (root,index)
     }
     fn selection()->Vec<Selection> {vec![Selection{path:"fact.md".into(),kind:"technical".into(),allow_external:false,structured:None}]}
     async fn snapshot(index:&Index)->Vec<String> {
         let mut result=vec![];
-        for query in ["SELECT path||hash||kind||allow_external FROM documents ORDER BY path","SELECT id||path||location||text FROM chunks ORDER BY id","SELECT id||tokens FROM search ORDER BY id","SELECT key||value FROM settings ORDER BY key"] {
+        for query in ["SELECT path||hash||kind||allow_external FROM documents ORDER BY path","SELECT id||path||location||text FROM chunks ORDER BY id","SELECT id||tokens FROM search ORDER BY id","SELECT key||value FROM settings ORDER BY key","SELECT key||value FROM background_library ORDER BY key"] {
             result.extend(sqlx::query(query).fetch_all(&index.pool).await.unwrap().iter().map(|r|r.get::<String,_>(0)));
         }result.push(serde_json::to_string(&crate::interview_history::rows_to_json(sqlx::query("SELECT * FROM document_metadata ORDER BY root,path").fetch_all(&index.pool).await.unwrap()).unwrap()).unwrap());result
     }
@@ -118,6 +119,8 @@ mod tests {
         assert_eq!(archive["kind"],"meetily-profile-index-backup");assert_eq!(archive["index_version"],2);assert_eq!(archive["format_version"],2);
         assert_eq!(archive["database_rows"]["document_metadata"][0]["confirmed"],1);
         assert_eq!(archive["database_rows"]["document_metadata"][0]["valid_until"],"2026-12-31");
+        assert_eq!(archive["database_rows"]["background_library"][0]["value"],"{\"quote\":\"synthetic archived source\"}");
+        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM background_library").fetch_one(&index.pool).await.unwrap(),0);
         assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM document_metadata").fetch_one(&index.pool).await.unwrap(),0);
         assert_eq!(archive["database_rows"]["documents"].as_array().unwrap().len(),1);
         assert_eq!(archive["database_rows"]["chunks"][0]["text"],"\nsyntheticneedle 契约测试资料");

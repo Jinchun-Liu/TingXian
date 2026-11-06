@@ -1,5 +1,6 @@
 pub mod background;
 pub mod background_settings;
+pub mod background_versions;
 pub mod recovery;
 pub mod cloud_asr;
 pub mod index;

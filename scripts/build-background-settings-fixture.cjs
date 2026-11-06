@@ -2,19 +2,27 @@
 const fs=require('node:fs'),path=require('node:path');
 const output=process.argv[2];if(!output)throw Error('Pass a new output directory');
 const build=path.resolve(__dirname,'../frontend/out');
-function fixture(){
+function fixture(versions){
  let sequence=0;const callbacks=new Map();
  const preferences={scenario:'interview',role:'手动填写的测试岗位',organization:'原目标组织',context:'保留本人手动确认的背景。',terminology:'JSON Schema',answer_language:'auto',transcription_language:'auto'};
  const suggestions={role:'云产品测试实习生',organization:'示例组织',context:'仅完成本地模拟。接口自动化是否已完成存在冲突，生产回归尚未实施，需本人核实。',terminology:'Orchid, pytest, null, 契约测试',call_names:'林晓'};
  const profile={overview:'虚构验收资料：保留练习限制、来源和完成状态冲突。',role:suggestions.role,aliases:'契约测试,contract test'};
+ const source='a'.repeat(64),expected='c'.repeat(64);
+ const oldRow={location:'行 1',kind:'personal',quote:'Orchid 生产经验：无。仅完成本地模拟。',note:'旧版来源，尚未完成生产回归。'};
+ const newRow={location:'行 1',kind:'personal',quote:'Orchid 生产经验：有。已参与生产回归。',note:'新版说法不同，需本人核对职责与完成时间。'};
+ const documents=versions?[{path:'.背景/'+source+'/项目说明.md',root:'背景资料库',hash:expected,kind:'personal',allow_external:false,chunks:1,metadata:{confirmation:'content_changed',validity:'content_changed',confirmed_at:null,valid_from:null,valid_until:null,updated_at:null}}]:[];
  window.isTauri=true;
  window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'},currentWebview:{label:'main'}},
   transformCallback(fn){callbacks.set(++sequence,fn);return sequence;},unregisterCallback(id){callbacks.delete(id);},
   invoke:async(cmd,args)=>{
    if(cmd==='plugin:event|listen')return ++sequence;
    if(cmd==='plugin:event|unlisten')return;
-   if(cmd==='interview_status')return {preferences,root:'',suggested_root:'',aliases:'',facts:'',key_configured:false,workspace_ready:false,index_documents:1,index_chunks:4,index_version:'8',documents:[],session_active:false,architecture:'合成测试',system_version:'未连接原生应用',memory_bytes:0,whisper_model:''};
-   if(cmd==='background_status')return {library:{documents:1,chunks:4,baseline:262144,full_budget:62000,rag_budget:56000,fits_full:true,version:'8',state:{profile,share:false,metrics:null},measurement:null},model:'合成模型',ready:false,jobs:[],work:{busy:false,progress:'',draft:null}};
+   if(cmd==='interview_status')return {preferences,root:'',suggested_root:'',aliases:'',facts:'',key_configured:false,workspace_ready:false,index_documents:1,index_chunks:4,index_version:'8',documents,session_active:false,architecture:'合成测试',system_version:'未连接原生应用',memory_bytes:0,whisper_model:''};
+   if(cmd==='background_status')return {library:{documents:1,chunks:4,baseline:262144,full_budget:62000,rag_budget:56000,fits_full:true,version:'8',state:{profile,share:false,metrics:null},measurement:null},model:'合成模型',ready:false,jobs:[],work:{busy:false,progress:'',draft:versions?{id:'draft-versions',profile,documents:[{id:source,name:'项目说明.md',count:1}],failures:[],metrics:null}:null}};
+   if(cmd==='background_changes')return [{id:source,name:'项目说明.md',state:'source_changed',identical_count:0,identical_sources:[]}];
+   if(cmd==='background_preview')return {rows:[newRow],more:false,previous:{name:'项目说明.md',rows:[oldRow],more:false}};
+   if(cmd==='background_versions')return {rows:[{revision:expected,name:'项目说明.md',source_hash:expected,recorded_at:'2026-11-06T01:00:00Z',count:1,current:true},{revision:'b'.repeat(64),name:'项目说明.md',source_hash:'b'.repeat(64),recorded_at:null,count:1,current:false}],more:false};
+   if(cmd==='background_version_records')return {rows:[args.revision===expected?newRow:oldRow],current:args.revision===expected,more:false};
    if(cmd==='background_settings_preview')return {version:'8',profile_hash:'synthetic-hash',current:{...preferences},suggestions};
    if(cmd==='background_settings_apply'){
     if(args.version!=='8'||args.profileHash!=='synthetic-hash'||args.changes.some(c=>preferences[c.field]!==c.expected))throw Error('资料或设置已变化');
@@ -39,7 +47,7 @@ function fixture(){
 }
 fs.mkdirSync(output); // Refuse reusing a fixture directory or modifying the build.
 for(const item of fs.readdirSync(build)){
- if(item==='interview-workspace.html')fs.writeFileSync(path.join(output,item),fs.readFileSync(path.join(build,item),'utf8').replace('<head>','<head><script>('+fixture.toString()+')()</script>'));
+ if(item==='interview-workspace.html')fs.writeFileSync(path.join(output,item),fs.readFileSync(path.join(build,item),'utf8').replace('<head>','<head><script>('+fixture.toString()+')('+JSON.stringify(process.argv.includes('--versions'))+')</script>'));
  else fs.symlinkSync(path.join(build,item),path.join(output,item));
 }
 console.log(output);

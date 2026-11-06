@@ -79,12 +79,13 @@ impl Index {
         Ok(out)
     }
     pub async fn background_input_page(&self,measure:bool,cursor:i64)->Result<(i64,Vec<Value>)>{
-        let rows=sqlx::query("SELECT c.rowid AS seq,c.path,c.location,c.text,d.kind FROM chunks c JOIN documents d ON d.path=c.path WHERE c.rowid>? AND d.allow_external=1 AND (? OR c.path!='.背景/综合背景') ORDER BY c.rowid LIMIT 256").bind(cursor).bind(measure).fetch_all(&self.pool).await.map_err(|e|e.to_string())?;
+        let rows=sqlx::query(&format!("SELECT c.rowid AS seq,c.path,c.location,c.text,d.kind,d.hash,(SELECT json_extract(value,'$.hash') FROM background_library WHERE key=substr(c.path,5,64)) AS source_hash,{} FROM chunks c JOIN documents d ON d.path=c.path {} WHERE c.rowid>? AND d.allow_external=1 AND (? OR c.path!='.背景/综合背景') ORDER BY c.rowid LIMIT 256",crate::document_meta::META_COLUMNS,crate::document_meta::META_JOIN)).bind(cursor).bind(measure).fetch_all(&self.pool).await.map_err(|e|e.to_string())?;
         let mut next=cursor;let mut out=vec![];
         for r in rows {
             let path:String=r.get("path");
             let (id,name)=path.strip_prefix(PREFIX).and_then(|p|p.split_once('/')).unwrap_or(("",path.as_str()));
-            let item=json!({"id":id,"file":name,"kind":r.get::<String,_>("kind"),"location":r.get::<String,_>("location"),"quote":r.get::<String,_>("text")});
+            let status=crate::document_meta::status(&r,&r.get::<String,_>("hash"),chrono::Local::now().date_naive());
+            let item=json!({"id":id,"file":name,"kind":r.get::<String,_>("kind"),"location":r.get::<String,_>("location"),"quote":r.get::<String,_>("text"),"source_hash":r.get::<Option<String>,_>("source_hash"),"source_status":status});
             if contains_credential(&item.to_string()){return Err("既有材料含凭证格式，未发送".into())}
             next=r.get("seq");out.push(item);
         }
@@ -105,6 +106,12 @@ impl Index {
         let current:String=sqlx::query_scalar("SELECT value FROM settings WHERE key='version'").fetch_one(&mut *tx).await.map_err(|e|e.to_string())?;
         if current!=version{return Err("资料库已变化，请重新整理或重新打开资料包".into())}
         for doc in &bundle.documents {
+            if let Some(raw)=sqlx::query_scalar::<_,String>("SELECT value FROM background_library WHERE key=?").bind(&doc.id).fetch_optional(&mut *tx).await.map_err(|e|e.to_string())?{
+                let previous:Doc=serde_json::from_str(&raw).map_err(|_|"先前来源资料无效，未应用")?;
+                crate::background_versions::archive(&mut tx,&previous,version,false).await?;
+            }
+            let next_version=version.parse::<u64>().map_err(|_|"资料版本无效")?.checked_add(1).ok_or("资料版本超限")?.to_string();
+            crate::background_versions::archive(&mut tx,doc,&next_version,true).await?;
             let prefix=format!("{PREFIX}{}/",doc.id);
             let old:Vec<String>=sqlx::query_scalar("SELECT path FROM documents WHERE substr(path,1,length(?))=?").bind(&prefix).bind(&prefix).fetch_all(&mut *tx).await.map_err(|e|e.to_string())?;
             for p in old {crate::index::remove_document(&mut tx,&p).await?;}
@@ -122,6 +129,7 @@ impl Index {
             }
             sqlx::query("INSERT OR REPLACE INTO background_library VALUES(?,?)").bind(&doc.id).bind(serde_json::to_string(doc).map_err(|e|e.to_string())?).execute(&mut *tx).await.map_err(|e|e.to_string())?;
         }
+        crate::background_versions::check_limit(&mut tx).await?;
         let path=".背景/综合背景"; crate::index::remove_document(&mut tx,path).await?;
         let hash=digest(bundle.profile.overview.as_bytes());
         sqlx::query("INSERT INTO documents VALUES(?,?,'practice',?)").bind(path).bind(&hash).bind(share).execute(&mut *tx).await.map_err(|e|e.to_string())?;

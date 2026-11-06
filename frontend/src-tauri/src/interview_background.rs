@@ -231,11 +231,28 @@ async fn worker(req:&Value,work:&Work)->Result<Value,String>{
     result.ok_or_else(||"整理工具没有返回资料包".into())
 }
 #[tauri::command]
-pub fn background_preview(window:Window,state:State<'_,InterviewState>,draft:String,document:String,offset:usize)->Result<Value,String>{
-    owner(&window)?;let w=state.background.0.lock().unwrap();
-    let file=w.draft.as_ref().filter(|d|d.id==draft).and_then(|d|d.bundle.documents.iter().find(|f|f.id==document)).ok_or("草稿或文件已改变")?;
-    let rows=file.records.iter().skip(offset).take(20).collect::<Vec<_>>();
-    Ok(json!({"rows":rows,"more":offset.saturating_add(rows.len())<file.records.len()}))
+pub async fn background_preview(window:Window,app:AppHandle,state:State<'_,InterviewState>,draft:String,document:String,offset:usize)->Result<Value,String>{
+    owner(&window)?;if offset>16000{return Err("分页无效".into());}
+    let (rows,more,version)={let w=state.background.0.lock().unwrap();
+        let d=w.draft.as_ref().filter(|d|d.id==draft).ok_or("草稿已改变")?;
+        let file=d.bundle.documents.iter().find(|f|f.id==document).ok_or("草稿文件已改变")?;
+        (file.records.iter().skip(offset).take(20).cloned().collect::<Vec<_>>(),offset+20<file.records.len(),d.version.clone())};
+    let previous=state.index(&app).await?.background_previous(&document,&version,offset).await?;
+    Ok(json!({"rows":rows,"more":more||previous["more"].as_bool().unwrap_or(false),"previous":previous}))
+}
+#[tauri::command]
+pub async fn background_changes(window:Window,app:AppHandle,state:State<'_,InterviewState>,draft:String)->Result<Value,String>{
+    owner(&window)?;
+    let (bundle,version)={let w=state.background.0.lock().unwrap();let d=w.draft.as_ref().filter(|d|d.id==draft).ok_or("草稿已改变")?;(d.bundle.clone(),d.version.clone())};
+    state.index(&app).await?.background_changes(&bundle,&version).await
+}
+#[tauri::command]
+pub async fn background_versions(window:Window,app:AppHandle,state:State<'_,InterviewState>,source:String,expected:String,offset:usize)->Result<Value,String>{
+    owner(&window)?;state.index(&app).await?.background_versions(&source,&expected,offset).await
+}
+#[tauri::command]
+pub async fn background_version_records(window:Window,app:AppHandle,state:State<'_,InterviewState>,source:String,expected:String,revision:String,offset:usize)->Result<Value,String>{
+    owner(&window)?;state.index(&app).await?.background_version_records(&source,&expected,&revision,offset).await
 }
 #[tauri::command]
 pub async fn background_fact_candidates(window:Window,app:AppHandle,state:State<'_,InterviewState>)->Result<Vec<Value>,String>{

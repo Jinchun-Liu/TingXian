@@ -23,7 +23,7 @@ const invoke=async(cmd,args)=>{
 };
 const mod={exports:{}};
 const code=ts.transpileModule(fs.readFileSync(path.join(__dirname,'../frontend/src/components/interview/BackgroundLibrary.tsx'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,jsx:ts.JsxEmit.ReactJSX}}).outputText;
-new Function('require','module','exports',code)(name=>name==='@tauri-apps/api/core'?{invoke}:name==='@/components/interview/BackgroundSettings'?{BackgroundSettings:()=>null}:name==='@/components/ui/button'?{Button:props=>React.createElement('button',props)}:dep(name),mod,mod.exports);
+new Function('require','module','exports',code)(name=>name==='@tauri-apps/api/core'?{invoke}:name==='@/components/interview/BackgroundSettings'?{BackgroundSettings:()=>null}:name==='@/components/interview/BackgroundChanges'?{BackgroundChanges:()=>null}:name==='@/components/ui/button'?{Button:props=>React.createElement('button',props)}:dep(name),mod,mod.exports);
 const text=n=>typeof n==='string'?n:(n?.children||[]).map(text).join('');
 (async()=>{let t;await act(async()=>{t=create(React.createElement(mod.exports.BackgroundLibrary,{active:true,revision:'7',locked:false,onBusy(){},onApplied:async()=>{},onModels(){}}))});
   const click=async label=>{const b=t.root.findAllByType('button').find(x=>text(x)===label);assert.ok(b,label);assert.ok(!b.props.disabled);await act(async()=>b.props.onClick());};
