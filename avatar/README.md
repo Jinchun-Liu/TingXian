@@ -54,3 +54,7 @@ python scripts/avatar-inspect-video.py --run D:\TingXian-avatar-evidence\render-
 - `--cudnn-benchmark` 仅为固定画幅优化对照，未改为默认。早期 23.51/24.61 fps 包含抽帧 PNG 写盘；明确排除该取证开销后的默认配置为 24.79 fps，仍无持续 25 fps 余量。计时修正和原始结果均保留，不宣称实时通过。
 
 模型与代码许可分别见 [第三方说明](THIRD_PARTY.md)。具体结果和限制见 [验收记录](../docs/avatar-validation-2026-11-06.md)。
+
+## 独立 3D 无声预览
+
+[web-preview](web-preview/README.md) 提供可在本机浏览器运行的形象、头姿、相对视线、闭眼和手动口型控制，以及本地 GLB 导入。沿用听弦图标与 20/80 布局；不变更主前端或安装版依赖。当前实际运行两个公开示例，尚未实现个人 3D 建模、原声口型推断、身体跟踪和会议输出。浏览器绘制提交频率不与照片渲染+编码吞吐直接排名。

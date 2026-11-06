@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' blob: ws://127.0.0.1:19270; media-src 'none'; object-src 'none'; base-uri 'none'">
+  <title>听弦 · 形象预览</title>
+</head>
+<body>
+  <aside>
+    <header><img src="/tingxian.png" alt="" width="32" height="32"><strong>听弦</strong></header>
+    <h1>形象预览</h1>
+    <label for="avatar">形象</label>
+    <select id="avatar"><option value="male">示例 · 男性</option><option value="female">示例 · 女性</option></select>
+    <label class="file-label" for="model-file">导入 GLB 形象<input id="model-file" type="file" accept=".glb"></label>
+    <fieldset id="controls" disabled>
+      <legend>动作</legend>
+      <label for="yaw">左右转头 <output id="yaw-value">0°</output></label><input id="yaw" type="range" min="-12" max="12" step="1" value="0">
+      <label for="pitch">抬头低头 <output id="pitch-value">0°</output></label><input id="pitch" type="range" min="-8" max="8" step="1" value="0">
+      <label for="gaze-x">左右视线 <output id="gaze-x-value">0</output></label><input id="gaze-x" type="range" min="-1" max="1" step="0.1" value="0">
+      <label for="gaze-y">上下视线 <output id="gaze-y-value">0</output></label><input id="gaze-y" type="range" min="-1" max="1" step="0.1" value="0">
+      <label class="check"><input id="eyes-closed" type="checkbox">闭眼</label>
+      <label for="mouth">口型</label><select id="mouth"><option value="sil">闭口</option><option value="aa">啊</option><option value="O">哦</option><option value="PP">唔</option></select>
+      <div class="actions"><button id="reset">复位</button><button id="pause">暂停动作</button></div>
+    </fieldset>
+    <p class="scope">仅本地预览 · 无声音</p>
+    <details><summary>验证信息</summary>
+      <p>示例形象用于检查控制能力。未连接摄像头、麦克风或会议输出。</p>
+      <button id="measure" disabled>测量 10 秒绘制提交</button>
+      <output id="measurement" aria-live="polite">尚未测量</output>
+      <pre id="diagnostics" tabindex="0"></pre>
+    </details>
+    <footer><a href="/fixtures/LICENSE.txt" target="_blank" rel="noreferrer">示例素材许可</a></footer>
+  </aside>
+  <main>
+    <div class="toolbar"><span id="model-name">示例 · 男性</span><span id="status" role="status">正在加载形象…</span></div>
+    <div id="viewport" role="img" aria-label="数字形象预览"></div>
+    <p id="error" role="alert" hidden></p>
+    <p class="caption">调整形象的视线和表情，在这里查看效果。</p>
+  </main>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

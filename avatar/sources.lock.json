@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "checked_at": "2026-11-06",
-  "status": "offline_liveportrait_render_verified_other_candidates_source_review_only",
+  "status": "offline_liveportrait_and_silent_browser_3d_preview_verified_other_candidates_source_review_only",
   "sources": [
     {"directory": "LiveTalking", "url": "https://github.com/lipku/LiveTalking.git", "commit": "c7269433a2b6ecebcd9342445d2ecc882c98b0da"},
     {"directory": "MuseTalk", "url": "https://github.com/TMElyralab/MuseTalk.git", "commit": "0a89dec45a0192b824e3cf4daf96c239440c5ed8"},
@@ -9,7 +9,7 @@
     {"directory": "SoulX-FlashHead", "url": "https://github.com/Soul-AILab/SoulX-FlashHead.git", "commit": "9bc03de06bb0de82cd6bc477804512ae06144bf2"},
     {"directory": "avtr-1", "url": "https://github.com/avaturn-live/avtr-1.git", "commit": "eb1e5a89ed7bec3debe712b090efd676b3a420bd"},
     {"directory": "LivePortrait", "url": "https://github.com/KlingAIResearch/LivePortrait.git", "commit": "9b294b3d0536135442ea73cb01e6cb3ca7029dd3"},
-    {"directory": "talking-avatar", "url": "https://github.com/InterviewFlowAI/talking-avatar.git", "commit": "d3e4dcf6609d733097466eb17b3fa63fc720140a", "scope": "source and bundled GLB metadata only; no package install, browser rendering or audio"}
+    {"directory": "talking-avatar", "url": "https://github.com/InterviewFlowAI/talking-avatar.git", "commit": "d3e4dcf6609d733097466eb17b3fa63fc720140a", "scope": "MIT renderer adapted for silent local browser control preview; two bundled GLBs loaded locally; no upstream audio package/model, capture or playback"}
   ],
   "model_metadata": [
     {"repo": "Soul-AILab/SoulX-FlashHead-1_3B", "revision": "5fbd2e44ba08ab2deb28bd55cff2c15523e51ba5", "file_read": "Model_Lite/config.json", "weights_downloaded": false, "temporal_vae_stride": 8},
