@@ -62,3 +62,34 @@ pub fn installation_check()->Result<(),String> {
     println!("{}",serde_json::to_string(&status).map_err(|_|"检查结果序列化失败")?);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{json,Value};
+    #[test]
+    fn video_ipc_is_main_only_and_exit_cancellation_does_not_restart_work() {
+        let app=tauri::test::mock_builder().manage(VideoState::default()).manage(crate::interview_exit::ExitState::default())
+            .invoke_handler(tauri::generate_handler![video_status,video_inspect,video_stop,
+                crate::interview_exit::interview_exit_status,crate::interview_exit::interview_exit_cancel])
+            .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let main=tauri::WebviewWindowBuilder::new(&app,"main",Default::default()).build().unwrap();
+        let display=tauri::WebviewWindowBuilder::new(&app,"interview-conversation",Default::default()).build().unwrap();
+        let invoke=|window:&tauri::WebviewWindow<tauri::test::MockRuntime>,cmd:&str,body:Value|
+            tauri::test::get_ipc_response(window,tauri::webview::InvokeRequest{cmd:cmd.into(),callback:tauri::ipc::CallbackFn(0),
+                error:tauri::ipc::CallbackFn(1),url:"tauri://localhost".parse().unwrap(),body:tauri::ipc::InvokeBody::Json(body),
+                headers:Default::default(),invoke_key:tauri::test::INVOKE_KEY.into()});
+        for cmd in ["video_status","video_inspect","video_stop"] {
+            assert!(invoke(&display,cmd,json!({})).is_err(),"display invoked {cmd}");
+        }
+        assert_eq!(app.state::<VideoState>().0.snapshot().generation,0,"display changed video state");
+        assert!(invoke(&main,"video_status",json!({})).is_ok());
+        crate::interview_exit::request_exit(app.handle(),false);
+        assert!(invoke(&main,"video_inspect",json!({})).is_err(),"inspection admitted during quit");
+        let request:Value=invoke(&main,"interview_exit_status",json!({})).unwrap().deserialize().unwrap();
+        invoke(&main,"interview_exit_cancel",json!({"requestId":request["request_id"]})).unwrap();
+        assert_eq!(app.state::<VideoState>().0.snapshot().phase,video_worker_control::Phase::Off);
+        assert!(app.state::<VideoState>().0.wait_idle(Duration::ZERO));
+        invoke(&main,"video_stop",json!({})).unwrap();
+    }
+}

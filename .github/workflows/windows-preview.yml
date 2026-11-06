@@ -72,6 +72,8 @@ jobs:
           Pop-Location
       - name: Core regression tests
         run: cargo test -p interview-core --locked
+      - name: Main-window video IPC and quit regression
+        run: cargo test --release -p meetily --lib interview_video::tests --locked
       - name: Build CPU installer
         shell: pwsh
         run: |
