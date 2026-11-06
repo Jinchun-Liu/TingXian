@@ -36,6 +36,14 @@ export class VisemeDetector {
     this.stream.push(this.resampler.push(samples), (viseme) => this.onFrame(viseme));
   }
 
+  /** TingXian: future pushes cannot introduce an event strictly before this time.
+   * Account for a candidate that has only one frame and can be backdated next push.
+   * This is an inference watermark, not a playback position or wall-clock delay. */
+  get stableBeforeMs(): number {
+    const { lookahead, HOP, WIN, SR } = this.model;
+    return this.startMs + Math.max(0, ((this.frames - lookahead - MIN_RUN_FRAMES + 1) * HOP + WIN / 2) / SR * 1000);
+  }
+
   /** Push silence through so the last sounds (held back by the model's lookahead) are reported. */
   flush(): void {
     const { lookahead, HOP, WIN, SR } = this.model;

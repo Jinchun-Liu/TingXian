@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "checked_at": "2026-11-06",
-  "status": "offline_liveportrait_browser_3d_and_pcm_viseme_preview_verified_no_live_av_or_meeting_acceptance",
+  "status": "offline_render_and_bounded_pcm_stream_to_silent_sink_verified_no_live_av_or_meeting_acceptance",
   "sources": [
     {"directory": "LiveTalking", "url": "https://github.com/lipku/LiveTalking.git", "commit": "c7269433a2b6ecebcd9342445d2ecc882c98b0da"},
     {"directory": "MuseTalk", "url": "https://github.com/TMElyralab/MuseTalk.git", "commit": "0a89dec45a0192b824e3cf4daf96c239440c5ed8"},

@@ -41,7 +41,7 @@ cd avatar/web-preview
 
 脚本将 SAPI `AudioOutputStream` 绑定到文件流，不播放结果；此路径见 [Microsoft 文档](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/ms723597(v=vs.85))。在预览中导入上述 WAV，检查口型、位置拖动与清除。CLI 报告只包含离线推断计时和口型事件。
 
-模型有 25ms 分析窗、20ms lookahead，事件稳定与重采样还有等待；口型平滑读取最多 250ms 范围内的邻近事件并提前起口。当前已经知道整段未来数据，**不能将分片计算 P95 当成实时或音画延迟**。下一阶段需建立流式有限未来窗口、原声音频共同时间线及有界缓冲。
+模型有 25ms 分析窗、20ms lookahead，事件稳定与重采样还有等待；离线口型平滑读取最多 250ms 范围内的邻近事件并按最终音节时长安排收口。页面已经知道整段未来数据，**不能将分片计算 P95 当成实时或音画延迟**。流式核心单列如下，尚未替换页面的离线模式。
 
 “验证信息”里的十秒结果只计算浏览器动画回调中的 **绘制提交频率/间隔**。手动重绘不计数；暂停、离开前台、换模型会中断，14 秒看门狗兜底。它不含 GPU 完成时间、编码、虚拟设备或远端画面，不能用作 PRD 的 720p / 25fps 会议验收。切换模型清除旧结果。
 
@@ -52,12 +52,29 @@ npm run build
 
 构建输出 `dist/` 被 Git 忽略，携带示例资源、口型模型及四份许可。构建不清理旧输出，若需要可分享的归档，应按本次构建 manifest 收集使用中的文件，避免混入旧哈希资源。不要直接对外部署开发服务器。
 
+## 流式原声核心与 1× 无声验证
+
+`OriginalVoiceStream` 接受带 session/generation 和连续采样位置的 PCM16 单声道分片（8–48kHz，每片最多 40ms），只把副本归一化/重采样送入口型推断。输出保留原始 PCM 值、采样率和位置，不使用 ASR、TTS 或声音克隆。调用方提供与输入采样时钟对应的单调 `captureEpochMs`，每次 `pull(now)` 交付最多 20ms 原声及同一媒体位置的口型；该交付不是声卡写入或播放确认。
+
+- 固定目标调度延迟 320ms；环形缓冲最多 400ms，交付超过约定时间 40ms 或数据不足即进入失败，停止交付，不突然补播或伪造静音。已有待交付样本数保留，调用方必须停止输入并提示恢复。
+- `VisemeDetector.stableBeforeMs` 标明未来推断不会再回填的事件边界。`stream-mouth.ts` 使用固定起落曲线，借用相邻元音范围 120ms、最大提前起口 95ms，所以最多依赖媒体位置之后 215ms 的已确定事件；当前帧信息未到齐就失败，不窥视文件剩余内容。
+- 这是新的流式平滑策略，保留离线策略作对照；缩短借用范围的中文自然度尚未评估。推断、调度、渲染、声卡和远端接收的延迟必须分开记录。
+- `finish` 只结束输入，随后仍按时间交付尾部。最终零样本 `end` 标记指定闭口。`cancel` 清空队列，记录 discardedSamples，不能把未播部分计入 deliveredSamples；任何终态都需新 generation 才能重新开始。失败/取消时，未来的设备适配器还须立刻静音和闭口，不能依赖这个纯数据模块停止已排入设备的声音。
+- 缓冲有界，旧事件随消费回收。当前单线程 owner 接口，尚未接浏览器 Worker、音频设备、虚拟设备或主应用。
+
+```powershell
+.\node_modules\.bin\tsx.cmd probe-stream.ts D:\TingXian-tests\speech-01\zh.wav D:\TingXian-tests\zh-stream-01.json
+```
+
+Probe 虽从 WAV 读取夹具，但按墙钟 1× 速度每 20ms 才交给核心；输出只做增量 SHA-256 与时间/口型记录，不播放声音。报告对比输入/交付 PCM 摘要及样本数，保留失败原因和部分交付。`delayP95Ms` 是输入媒体时间到**无声接收器**的交付延迟，不是音画偏移或会议验收；记录包含末尾闭口标记。它未加入 GPU 渲染、ASR 或网络并行负载。
+
 ## 来源与限制
 
 `src/vendor/TalkingAvatarRenderer.ts` 基于 [Talking Avatar 固定版本](https://github.com/InterviewFlowAI/talking-avatar/blob/d3e4dcf6609d733097466eb17b3fa63fc720140a/src/renderer.ts)，本地修改增加头部/眼神控制、暂停、来源限制、加载隔离及计时。它是轻量可控形象对照，没有生成用户个人形象。
 
 - Talking Avatar 代码：InterviewFlowAI，MIT；[完整许可](licenses/TalkingAvatar-MIT.txt)。
 - `src/vendor/{visemeModel,visemeDetector,resampler,coarticulation}.ts` 为同一固定版本的纯推断与口型映射移植；模型 `model/viseme-model.bin` 由外部 checkout 提供，1,040,276 bytes，SHA-256 `f1cdf2b76b9f2da8730b1d3e47d7e05a2b79c9b92d00dd00c595d64e471f419c`。上游代码与模型均 MIT，权重不进入听弦 Git。
+- `visemeDetector.ts` 增加已确定事件边界 getter；`stream-mouth.ts` 沿用同一许可的音素映射，改为有界未来窗口与固定曲线。
 - 示例模型：Microsoft Rocketbox，MIT；[完整来源及许可](licenses/Rocketbox-MIT.txt)。由外部固定 checkout 提供，不把 GLB 提交入听弦。
 - Three.js 0.186.0：[MIT](licenses/Three-MIT.txt)。包含 GLTFLoader、灯光及环境辅助实现。
 - Three.js 内置 meshoptimizer 1.1 解码器：Arseny Kapoulkine，[MIT](licenses/Meshoptimizer-MIT.txt)，[上游许可](https://github.com/zeux/meshoptimizer/blob/v1.1/LICENSE.md)。

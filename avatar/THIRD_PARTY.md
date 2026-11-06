@@ -13,3 +13,5 @@
 `web-preview/src/vendor/TalkingAvatarRenderer.ts` 移植自 Talking Avatar 固定版本的 `src/renderer.ts`，Copyright (c) 2026 InterviewFlowAI，MIT。两个模型由外部 checkout 的 Microsoft Rocketbox 转换资产提供，保留 Microsoft (c) 2020 的 MIT 通知，不提交 GLB。Three.js 与内置 Meshoptimizer 解码器分别保留 MIT 许可；四份完整通知位于 [web-preview/licenses](web-preview/licenses)，构建同时复制到产物。没有使用上游音频播放器或自动播放入口。详见 [预览说明](web-preview/README.md)。
 
 同一固定版本的 `visemeModel.ts`、`visemeDetector.ts`、`resampler.ts`、`coarticulation.ts` 纯 PCM 推断与映射模块保留 MIT 通知。口型模型由外部 checkout 提供，使用前检查大小与 SHA-256（见来源锁定）；上游将该模型标为 MIT。它以英语训练，中文对应为近似，不等于已取得中文口型质量证据。没有复制会开启 AudioContext / MediaStream 的 `TalkingAvatar.ts`。
+
+流式续作给 `visemeDetector.ts` 增加 `stableBeforeMs`，保持原推断输出；新增 `stream-mouth.ts` 复用相同来源的音素到口型映射，但使用固定起落曲线及 120ms 元音借用范围，保留 MIT 归属。它与上游离线平滑不是相同算法，不以参考模型分类一致宣称渲染效果完全一致。
