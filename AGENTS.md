@@ -1,6 +1,8 @@
 # 听弦开发约定
 
-- 先读 `docs/PRD-v2-progress.md` 和 `docs/PRD-v2.0.md`，使用当前代码/运行证据核对交接状态。
+- 先读 `docs/PRD-v2-progress.md`、`docs/PRD-v2.1-eye-face.md` 和 `docs/PRD-v2.0.md`；冲突按 v2.1 的视觉范围与优先级处理，使用当前代码/运行证据核对状态。
+- 旧数字人、照片注册、口型、TTS 与 R11 代理冻结。新视觉优先 R10E 本地眼部；脸部只规划禁用入口与接口，不能自行续作模型或全代理。
+- UI 以已发布 Mac 0.6.5（f80ba86）为基准，保留正确的 Windows 系统/快捷键提示和保存保护。
 - Preserve unrelated worktree changes. Never force-push shared history.
 - Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining.
 - 本人发言仅入上下文。对方完整发言按人数模式触发。AI 草稿不能充当本人实际说过的内容。
