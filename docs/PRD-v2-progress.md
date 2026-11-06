@@ -27,7 +27,7 @@
 
 在基线文档提交 f1435ed 之后，仅新增独立组件校验脚本、合成回归与 CI，没有改动应用 UI、会话数据格式或安装版。NGC 概览的 `1.2.0.0_woa` 不能当成 x64 版本；官方 Gaze 示例明确依赖视线、人脸关键点、人脸框三个特征。示例 MIT 与 SDK/模型条款分别核对。下载页当前访客且下载不可用，真实组件、摘要及授权尚未固定。
 
-本机 Python 3.12.6 在 D 盘中文路径执行 20 项检查，零失败/错误/跳过，含实际 Windows junction、硬链接、ARM64 PE、同大小篡改和缺少模型/许可拒绝。该结果是校验器的合成证据，不是 SDK 加载或 E1 完成；全部夹具和日志保存在源码外 `artifacts/2026-11-06/eye-local-sdk-175425/`。独立 Windows/Ubuntu CI 结果另记，不复用历史安装 CI 成绩。
+本机 Python 3.12.6 在 D 盘中文路径执行 20 项检查，零失败/错误/跳过，含实际 Windows junction、硬链接、ARM64 PE、同大小篡改和缺少模型/许可拒绝。源码提交 `4e9d7e0f9e753dc6e01f41afdd1e70bc88228fea` 的[独立 CI](https://github.com/Jinchun-Liu/TingXian/actions/runs/42201158496)在 Windows 2022 与 Ubuntu 各通过 20 项、零跳过，结果 artifact 已下载核对。该结果是校验器的合成证据，不是 SDK 加载或 E1 完成；全部本地夹具、日志和 CI 结果保存在源码外 `artifacts/2026-11-06/eye-local-sdk-175425/`。没有重跑或借用历史安装 CI 成绩。
 
 Microsoft 的 CurrentUser 虚拟摄像头 API 与媒体源系统注册分开；官方示例用 MSI/HKLM 部署。尚未注册或运行虚拟设备。摄像头、音频和真实 AI 均未启动。正常防护下基础安装阻塞未解除；本轮没有重新运行安装器或更改防护。
 
