@@ -7,13 +7,18 @@ fn fixture(name: &str) -> BundledWorker {
     let root = PathBuf::from(std::env::var_os("TINGXIAN_VIDEO_TEST_ROOT").expect("explicit synthetic evidence root"));
     let folder = root.join(format!("case-{}-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos(), COUNTER.fetch_add(1, Ordering::SeqCst)));
     fs::create_dir_all(&folder).unwrap();
-    let src = bin.join(if name == "production.exe" { "tingxian-video-worker.exe" } else { "tingxian-video-worker-fixture.exe" });
+    let src = if name.starts_with("eye-") {
+        PathBuf::from(std::env::var_os("TINGXIAN_EYE_TEST_BIN").expect("explicit eye fixture directory")).join("tingxian-eye-worker-fixture.exe")
+    } else { bin.join(if name == "production.exe" { "tingxian-video-worker.exe" } else { "tingxian-video-worker-fixture.exe" }) };
     let path = folder.join(name); fs::copy(src, &path).unwrap();
     BundledWorker { sha256: format!("{:x}", Sha256::digest(fs::read(&path).unwrap())), path }
 }
 fn launched(folder: &Path) {
+    reached(folder,"launched");
+}
+fn reached(folder: &Path, stage: &str) {
     let deadline = Instant::now() + Duration::from_secs(3);
-    while !folder.join("launched").exists() { assert!(Instant::now() < deadline, "worker never launched"); thread::sleep(Duration::from_millis(10)); }
+    while !folder.join(stage).exists() { assert!(Instant::now() < deadline, "worker never reached {stage}"); thread::sleep(Duration::from_millis(10)); }
 }
 #[test]
 fn real_inspection_is_unavailable_without_runtime_and_reports_only_prerequisites() {
@@ -107,4 +112,142 @@ fn dropped_dispatch_releases_slot_without_starting() {
     assert_eq!(state.snapshot().phase,Phase::Off,"dropping an already cancelled dispatch is not a crash");
     assert!(state.snapshot().reason.is_none());
     assert!(!path.parent().unwrap().join("launched").exists());
+}
+
+fn eye_job(worker: &BundledWorker) -> EyeJob {
+    let folder = worker.path.parent().unwrap();
+    let input = folder.join("synthetic.bgr"); fs::write(&input, vec![17u8;24*3]).unwrap();
+    EyeJob { input, output: folder.join("new-output.bgr"), width:4, height:2, frames:3, provider:EyeProvider::Synthetic }
+}
+fn begin_eye(state: &Arc<Controller>, worker: BundledWorker, job: EyeJob) -> Run {
+    state.begin_eye_if_current(Some(worker),job,state.snapshot().generation).unwrap().unwrap()
+}
+#[test]
+fn eye_corrected_bytes_use_restricted_files_and_explicit_generations() {
+    let state = Arc::new(Controller::default());
+    for _ in 0..3 {
+        let worker=fixture("eye-valid.exe"); let job=eye_job(&worker); let output=job.output.clone();
+        std::env::set_var("TINGXIAN_TEST_SECRET","synthetic-value-no-credential");
+        let done=begin_eye(&state,worker,job).execute();
+        std::env::remove_var("TINGXIAN_TEST_SECRET");
+        assert_eq!(done.phase,Phase::Completed,"{done:?}");
+        let report=done.eye.unwrap(); assert_eq!(report.corrected,3); assert_eq!(report.neutral,0);
+        assert_eq!(fs::read(output).unwrap(),vec![200u8;72]);
+        assert!(done.inspection.is_none()); assert!(state.wait_idle(Duration::ZERO));
+        state.request_stop(); assert_eq!(state.snapshot().phase,Phase::Off); assert!(state.snapshot().eye.is_none());
+    }
+}
+#[test]
+fn eye_fault_neutralizes_and_does_not_accept_raw_provider_bytes() {
+    let state=Arc::new(Controller::default()); let worker=fixture("eye-fail.exe"); let job=eye_job(&worker); let output=job.output.clone();
+    let done=begin_eye(&state,worker,job).execute();
+    assert_eq!(done.phase,Phase::Fault); assert_eq!(done.reason,Some(Reason::EyeProcessing));
+    let report=done.eye.unwrap(); assert_eq!(report.corrected,0); assert_eq!(report.neutral,1); assert_eq!(report.error,4);
+    assert_eq!(fs::read(output).unwrap(),vec![32u8;24],"raw input or stale tail escaped failure");
+}
+#[test]
+fn eye_stop_during_prepare_or_process_discards_late_results() {
+    for name in ["eye-wait.exe","eye-slow.exe"] {
+        let state=Arc::new(Controller::default()); let worker=fixture(name); let job=eye_job(&worker);
+        let folder=worker.path.parent().unwrap().to_owned(); let output=job.output.clone();
+        let run=begin_eye(&state,worker,job); let running=thread::spawn(move ||run.execute());
+        reached(&folder,if name=="eye-wait.exe" {"preparing"} else {"processing"}); state.request_stop();
+        let done=running.join().unwrap(); assert_eq!(done.phase,Phase::Off,"{done:?}");
+        assert!(done.eye.is_none()); assert!(state.wait_idle(Duration::ZERO));
+        assert!(fs::read(output).unwrap().is_empty());
+    }
+}
+#[test]
+fn eye_queued_cancel_does_not_open_files_or_run_and_stale_ticket_is_rejected() {
+    let state=Arc::new(Controller::default()); let worker=fixture("eye-valid.exe"); let job=eye_job(&worker);
+    let folder=worker.path.parent().unwrap().to_owned(); let output=job.output.clone();
+    let run=begin_eye(&state,worker,job); state.request_stop();
+    assert_eq!(run.execute().phase,Phase::Off);
+    assert!(!output.exists() && !folder.join("launched").exists());
+    let worker=fixture("eye-valid.exe"); let job=eye_job(&worker); let stale=state.snapshot().generation;
+    state.request_stop(); assert!(state.begin_eye_if_current(Some(worker),job,stale).is_err());
+}
+#[test]
+fn eye_input_redirection_wrong_length_and_existing_output_are_refused() {
+    for mode in 0..3 {
+        let state=Arc::new(Controller::default()); let worker=fixture("eye-valid.exe"); let job=eye_job(&worker);
+        let folder=worker.path.parent().unwrap().to_owned(); let output=job.output.clone();
+        if mode==0 { fs::write(&job.input,vec![17u8;71]).unwrap(); }
+        if mode==1 { fs::hard_link(&job.input,job.input.with_extension("alias")).unwrap(); }
+        if mode==2 { fs::write(&job.output,b"preserve-existing").unwrap(); }
+        let done=begin_eye(&state,worker,job).execute();
+        assert_eq!(done.reason,Some(if mode==2 {Reason::EyeOutput} else {Reason::EyeInput}));
+        assert!(!folder.join("launched").exists());
+        if mode==2 { assert_eq!(fs::read(output).unwrap(),b"preserve-existing"); }
+    }
+}
+#[test]
+fn eye_hang_crash_and_uncertain_provider_cleanup_remain_faults() {
+    for (name,reason) in [("eye-hang.exe",Reason::Timeout),("eye-crash.exe",Reason::WorkerExit),("eye-cleanup.exe",Reason::ProviderCleanup)] {
+        let state=Arc::new(Controller::default()); let worker=fixture(name); let job=eye_job(&worker);
+        let done=begin_eye(&state,worker,job).execute_with_timeout(Duration::from_millis(600));
+        assert_eq!(done.phase,Phase::Fault,"{done:?}"); assert_eq!(done.reason,Some(reason));
+        assert!(state.wait_idle(Duration::ZERO),"owned process was not reaped");
+    }
+}
+#[test]
+fn eye_explicit_stop_of_hung_provider_is_a_visible_forced_stop() {
+    let state=Arc::new(Controller::default()); let worker=fixture("eye-hang.exe"); let job=eye_job(&worker);
+    let folder=worker.path.parent().unwrap().to_owned(); let run=begin_eye(&state,worker,job);
+    let running=thread::spawn(move ||run.execute()); reached(&folder,"preparing");
+    state.request_stop(); let done=running.join().unwrap();
+    assert_eq!(done.phase,Phase::Fault); assert_eq!(done.reason,Some(Reason::ForcedStop));
+    assert!(done.eye.is_none() && state.wait_idle(Duration::ZERO));
+}
+#[test]
+fn eye_stop_winning_completion_lock_cannot_publish_a_previously_sampled_success() {
+    let state=Arc::new(Controller::default()); let worker=fixture("eye-valid.exe"); let job=eye_job(&worker);
+    let run=begin_eye(&state,worker,job);
+    let stale_cancelled=run.signal.stopped(); assert!(!stale_cancelled);
+    let report=EyeReport{protocol:2,generation:run.id,provider:EyeProvider::Synthetic,width:4,height:2,expected_frames:3,
+        corrected:3,neutral:0,outcome:EyeOutcome::Completed,error:0,cleanup_uncertain:false,
+        camera_started:false,audio_started:false,external_output_started:false};
+    state.request_stop();
+    state.complete(run.id,stale_cancelled,Ok(Report::Eye(report)));
+    let done=state.snapshot(); assert_eq!(done.phase,Phase::Off); assert!(done.eye.is_none());
+    assert!(state.wait_idle(Duration::ZERO));
+}
+#[test]
+fn eye_owner_exit_reaps_actual_worker_job() {
+    if let Some(path)=std::env::var_os("TINGXIAN_EYE_OWNER_CASE") {
+        let path=PathBuf::from(path); let folder=path.parent().unwrap();
+        let job=EyeJob{input:folder.join("synthetic.bgr"),output:folder.join("new-output.bgr"),width:4,height:2,frames:3,provider:EyeProvider::Synthetic};
+        let worker=BundledWorker{sha256:format!("{:x}",Sha256::digest(fs::read(&path).unwrap())),path};
+        let state=Arc::new(Controller::default());
+        let _=begin_eye(&state,worker,job).execute();
+        panic!("owner should have been terminated by the exact spawned Child handle");
+    }
+    let worker=fixture("eye-owner.exe"); let _job=eye_job(&worker); let folder=worker.path.parent().unwrap().to_owned();
+    let mut child=std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact","tests::eye_owner_exit_reaps_actual_worker_job","--nocapture"])
+        .env("TINGXIAN_EYE_OWNER_CASE",&worker.path)
+        .stdout(fs::File::create(folder.join("owner.stdout")).unwrap())
+        .stderr(fs::File::create(folder.join("owner.stderr")).unwrap()).spawn().unwrap();
+    // Own the child through the entire failure path too; never leave a test owner.
+    let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        reached(&folder,"preparing");
+        let deadline=Instant::now()+Duration::from_secs(3);
+        let pid=loop {
+            if let Ok(text)=fs::read_to_string(folder.join("launched")) { if let Ok(pid)=text.parse::<u32>() {break pid;} }
+            assert!(Instant::now()<deadline); thread::sleep(Duration::from_millis(10));
+        };
+        use windows_sys::Win32::{Foundation::*,System::Threading::*,Storage::FileSystem::SYNCHRONIZE};
+        let observed=unsafe{OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,0,pid)};
+        assert!(!observed.is_null());
+        struct Observation(HANDLE);
+        impl Drop for Observation {fn drop(&mut self) {unsafe{CloseHandle(self.0)};}}
+        let observed=Observation(observed);
+        // Observation handle has NO terminate access; only the exact Child is killed.
+        assert_eq!(unsafe{WaitForSingleObject(observed.0,0)},WAIT_TIMEOUT);
+        child.kill().unwrap(); child.wait().unwrap();
+        let result=unsafe{WaitForSingleObject(observed.0,2000)};
+        assert_eq!(result,WAIT_OBJECT_0,"native worker survived the owner job lifetime");
+    }));
+    let _=child.kill(); let _=child.wait();
+    if let Err(panic)=result {std::panic::resume_unwind(panic);}
 }

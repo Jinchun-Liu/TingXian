@@ -2,9 +2,9 @@ name: Windows native video source
 on:
   push:
     branches: [feat/windows-eye-local-20261106]
-    paths: ['video/windows/**', 'crates/video-worker-control/**', 'Cargo.lock', '.github/workflows/video-source-checks.yml']
+    paths: ['video/windows/**', 'video/eye/**', 'crates/video-worker-control/**', 'Cargo.lock', '.github/workflows/video-source-checks.yml']
   pull_request:
-    paths: ['video/windows/**', 'crates/video-worker-control/**', 'Cargo.lock', '.github/workflows/video-source-checks.yml']
+    paths: ['video/windows/**', 'video/eye/**', 'crates/video-worker-control/**', 'Cargo.lock', '.github/workflows/video-source-checks.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -23,12 +23,20 @@ jobs:
         run: cmake --build "$env:RUNNER_TEMP/video-source-build" --config Release --parallel 2
       - name: Test real COM samples without registering a camera
         run: ctest --test-dir "$env:RUNNER_TEMP/video-source-build" -C Release --output-on-failure
+      - name: Build SDK-free eye process fixture
+        run: |
+          cmake -S video/eye -B "$env:RUNNER_TEMP/eye-worker-build" -A x64
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build "$env:RUNNER_TEMP/eye-worker-build" --config Release --parallel 2
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ctest --test-dir "$env:RUNNER_TEMP/eye-worker-build" -C Release --output-on-failure
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.99.1
       - name: Test main-controller and native worker without media
         run: |
           $env:TINGXIAN_VIDEO_TEST_BIN = "$env:RUNNER_TEMP/video-source-build/Release"
+          $env:TINGXIAN_EYE_TEST_BIN = "$env:RUNNER_TEMP/eye-worker-build/Release"
           $env:TINGXIAN_VIDEO_TEST_ROOT = "$env:RUNNER_TEMP/video-controller-fixtures"
           cargo test -p video-worker-control --locked -- --test-threads=1 2>&1 | Tee-Object "$env:RUNNER_TEMP/video-source-build/controller-test.log"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -52,6 +60,9 @@ jobs:
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-worker-fixture.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-controller-test.exe
             ${{ runner.temp }}/video-source-build/controller-test.log
+            ${{ runner.temp }}/eye-worker-build/Release/tingxian-eye-worker-fixture.exe
+            ${{ runner.temp }}/eye-worker-build/Release/tingxian-eye-session-test.exe
+            ${{ runner.temp }}/eye-worker-build/Testing/Temporary/LastTest.log
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-device-probe.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-device-synthetic-test.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-registration-test.exe

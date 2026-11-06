@@ -1,7 +1,9 @@
-//! Main-controller authority for explicit, local video prerequisite inspection.
-//! There is no camera/SDK start command. Restoration constructs an idle controller.
+//! Main-controller authority for inspection and explicit native offline eye jobs.
+//! No webview/camera start command is added. Restoration constructs an idle controller.
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::{Arc, Condvar, Mutex}, time::Duration};
+mod eye;
+pub use eye::{EyeJob, EyeOutcome, EyeProvider, EyeReport};
 #[cfg(windows)]
 mod windows;
 #[cfg(all(test, windows))]
@@ -9,10 +11,10 @@ mod tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Phase { Off, Preparing, Unavailable, Stopping, Fault }
+pub enum Phase { Off, Preparing, Unavailable, Stopping, Fault, Completed }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Reason { NotBundled, UnsupportedPlatform, RuntimeNotPinned, Integrity, Launch, Protocol, WorkerExit, Timeout, ForcedStop, Cleanup, Abandoned }
+pub enum Reason { NotBundled, UnsupportedPlatform, RuntimeNotPinned, Integrity, Launch, Protocol, WorkerExit, Timeout, ForcedStop, Cleanup, Abandoned, EyeInput, EyeOutput, EyeProcessing, ProviderCleanup }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Inspection {
@@ -38,12 +40,14 @@ impl Inspection {
     }
 }
 #[derive(Clone, Debug, Serialize)]
-pub struct Snapshot { pub generation: u64, pub phase: Phase, pub reason: Option<Reason>, pub inspection: Option<Inspection> }
+pub struct Snapshot { pub generation: u64, pub phase: Phase, pub reason: Option<Reason>, pub inspection: Option<Inspection>, pub eye: Option<EyeReport> }
 impl Default for Snapshot {
-    fn default() -> Self { Self { generation: 0, phase: Phase::Off, reason: None, inspection: None } }
+    fn default() -> Self { Self { generation: 0, phase: Phase::Off, reason: None, inspection: None, eye: None } }
 }
 // Native-only input. Never deserialize a webview-supplied path/hash/command.
 pub struct BundledWorker { pub path: PathBuf, pub sha256: String }
+enum Work { Inspect, Eye(EyeJob) }
+enum Report { Inspection(Inspection), Eye(EyeReport) }
 #[cfg(windows)]
 type Signal = windows::Signal;
 #[cfg(not(windows))]
@@ -62,19 +66,25 @@ pub struct Controller { inner: Mutex<Inner>, idle: Condvar }
 impl Controller {
     pub fn snapshot(&self) -> Snapshot { self.inner.lock().unwrap_or_else(|e|e.into_inner()).snapshot.clone() }
     pub fn begin(self: &Arc<Self>, worker: Option<BundledWorker>) -> Result<Option<Run>, &'static str> {
-        self.begin_inner(worker,None)
+        self.begin_inner(worker,None,Work::Inspect)
     }
     pub fn begin_if_current(self:&Arc<Self>,worker:Option<BundledWorker>,generation:u64)->Result<Option<Run>,&'static str> {
-        self.begin_inner(worker,Some(generation))
+        self.begin_inner(worker,Some(generation),Work::Inspect)
     }
-    fn begin_inner(self:&Arc<Self>,worker:Option<BundledWorker>,generation:Option<u64>)->Result<Option<Run>,&'static str> {
+    // Native caller must have explicit offline-input permission. Never expose
+    // this method by accepting a webview-supplied executable/hash/path/intent.
+    pub fn begin_eye_if_current(self:&Arc<Self>,worker:Option<BundledWorker>,job:EyeJob,generation:u64)->Result<Option<Run>,&'static str> {
+        self.begin_inner(worker,Some(generation),Work::Eye(job))
+    }
+    fn begin_inner(self:&Arc<Self>,worker:Option<BundledWorker>,generation:Option<u64>,work:Work)->Result<Option<Run>,&'static str> {
         let mut inner = self.inner.lock().unwrap_or_else(|e|e.into_inner());
         if generation.is_some_and(|value|value!=inner.snapshot.generation) {return Err("视频状态已变化，请重新检查");}
         if inner.suspended { return Err("正在退出，视频检查已暂停"); }
         if inner.cleanup_uncertain { return Err("视频进程清理未确认，请保留诊断并重启应用后再检查"); }
         if inner.active.is_some() { return Err("视频工作进程仍在运行，请先停止"); }
-        inner.snapshot.generation += 1;
+        inner.snapshot.generation = inner.snapshot.generation.checked_add(1).ok_or("视频代次已耗尽，请重启应用")?;
         inner.snapshot.inspection = None;
+        inner.snapshot.eye = None;
         let Some(worker) = worker else {
             inner.snapshot.phase = Phase::Unavailable; inner.snapshot.reason = Some(Reason::NotBundled); return Ok(None);
         };
@@ -85,12 +95,13 @@ impl Controller {
         let id = inner.snapshot.generation;
         inner.snapshot.phase = Phase::Preparing; inner.snapshot.reason = None;
         inner.active = Some(Active { id, signal: signal.clone() });
-        Ok(Some(Run { controller: self.clone(), signal, worker, id, finished: false }))
+        Ok(Some(Run { controller: self.clone(), signal, worker, work, id, finished: false }))
     }
     fn stop_locked(inner: &mut Inner) {
         if inner.cleanup_uncertain { return; }
-        inner.snapshot.generation += 1;
+        inner.snapshot.generation = inner.snapshot.generation.saturating_add(1);
         inner.snapshot.inspection = None;
+        inner.snapshot.eye = None;
         if let Some(active) = &inner.active {
             active.signal.stop(); inner.snapshot.phase = Phase::Stopping;
         } else { inner.snapshot.phase = Phase::Off; inner.snapshot.reason = None; }
@@ -106,19 +117,33 @@ impl Controller {
         let (inner, _) = self.idle.wait_timeout_while(inner, timeout, |s|s.active.is_some()).unwrap_or_else(|e|e.into_inner());
         inner.active.is_none() && !inner.cleanup_uncertain
     }
-    fn complete(&self, id: u64, cancelled: bool, result: Result<Inspection, Reason>) {
+    fn complete(&self, id: u64, cancelled: bool, result: Result<Report, Reason>) {
         let mut inner = self.inner.lock().unwrap_or_else(|e|e.into_inner());
         if inner.active.as_ref().map(|a|a.id) != Some(id) { return; }
+        // Recheck under the admission lock. The caller's atomic snapshot can
+        // precede a stop that wins this lock before completion is published.
+        let cancelled = cancelled || inner.snapshot.generation != id
+            || inner.active.as_ref().is_some_and(|active|active.signal.stopped());
         // Cancellation wins over late reports, but never conceals forced cleanup.
-        let cleanup_failure = matches!(result, Err(Reason::ForcedStop | Reason::Cleanup | Reason::Timeout));
-        if result == Err(Reason::Cleanup) { inner.cleanup_uncertain = true; }
+        let cleanup_failure = matches!(&result, Err(Reason::ForcedStop | Reason::Cleanup | Reason::Timeout)
+            | Ok(Report::Eye(EyeReport { cleanup_uncertain: true, .. })));
+        if matches!(result, Err(Reason::Cleanup)) { inner.cleanup_uncertain = true; }
         inner.active = None;
         if cancelled && !cleanup_failure {
-            inner.snapshot.phase = Phase::Off; inner.snapshot.reason = None; inner.snapshot.inspection = None;
+            inner.snapshot.phase = Phase::Off; inner.snapshot.reason = None; inner.snapshot.inspection = None; inner.snapshot.eye = None;
         } else {
             match result {
-                Ok(report) => { inner.snapshot.phase = Phase::Unavailable; inner.snapshot.reason = Some(Reason::RuntimeNotPinned); inner.snapshot.inspection = Some(report); }
-                Err(reason) => { inner.snapshot.phase = Phase::Fault; inner.snapshot.reason = Some(reason); inner.snapshot.inspection = None; }
+                Ok(Report::Inspection(report)) => { inner.snapshot.phase = Phase::Unavailable; inner.snapshot.reason = Some(Reason::RuntimeNotPinned); inner.snapshot.inspection = Some(report); }
+                Ok(Report::Eye(report)) => {
+                    inner.snapshot.phase = if report.outcome == EyeOutcome::Completed { Phase::Completed } else { Phase::Fault };
+                    inner.snapshot.reason = match report.outcome {
+                        EyeOutcome::Completed => None,
+                        _ if report.cleanup_uncertain => Some(Reason::ProviderCleanup),
+                        _ => Some(Reason::EyeProcessing),
+                    };
+                    inner.snapshot.eye = Some(report);
+                }
+                Err(reason) => { inner.snapshot.phase = Phase::Fault; inner.snapshot.reason = Some(reason); inner.snapshot.inspection = None; inner.snapshot.eye = None; }
             }
         }
         self.idle.notify_all();
@@ -126,12 +151,15 @@ impl Controller {
 }
 // Reserved before async dispatch. Dropping a queued task settles its slot and
 // invalidates its authority instead of leaving the app permanently busy.
-pub struct Run { controller: Arc<Controller>, signal: Arc<Signal>, worker: BundledWorker, id: u64, finished: bool }
+pub struct Run { controller: Arc<Controller>, signal: Arc<Signal>, worker: BundledWorker, work: Work, id: u64, finished: bool }
 impl Run {
-    pub fn execute(self) -> Snapshot { self.execute_with_timeout(Duration::from_secs(5)) }
+    pub fn execute(self) -> Snapshot {
+        let timeout = if matches!(self.work, Work::Eye(_)) { 120 } else { 5 };
+        self.execute_with_timeout(Duration::from_secs(timeout))
+    }
     fn execute_with_timeout(mut self, timeout: Duration) -> Snapshot {
         #[cfg(windows)]
-        let result = windows::inspect(&self.worker, &self.signal, timeout);
+        let result = windows::execute(&self.worker, &self.signal, &self.work, self.id, timeout);
         #[cfg(not(windows))]
         let result = { let _ = timeout; Err(Reason::UnsupportedPlatform) };
         self.controller.complete(self.id, self.signal.stopped(), result);

@@ -19,8 +19,8 @@ buffer or an error. `Session` owns explicit preparation and generation admission
   Cleanup uncertainty permanently blocks this process from restarting.
 - Provider calls use one worker execution lane. The session owns no threads.
   The host must join that lane after stop before destruction, and supervise it in
-  a killable process for hangs/crashes. The existing worker supervisor is a future
-  integration point; it is not connected to this module yet.
+  a killable process for hangs/crashes. An explicit native offline worker now uses
+  `video-worker-control`; live capture, preview and output integration remain pending.
 - Sink callbacks run under the generation lock and must be short, non-reentrant,
   synchronous and `noexcept`. They acknowledge handoff, not meeting receipt.
 
@@ -34,6 +34,41 @@ ctest --test-dir <new-build-directory> -C Release --output-on-failure
 
 These use synthetic bytes and a fake provider only. CI on Windows and Linux has
 no NVIDIA dependency and cannot certify the SDK, GPU, quality or performance.
+
+## Supervised native worker
+
+`tingxian-eye-worker` is a separate opt-in laboratory target using the real
+provider. `tingxian-eye-worker-fixture` uses synthetic bytes only and is never
+installed. The Rust `video-worker-control` library accepts a native `EyeJob`,
+verifies the executable and opens the explicitly authorized input read-only plus
+a new output with exclusive creation. It passes restricted owner, stop, report
+and file handles through an allowlist into a hidden, suspended process, assigns
+the existing kill-on-close single-process Job, then resumes it.
+
+`--eye-offline-v1` accepts inherited handles and bounded numeric metadata, not
+file/model paths, PIDs, device selection, credentials or webview input. Vendor
+stdout is separate from the bounded report channel. Reports must match the
+generation, expected provider, dimensions and actual output length; a partial
+result cannot claim completion. The no-media inspection protocol is unchanged.
+
+Both the watcher and the processing lane check the actual owner/stop handles.
+The controller rechecks cancellation while holding its completion lock, so a
+stop cannot lose to a previously sampled success. Unresponsive workers are ended
+through the exact owned Job after the existing one-second stop grace; forced
+cleanup and provider cleanup uncertainty remain visible faults. A confirmed dead
+worker can be explicitly replaced, but no task resumes automatically.
+
+Offline files are diagnostic until a complete result is accepted. Cancellation
+discards completion authority; an already-issued disk write can finish in the
+rejected partial file. This file sink is **not** a live output lease and must not
+be reused for preview/virtual output. Those need the existing output watchdog and
+generation contract. The worker is not yet bundled, exposed by Tauri commands or
+connected to an actual camera. The main/display capability boundary is unchanged.
+
+The local-only `cargo run -p video-worker-control --example eye_offline -- ...`
+diagnostic invokes this exact supervisor. Its arguments are the pinned EXE,
+SHA-256, width, height, frame count, authorized BGR input and new output. Real SDK
+execution still requires an active outbound block for that exact worker path.
 
 ## Explicit AR 0.8.7 offline experiment
 

@@ -25,6 +25,10 @@
 
 ## EyeCorrectionProvider 独立边界（2026-11-07）
 
+续作新增[受监督的原生离线 worker](eye-worker-validation-2026-11-07.md)，复用受限
+继承句柄与 Job 生命周期；修复工作线程及 controller 完成锁的取消竞态。新增 10 组
+合成/实际进程检查通过，旧夹具本机启动失败单独保留，不冒称整轮全通过。
+
 新增可替换原生 provider、最多两帧队列、旧代次隔离、错误中性化和清理失败禁止重启；
 本机 SDK-free 合成测试 137 条断言通过。旧版 Ada 为显式离线实验构建，实际 SDK 记录
 保留本地，不纳入公开 CI。详见[分层验收](eye-provider-validation-2026-11-07.md)。尚未
