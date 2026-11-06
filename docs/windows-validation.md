@@ -4,6 +4,8 @@
 
 ## 自动验证
 
+原生输出组件另有[无设备注册检查](video-source-validation-2026-11-06.md)：6ba5a80 的独立 DLL 在 Windows CI 与本机各通过 15 组真实 COM/MF 合成样本检查。它证明组件字节输出及生命周期，不证明虚拟摄像头已安装、会议软件已接收或眼部处理已完成。
+
 眼部可选组件的独立完整性检查见 [组件与输出决策](eye-local-runtime-design.md)。本机 20 项合成回归通过，涵盖中文路径、组件依赖、摘要、PE 架构和目录重定向拒绝；`Eye runtime integrity contracts` CI 仅检查这些脚本。两者都没有加载 NVIDIA SDK，不是 GPU、摄像头、虚拟设备或安装版验收。
 
 CI 检查 CPU 构建、前端回归、Rust 核心、固定摘要的随包资源、真实安装、自带 Python/DOCX/PDF/Whisper/FFmpeg、数据库迁移与恢复、卸载保留合成用户文件。运行链接和提交号在发布说明记录。2026-11-05 的构建 `d888e6156201636d1494c4387da295d66095ba1d` 已通过这些检查，并通过合成回收归档核对及 CI 桌面内存截图检查：[运行记录](https://github.com/Jinchun-Liu/TingXian/actions/runs/41999633117)。实际音频设备、GUI 交互、旧版升级、双屏与长通话仍未验收。
