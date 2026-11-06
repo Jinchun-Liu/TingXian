@@ -5,6 +5,9 @@ use std::{ffi::{c_void, OsStr}, fs::{File, OpenOptions}, io::Read,
     path::Component, ptr::{null, null_mut}, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
 use windows_sys::Win32::{Foundation::*, Security::SECURITY_ATTRIBUTES,
     Storage::FileSystem::*, System::{JobObjects::*, Pipes::CreatePipe, Threading::*}};
+#[cfg(test)]
+#[path = "launch_diagnostics.rs"]
+mod launch_diagnostics;
 
 struct Handle(HANDLE);
 unsafe impl Send for Handle {}
@@ -187,10 +190,16 @@ fn launch(worker: &BundledWorker, signal: &Signal, work: &Work, generation: u64)
     startup.lpAttributeList = attributes.pointer();
     let mut info: PROCESS_INFORMATION = unsafe { zeroed() };
     if signal.stopped() { return Err(Reason::Abandoned); }
+    #[cfg(test)]
+    let diagnostic = launch_diagnostics::before(worker, &verified._file);
     if unsafe { CreateProcessW(exe.as_ptr(), command.as_mut_ptr(), null(), null(), 1,
         EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
         environment.as_ptr().cast::<c_void>(), cwd.as_ptr(), &startup.StartupInfo, &mut info) } == 0 {
-        #[cfg(test)] eprintln!("CreateProcessW failed: {}", unsafe { GetLastError() });
+        #[cfg(test)] {
+            let error = unsafe { GetLastError() };
+            eprintln!("CreateProcessW failed: {error}");
+            launch_diagnostics::failed(worker, &verified._file, diagnostic, error);
+        }
         return Err(Reason::Launch);
     }
     let process = Handle::take(info.hProcess)?; let thread = Handle::take(info.hThread)?;

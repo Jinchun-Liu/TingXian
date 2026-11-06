@@ -10,8 +10,13 @@ fn fixture(name: &str) -> BundledWorker {
     let src = if name.starts_with("eye-") {
         PathBuf::from(std::env::var_os("TINGXIAN_EYE_TEST_BIN").expect("explicit eye fixture directory")).join("tingxian-eye-worker-fixture.exe")
     } else { bin.join(if name == "production.exe" { "tingxian-video-worker.exe" } else { "tingxian-video-worker-fixture.exe" }) };
+    // Pin the known build BEFORE copying. Rehashing only the destination could
+    // accidentally bless bytes changed by a copy/host intervention as trusted.
+    let expected = format!("{:x}", Sha256::digest(fs::read(&src).unwrap()));
     let path = folder.join(name); fs::copy(src, &path).unwrap();
-    BundledWorker { sha256: format!("{:x}", Sha256::digest(fs::read(&path).unwrap())), path }
+    assert_eq!(format!("{:x}", Sha256::digest(fs::read(&path).unwrap())), expected,
+        "synthetic fixture copy differs from the original build");
+    BundledWorker { sha256: expected, path }
 }
 fn launched(folder: &Path) {
     reached(folder,"launched");
@@ -64,6 +69,10 @@ fn wrong_hash_and_hard_link_are_rejected_before_execution() {
     assert!(!path.parent().unwrap().join("launched").exists());
     let worker = fixture("valid.exe"); fs::hard_link(&worker.path, worker.path.with_extension("alias")).unwrap();
     assert_eq!(state.begin(Some(worker)).unwrap().unwrap().execute().reason, Some(Reason::Integrity));
+    let worker = fixture("valid.exe"); let path = worker.path.clone();
+    let mut bytes = fs::read(&path).unwrap(); bytes[0] ^= 1; fs::write(&path, bytes).unwrap();
+    assert_eq!(state.begin(Some(worker)).unwrap().unwrap().execute().reason, Some(Reason::Integrity));
+    assert!(!path.parent().unwrap().join("launched").exists(), "a changed copy must not be repinned or executed");
 }
 #[test]
 fn worker_crash_and_invalid_report_remain_visible_faults() {
