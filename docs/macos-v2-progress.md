@@ -81,3 +81,4 @@
 - Chrome 用 `scripts/build-background-settings-fixture.cjs <新目录> --versions` 检查生产构建的新旧引文和历史入口；截图 `/tmp/tingxian-source-diff-1106.png` 为隔离合成页面，不涉及用户资料、采集或真实 API。
 - 便携包2.0.1：10文件，21096 bytes，SHA-256 `cecf02bf0c4c50ffb22ca67c8c6bef27a57447f8e6f495b04fa21d1ac9ef0923`。解包后逐文件摘要与源码一致，离线自测通过；保留2.0.0包。安装版仍为0.6.5，本轮未升级或重启。
 - 跨平台合并接口与数据边界见 [背景来源版本契约](background-versions-contract.md)。只修改 Mac 开发分支，不改 Windows 数字人分支。
+- 提交 `f7ed4de19f972af58aacfaf3b2d21644bc05f118` 的 [源码与共享核心 CI](https://github.com/Jinchun-Liu/TingXian/actions/runs/42174128178) 两组均成功。最终历史面板截图 `/tmp/tingxian-source-history-1106.png`；检查期间未出现页面控制台错误。CI 不构建 Mac 安装器或验证真实模型。
