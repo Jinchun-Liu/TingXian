@@ -8,6 +8,8 @@ on:
       - 'Cargo.toml'
       - 'crates/**'
       - 'frontend/**'
+      - 'interview/**'
+      - 'vendor/**'
   pull_request:
     paths:
       - '.github/workflows/macos-native-checks.yml'
@@ -15,6 +17,8 @@ on:
       - 'Cargo.toml'
       - 'crates/**'
       - 'frontend/**'
+      - 'interview/**'
+      - 'vendor/**'
   workflow_dispatch:
 permissions:
   contents: read
@@ -54,6 +58,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: macos-native-tests-no-debug
+          cache-on-failure: true
       - name: Build frontend assets for native context
         working-directory: frontend
         run: |

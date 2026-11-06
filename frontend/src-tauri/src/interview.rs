@@ -429,14 +429,18 @@ mod import_command_tests {
         let passed_id=uuid::Uuid::new_v4().to_string();app.state::<InterviewState>().connection.begin(&passed_id,"deepseek-flash").unwrap();
         app.state::<InterviewState>().connection.finish(&passed_id,interview_core::ProbeOutcome{success:true,message:"ok".into(),elapsed_ms:1,attempts:1,total_tokens:Some(9)}).unwrap();
         let custom=json!({"model":"synthetic-model","connect_timeout_secs":2,"first_answer_warning_secs":3,"total_timeout_secs":10});
+        // Legacy callers omit the budget; the IPC response must normalize it
+        // to the app's 256K baseline while preserving the caller's values.
+        let mut expected=custom.clone();
+        expected["budget"]=json!({"context_tokens":262144,"max_output_tokens":8192,"safety_tokens":2048});
         let save=||invoke("interview_request_config_save",json!({"config":custom}));
         let guard=tauri::async_runtime::block_on(lifecycle.lock_owned());assert!(save().is_err());drop(guard);
         app.state::<InterviewState>().session.store(true,Ordering::SeqCst);assert!(save().is_err());
-        app.state::<InterviewState>().session.store(false,Ordering::SeqCst);assert_eq!(save().unwrap().deserialize::<Value>().unwrap(),custom);
+        app.state::<InterviewState>().session.store(false,Ordering::SeqCst);assert_eq!(save().unwrap().deserialize::<Value>().unwrap(),expected);
         assert_eq!(invoke("interview_connection_status",json!({})).unwrap().deserialize::<Value>().unwrap()["status"],"untested");
         let mut bad=custom.clone();bad["total_timeout_secs"]=2.into();assert!(invoke("interview_request_config_save",json!({"config":bad})).is_err());
         let mut bad=custom.clone();bad["extra"]=true.into();assert!(invoke("interview_request_config_save",json!({"config":bad})).is_err());
-        assert_eq!(invoke("interview_request_config_get",json!({})).unwrap().deserialize::<Value>().unwrap(),custom);
+        assert_eq!(invoke("interview_request_config_get",json!({})).unwrap().deserialize::<Value>().unwrap(),expected);
         assert!(invoke("interview_exit_request",json!({"restart":false})).is_ok());assert!(save().is_err());
         assert!(!app.state::<InterviewState>().session.load(Ordering::SeqCst));
         assert!(app.state::<InterviewState>().active.is_empty());
