@@ -24,6 +24,18 @@ def sha(path):
         for chunk in iter(lambda:stream.read(1024*1024),b""): h.update(chunk)
     return h.hexdigest()
 
+def clean_finder_metadata(app):
+    # Only the newly generated bundle: copied Finder/resource-fork metadata
+    # prevents codesign. Preserve quarantine and all other extended attributes.
+    app=app.resolve()
+    attributes=subprocess.check_output(["/usr/bin/xattr","-rs",str(app)],text=True)
+    for line in attributes.splitlines():
+        name,separator,attr=line.rpartition(": ")
+        if not separator or attr not in ("com.apple.FinderInfo","com.apple.ResourceFork"): continue
+        path=Path(name)
+        if not path.resolve().is_relative_to(app): raise SystemExit("Metadata path outside generated bundle")
+        if not path.is_symlink(): run("/usr/bin/xattr","-ds",attr,path)
+
 def main():
     args=argparse.ArgumentParser()
     for key in ("app","python","model","media","media-source","out"):
@@ -39,7 +51,9 @@ def main():
     a.out.mkdir(parents=True,exist_ok=True)
     dest=a.out/f"TingXian-{version}-macOS-arm64.pkg"
     if dest.exists(): raise SystemExit("Choose a fresh output directory")
-    stage=Path(tempfile.mkdtemp(prefix="tingxian-package-",dir=a.out))
+    # Keep signing work outside Desktop/Finder-synced output folders: FinderInfo
+    # may be reintroduced there after signing. Retain this stage for inspection.
+    stage=Path(tempfile.mkdtemp(prefix="tingxian-package-"))
     payload=stage/"payload";app=payload/"听弦.app"
     app.parent.mkdir();run("/usr/bin/ditto",a.app,app)
     resources=app/"Contents/Resources";macos=app/"Contents/MacOS";runtime=resources/"python"
@@ -65,6 +79,7 @@ def main():
     with tarfile.open(a.media_source) as src:
         (notices/"FFmpeg-LGPL-2.1.txt").write_bytes(src.extractfile("ffmpeg-8.0.1/COPYING.LGPLv2.1").read())
     (notices/"ffmpeg-build.txt").write_text(config+"\nSource and build instructions: https://github.com/Jinchun-Liu/TingXian\n")
+    clean_finder_metadata(app)
     app_sign=os.getenv("TINGXIAN_APP_SIGN","-")
     def sign(path,outer=False):
         flags=["--force","--sign",app_sign]

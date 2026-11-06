@@ -92,3 +92,13 @@
 - 68项核心、31项 Mac 原生（真实废纸篓1项仍跳过）、26组前端脚本、TypeScript 与生产构建通过。新增回环 HTTP 用例验证发送前阻断、无 usage 选项及未知用量；没有连接服务商。
 - Chrome 生产合成页面确认主题下拉、日期/来源、保存和模型变化后清除旧能力；截图 `/tmp/tingxian-model-capabilities-1106.png`。多接口保存与查看本身不发送模型请求。
 - 用户正在开通云转写账号。安装版仍为0.6.5；磁盘恢复后开始制作 Mac 0.7.0-beta.1 独立测试包，安装与真实恢复验收另行记录，不把源码检查当作已安装。
+- 提交 `95117837070ead1509365cb555c21095cbecb161` 的 [源码与共享核心 CI](https://github.com/Jinchun-Liu/TingXian/actions/runs/42177805798) 两组通过；本机 Mac 原生和合成页面是独立证据。
+
+## Mac 0.7.0-beta.1 安装包就绪（2026-11-06）
+
+- 使用上述源码、Mac 预览配置和既有 debug 基线构建静态资源独立应用；不是优化 release 性能验收。生成 arm64、macOS14.4+ 的一键 pkg，应用标识和安装目录保持兼容。
+- 包为个人开发测试版：应用 ad hoc 签名，pkg 未使用开发者证书签名，未办理 Apple 公证。旧版仍运行且未替换；已向用户确认保存输入后是否切换，安装/恢复短测待回复。
+- `TingXian-0.7.0-beta.1-macOS-arm64.pkg`：547144170 bytes，SHA-256 `83cfcf68a0017471750118d9f9f9d9476eda138ebfe623324cc7982a9035737b`。
+- 打包副本的 strict/deep 签名及随包 Whisper small、DOCX/PDF/YAML运行时、FFmpeg离线自检通过。最终 pkg 的 Distribution/PackageInfo 已核对版本、arm64、最低系统、不可重定位和 `/Applications`。
+- 为节约空间，仅展开压缩容器，流式核对 Payload 中1257个普通文件/符号链接与已自检应用的内容、模式、链接目标完全一致；1380个 AppleDouble 元数据条目单列，确认无非零 FinderInfo 或资源分叉。不是执行安装器或安装后验收。明细为交付目录的 `payload-verification.json`。
+- 修复打包脚本：只清理新副本的 FinderInfo/ResourceFork，保留其他扩展属性；暂存改到系统临时目录。桌面副本签名后曾再次出现 FinderInfo，移动等待已中止并核对源目录完整；新临时副本完整重跑打包成功。未删除旧副本、缓存或用户资料。
