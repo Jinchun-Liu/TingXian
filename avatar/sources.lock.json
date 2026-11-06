@@ -1,15 +1,18 @@
 {
   "schema_version": 1,
   "checked_at": "2026-11-06",
-  "status": "source_review_only_no_avatar_inference",
+  "status": "offline_liveportrait_render_verified_other_candidates_source_review_only",
   "sources": [
     {"directory": "LiveTalking", "url": "https://github.com/lipku/LiveTalking.git", "commit": "c7269433a2b6ecebcd9342445d2ecc882c98b0da"},
     {"directory": "MuseTalk", "url": "https://github.com/TMElyralab/MuseTalk.git", "commit": "0a89dec45a0192b824e3cf4daf96c239440c5ed8"},
     {"directory": "FasterLivePortrait", "url": "https://github.com/warmshao/FasterLivePortrait.git", "commit": "8aad3602177547aaa5e4beec0c3ef5b7944e7a1f"},
     {"directory": "SoulX-FlashHead", "url": "https://github.com/Soul-AILab/SoulX-FlashHead.git", "commit": "9bc03de06bb0de82cd6bc477804512ae06144bf2"},
-    {"directory": "avtr-1", "url": "https://github.com/avaturn-live/avtr-1.git", "commit": "eb1e5a89ed7bec3debe712b090efd676b3a420bd"}
+    {"directory": "avtr-1", "url": "https://github.com/avaturn-live/avtr-1.git", "commit": "eb1e5a89ed7bec3debe712b090efd676b3a420bd"},
+    {"directory": "LivePortrait", "url": "https://github.com/KlingAIResearch/LivePortrait.git", "commit": "9b294b3d0536135442ea73cb01e6cb3ca7029dd3"}
   ],
   "model_metadata": [
-    {"repo": "Soul-AILab/SoulX-FlashHead-1_3B", "revision": "5fbd2e44ba08ab2deb28bd55cff2c15523e51ba5", "file_read": "Model_Lite/config.json", "weights_downloaded": false, "temporal_vae_stride": 8}
+    {"repo": "Soul-AILab/SoulX-FlashHead-1_3B", "revision": "5fbd2e44ba08ab2deb28bd55cff2c15523e51ba5", "file_read": "Model_Lite/config.json", "weights_downloaded": false, "temporal_vae_stride": 8},
+    {"repo": "KlingTeam/LivePortrait", "revision": "82a4fa6735ca58432b6ce39301b4b9ee066dea47", "weights_downloaded": true, "scope": "7 allowlisted files; no InsightFace detector weights"},
+    {"repo": "stabilityai/sd-turbo", "revision": "b261bac6fd2cf515557d5d0707481eafa0485ec2", "weights_downloaded": true, "scope": "14 allowlisted files; local fictional test portrait only"}
   ]
 }

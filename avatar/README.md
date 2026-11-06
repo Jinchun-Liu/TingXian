@@ -2,7 +2,9 @@
 
 此目录是独立的 R10/R11 实验组件，尚未接入安装版。导入模块不启动设备、网络服务、LLM 或 TTS。重型运行时和权重放在开发机 D 盘的外部目录，不能进入基础安装包。
 
-当前实现仅为 `original_voice.py`：把已经重采样的本人原声 PCM16 mono 分成腾讯云 / LiveAvatar LITE 文档规定的请求，并生成结束与打断事件。它不采集、不重采样、不发送、不渲染、不输出音频。`VoicePacket` 的采样位置是输入媒体时间，不能当作“已播放”或“对方已听见”。
+`original_voice.py` 把已经重采样的本人原声 PCM16 mono 分成腾讯云 / LiveAvatar LITE 文档规定的请求，并生成结束与打断事件。它不采集、不重采样、不发送、不渲染、不输出音频。`VoicePacket` 的采样位置是输入媒体时间，不能当作“已播放”或“对方已听见”。
+
+`liveportrait_renderer.py` 是已实际出画的独立 CUDA 适配器，接受准备好的正面方形肖像裁切及头姿/眨眼参数，返回 512×512 RGB 帧。当前不支持眼神方向、身体跟踪、音频口型、摄像头采集或虚拟输出，能力表如实标 false；与原声模块尚未连接。它固定校验第三方源码 commit，使用单次 CPU 关键点注册和 GPU 渲染，不静默回落到 CPU 渲染。
 
 ```python
 from avatar.original_voice import OriginalVoicePackets
@@ -27,3 +29,23 @@ python scripts/test-avatar-original-voice.py
 ```
 
 协议来源（2026-11-06）：[腾讯音频驱动](https://cloud.tencent.com/document/product/1240/100398)、[LiveAvatar LITE 事件](https://docs.liveavatar.com/docs/lite-mode/events)。市场与选型见 [研究报告](../docs/avatar-research-2026-11-06.md)。
+
+## 本地无声渲染复现
+
+先在 D 盘独立目录取得 `sources.lock.json` 固定版本的官方 LivePortrait 源码。以下命令要求已配置 CUDA 的独立 Python 环境；不要给普通安装用户要求开发工具，也不要修改别的项目环境来凑依赖。本机本轮只读调用已有环境，其版本记录在验收报告；全新环境重建仍待验收。
+
+```powershell
+python scripts/avatar-prepare-runtime.py --root D:\TingXian-avatar-runtime --manifest D:\TingXian-avatar-evidence\models.json --with-fixture-generator
+python scripts/avatar-generate-fixture.py --model D:\TingXian-avatar-runtime\models\sd-turbo-fixture --output D:\TingXian-avatar-evidence\portrait.png
+python scripts/avatar-render-probe.py --source D:\TingXian-third-party\LivePortrait --weights D:\TingXian-avatar-runtime\models\liveportrait --portrait D:\TingXian-avatar-evidence\portrait.png --output D:\TingXian-avatar-evidence\render-01
+python scripts/avatar-inspect-video.py --run D:\TingXian-avatar-evidence\render-01
+```
+
+- 准备脚本只下载公开、固定 revision 的白名单文件，使用 LFS SHA-256 或 Git blob 摘要核验；不安装依赖、不获取凭证。
+- 生成合成肖像使用本地 SD-Turbo，推理设置离线，不能把这项工程测试工具描述成已完成个人形象注册。
+- 适配器在已裁切方形正面肖像上直接运行上游 landmark 模型，不调用 InsightFace。任意个人照片的检测、自动裁切、质量检查和 UI 仍需实现。
+- 输出目录和文件使用新名字；已有结果不覆盖。原始失败记录保留。
+- 计时含 GPU 同步和 CPU 取帧，另记录渲染加编码全程吞吐、冷首帧和显存。MP4 标注 25 fps 不等于生成速度达标。脚本不播放视频、不访问相机/麦克风。
+- `--cudnn-benchmark` 仅为固定画幅优化对照，未改为默认。早期 23.51/24.61 fps 包含抽帧 PNG 写盘；明确排除该取证开销后的默认配置为 24.79 fps，仍无持续 25 fps 余量。计时修正和原始结果均保留，不宣称实时通过。
+
+模型与代码许可分别见 [第三方说明](THIRD_PARTY.md)。具体结果和限制见 [验收记录](../docs/avatar-validation-2026-11-06.md)。
