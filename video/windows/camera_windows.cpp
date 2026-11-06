@@ -64,6 +64,7 @@ class WindowsCameraBackend final : public CameraBackend {
     ComPtr<IMFVirtualCamera> camera_;
     bool mf_started_ = false;
     bool start_attempted_ = false;
+    bool started_ = false;
     Handle reservation_;
 public:
     ~WindowsCameraBackend() override { shutdown(); }
@@ -95,10 +96,25 @@ public:
     HRESULT start() noexcept override {
         if (!camera_) return E_UNEXPECTED;
         start_attempted_ = true;
-        return camera_->Start(nullptr);
+        const HRESULT hr = camera_->Start(nullptr);
+        started_ = SUCCEEDED(hr);
+        return hr;
     }
     HRESULT stop() noexcept override {
-        return camera_ && start_attempted_ ? camera_->Stop() : S_OK;
+        const HRESULT hr = camera_ && start_attempted_ ? camera_->Stop() : S_OK;
+        if (SUCCEEDED(hr)) started_ = false;
+        return hr;
+    }
+    HRESULT preview_source(IMFMediaSource** source) noexcept override {
+        if (!source) return E_POINTER;
+        *source = nullptr;
+        return camera_ && started_ ? camera_->GetMediaSource(source) : E_UNEXPECTED;
+    }
+    HRESULT symbolic_link(wchar_t** link, UINT32* length) noexcept override {
+        if (!link || !length) return E_POINTER;
+        *link = nullptr; *length = 0;
+        return camera_ && started_ ? camera_->GetAllocatedString(
+            MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK, link, length) : E_UNEXPECTED;
     }
     HRESULT shutdown() noexcept override {
         HRESULT hr = S_OK;
@@ -106,7 +122,7 @@ public:
             const HRESULT cleared = camera_->DeleteItem(PipeEndpointAttribute);
             hr = camera_->Shutdown(); // still attempt after an attribute-clear failure
             if (FAILED(hr)) return hr; // retain this object for an explicit retry
-            camera_.Reset(); start_attempted_ = false;
+            camera_.Reset(); start_attempted_ = false; started_ = false;
             if (FAILED(cleared)) hr = cleared;
         }
         if (mf_started_) {

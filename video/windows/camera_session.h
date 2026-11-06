@@ -1,5 +1,6 @@
 #pragma once
 #include "frame_transport.h"
+#include <mfidl.h>
 #include <atomic>
 #include <mutex>
 
@@ -18,6 +19,16 @@ struct CameraBackend {
     virtual HRESULT start() noexcept = 0;
     virtual HRESULT stop() noexcept = 0;
     virtual HRESULT shutdown() noexcept = 0;
+    // Only on the owning MTA, after start, serialized with stop/shutdown. The
+    // shared preview belongs to this virtual camera; never select a physical one.
+    virtual HRESULT preview_source(IMFMediaSource** source) noexcept {
+        if (!source) return E_POINTER;
+        *source = nullptr; return E_NOTIMPL;
+    }
+    virtual HRESULT symbolic_link(wchar_t** link, UINT32* length) noexcept {
+        if (!link || !length) return E_POINTER;
+        *link = nullptr; *length = 0; return E_NOTIMPL;
+    }
 };
 enum class CameraSessionState : UINT32 { idle, starting, available, stopping, fault };
 struct CameraSessionStatus {

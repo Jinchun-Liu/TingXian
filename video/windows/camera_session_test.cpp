@@ -161,11 +161,16 @@ void run() {
     }
     {
         std::unique_ptr<CameraBackend> backend(make_windows_camera_backend()); expect(bool(backend), "backend allocation");
+        IMFMediaSource* preview = nullptr; wchar_t* link = nullptr; UINT32 length = 0;
+        expect(backend->preview_source(&preview) == E_UNEXPECTED && !preview,
+            "inactive backend exposed/started a preview");
+        expect(backend->symbolic_link(&link, &length) == E_UNEXPECTED && !link && !length,
+            "inactive backend exposed a device");
         expect(backend->prepare(ep) == CO_E_NOTINITIALIZED, "native backend used uninitialized COM");
         check(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED), "STA test setup");
         const HRESULT sta = backend->prepare(ep); CoUninitialize();
         expect(sta == RPC_E_WRONG_THREAD, "native backend allowed UI STA");
-        pass("production backend rejects absent COM and UI STA before device access");
+        pass("production backend rejects inactive preview, absent COM and UI STA before device access");
     }
     {
         Trace t; Lease lease(t); Backend b(t);

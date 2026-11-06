@@ -2,8 +2,8 @@
 
 `camera_session.*` implements the explicit output lifecycle. `camera_windows.cpp`
 supplies the actual Windows backend; it is compiled into a separate static library,
-not automatically loaded by the base app. Main-window/Tauri integration and the
-optional system component installer are still required.
+not automatically loaded by the base app. The optional MSI has passed CI and
+target-machine installation/COM checks; main-window/Tauri integration remains.
 
 ## Runtime contract
 
@@ -69,10 +69,39 @@ is exercised only for rejection before device access (COM missing/STA). These ar
 not real Windows device-registration or FrameServer/LocalService tests. The existing
 source and IPC tests continue to verify the actual DLL/COM/MF samples separately.
 
-Next gates: protected optional component install and rollback, actual Session and
+Next gates: target component uninstall/reinstall, actual Session and
 CurrentUser lifecycle through FrameServer, application/worker authority and stop
 integration, SDK loading and eye processing, UI and installation, camera/meeting
 and performance acceptance. Camera and audio remain off until authorized.
+
+## Installed-device synthetic verification
+
+`tingxian-video-device-synthetic-test --describe` has no media/device side effects
+and is the only mode invoked by ordinary CTest. `--run-synthetic-device` is an
+explicit, separately authorized Windows 11 check after installing the verified
+component. It creates a Session / CurrentUser virtual camera via the production
+backend, obtains only that instance's shared preview via `GetMediaSource`, and
+reads generated gray NV12 frames through an asynchronous Media Foundation reader.
+It never selects/opens a physical camera, opens audio, records images, calls an
+eye SDK or changes privacy settings. Windows may still require camera API consent;
+permission denial is a failure, never a reason to change settings automatically.
+
+Hypothesis: the installed source can be activated through FrameServer, receive the
+authenticated producer's synthetic pixels, become neutral after producer closure,
+and disappear after shutdown. Decision value: whether the OS/IPC implementation
+can support application integration. Stop on the first API, pixel, timeout or
+cleanup failure; preserve the stage and HRESULT. Three cycles check actual restart
+and reservation release only after the preceding cycle passes. Each sample wait is
+bounded to five seconds; OS device calls may still block and need investigation.
+The program logs stages, counts and HRESULTs, never the pipe capability, device
+identifier or pixels. Enumeration reads metadata only to match its own exact
+symbolic link, before and after shutdown; it never activates an enumerated source.
+
+The new backend preview/link getters require successful Start and must be called
+on its owning MTA, serialized with Stop/Shutdown. The preview is a shared client,
+not an exclusive physical capture source. A passing test would establish this
+installed synthetic path, not real camera permission/quality, effective meeting
+FPS, end-to-end synchronization, third-party application selection or eye inference.
 
 ## Official references checked 2026-11-06
 
