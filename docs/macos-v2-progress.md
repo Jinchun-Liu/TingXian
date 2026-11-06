@@ -66,3 +66,5 @@
 - 本轮本机：63 项核心测试、31 项 Mac 原生测试、7 组 Python 集成测试、24 组前端脚本、TypeScript 与生产构建通过。原生真实废纸篓测试按原有标记跳过；其余合成回收失败/恢复用例通过。补测修复了此前因空间不足未暴露的检查点连接错误类型。
 - 生产页面以 `scripts/build-background-settings-fixture.cjs` 生成隔离 IPC 夹具，Chrome 验证差异表、编辑、仅岗位应用、其他字段保留及授权不变。截图 `/tmp/tingxian-background-settings-1106.png` 仅为合成浏览器证据。
 - 原生测试现在已编译本分支；已安装应用仍为 0.6.5，本轮未安装、退出或采集真实音频。约1.9 GiB磁盘余量，不擅自删除缓存。新增内容的远端 CI 另行记录。
+- 提交 `173ba2acd1f29e1b4d337df13733b7903ad60e7d` 的 [源码与共享核心 CI](https://github.com/Jinchun-Liu/TingXian/actions/runs/42162976663) 两组均通过。31项 Mac 原生测试是本机证据，该 CI 不构建 Mac 安装包。
+- 便携包 `interview-background-2.0.0.zip` 包含10个固定文件，20184 bytes，SHA-256 `f3ed662912941b6f100cd147cc7fdd9e3a5ed33736b10070e62103afa80b44ee`。压缩包解开后逐文件核对源码摘要，并在独立目录运行自测成功；不含凭证或用户资料。
