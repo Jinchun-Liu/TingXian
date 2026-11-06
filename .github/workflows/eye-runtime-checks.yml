@@ -1,0 +1,39 @@
+name: Eye runtime integrity contracts
+on:
+  push:
+    branches: [feat/windows-eye-local-20261106]
+    paths:
+      - 'scripts/*eye-runtime.py'
+      - '.github/workflows/eye-runtime-checks.yml'
+  pull_request:
+    paths:
+      - 'scripts/*eye-runtime.py'
+      - '.github/workflows/eye-runtime-checks.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline-integrity:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify synthetic components without loading DLLs or media
+        run: python -I -B scripts/test-eye-runtime.py --evidence-dir "${{ runner.temp }}/eye-runtime-contracts"
+      - name: Check public source
+        run: python -I -B scripts/check-public-source.py
+      - name: Keep compact result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eye-runtime-result-${{ matrix.os }}
+          path: ${{ runner.temp }}/eye-runtime-contracts/result.json
+          if-no-files-found: error
+          retention-days: 14
