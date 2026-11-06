@@ -1,0 +1,40 @@
+name: Windows native video source
+on:
+  push:
+    branches: [feat/windows-eye-local-20261106]
+    paths: ['video/windows/**', '.github/workflows/video-source-checks.yml']
+  pull_request:
+    paths: ['video/windows/**', '.github/workflows/video-source-checks.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  synthetic-native-source:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Configure native component
+        run: cmake -S video/windows -B "$env:RUNNER_TEMP/video-source-build" -A x64
+      - name: Build native component
+        run: cmake --build "$env:RUNNER_TEMP/video-source-build" --config Release --parallel 2
+      - name: Test real COM samples without registering a camera
+        run: ctest --test-dir "$env:RUNNER_TEMP/video-source-build" -C Release --output-on-failure
+      - name: Public source check
+        run: python -I -B scripts/check-public-source.py
+      - name: Preserve native test binaries and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TingXian-video-source-synthetic-only
+          path: |
+            ${{ runner.temp }}/video-source-build/Release/TingXianVideoSource.dll
+            ${{ runner.temp }}/video-source-build/Release/tingxian-video-source-test.exe
+            ${{ runner.temp }}/video-source-build/Testing/Temporary/LastTest.log
+            video/windows/LICENSE-Microsoft.txt
+            video/windows/THIRD-PARTY.md
+          if-no-files-found: error
+          retention-days: 14
