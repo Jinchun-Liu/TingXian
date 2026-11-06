@@ -30,6 +30,8 @@ fn stop_before_dispatched_launch_never_creates_a_process() {
     let run = state.begin(Some(worker)).unwrap().unwrap(); state.request_stop();
     let stopped = run.execute(); assert_eq!(stopped.phase, Phase::Off); assert!(stopped.inspection.is_none());
     assert!(!folder.join("launched").exists());
+    let stale=state.snapshot().generation;state.request_stop();
+    assert!(state.begin_if_current(Some(fixture("valid.exe")),stale).is_err(),"a webview start queued before stop was admitted");
 }
 #[test]
 fn running_stop_suppresses_late_report_and_explicit_retry_works() {
@@ -100,4 +102,9 @@ fn dropped_dispatch_releases_slot_without_starting() {
     assert_eq!(state.snapshot().reason, Some(Reason::Abandoned));
     assert!(!path.parent().unwrap().join("launched").exists());
     assert!(state.wait_idle(Duration::ZERO));
+    let worker=fixture("valid.exe"); let path=worker.path.clone();
+    let queued=state.begin(Some(worker)).unwrap();state.request_stop();drop(queued);
+    assert_eq!(state.snapshot().phase,Phase::Off,"dropping an already cancelled dispatch is not a crash");
+    assert!(state.snapshot().reason.is_none());
+    assert!(!path.parent().unwrap().join("launched").exists());
 }

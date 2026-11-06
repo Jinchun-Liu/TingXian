@@ -66,6 +66,8 @@ jobs:
           node scripts/test-public-source.cjs
           python scripts/check-public-source.py
           python scripts/test-windows-packaging.py
+          node scripts/test-interview-video.cjs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           Push-Location frontend
           pnpm exec tsc --noEmit --incremental false
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -73,7 +75,7 @@ jobs:
       - name: Core regression tests
         run: cargo test -p interview-core --locked
       - name: Main-window video IPC and quit regression
-        run: cargo test --release -p meetily --lib interview_video::tests --locked
+        run: ./scripts/test-windows-video-app.ps1 -EvidenceDirectory "$env:RUNNER_TEMP/video-app-ipc"
       - name: Build CPU installer
         shell: pwsh
         run: |
@@ -102,7 +104,9 @@ jobs:
         if: always()
         with:
           name: TingXian-Windows-video-inspection-evidence
-          path: ${{ runner.temp }}/tingxian-video-*.std*
+          path: |
+            ${{ runner.temp }}/tingxian-video-*.std*
+            ${{ runner.temp }}/video-app-ipc/
           if-no-files-found: warn
           retention-days: 30
       - uses: actions/upload-artifact@v4

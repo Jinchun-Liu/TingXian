@@ -187,7 +187,8 @@ pub(super) fn inspect(worker: &BundledWorker, signal: &Signal, timeout: Duration
     let mut bytes = Vec::new(); let mut buffer = [0u8; 1024];
     loop {
         let mut read = 0;
-        let ok = unsafe { ReadFile(process.output.0, buffer.as_mut_ptr(), buffer.len() as u32, &mut read, null_mut()) };
+        let remaining=(4097-bytes.len()).min(buffer.len());
+        let ok = unsafe { ReadFile(process.output.0, buffer.as_mut_ptr(), remaining as u32, &mut read, null_mut()) };
         if ok == 0 { if unsafe { GetLastError() } == ERROR_BROKEN_PIPE { break; } return Err(Reason::Protocol); }
         if read == 0 { break; }
         bytes.extend_from_slice(&buffer[..read as usize]);

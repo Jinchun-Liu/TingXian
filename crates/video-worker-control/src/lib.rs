@@ -62,7 +62,14 @@ pub struct Controller { inner: Mutex<Inner>, idle: Condvar }
 impl Controller {
     pub fn snapshot(&self) -> Snapshot { self.inner.lock().unwrap_or_else(|e|e.into_inner()).snapshot.clone() }
     pub fn begin(self: &Arc<Self>, worker: Option<BundledWorker>) -> Result<Option<Run>, &'static str> {
+        self.begin_inner(worker,None)
+    }
+    pub fn begin_if_current(self:&Arc<Self>,worker:Option<BundledWorker>,generation:u64)->Result<Option<Run>,&'static str> {
+        self.begin_inner(worker,Some(generation))
+    }
+    fn begin_inner(self:&Arc<Self>,worker:Option<BundledWorker>,generation:Option<u64>)->Result<Option<Run>,&'static str> {
         let mut inner = self.inner.lock().unwrap_or_else(|e|e.into_inner());
+        if generation.is_some_and(|value|value!=inner.snapshot.generation) {return Err("视频状态已变化，请重新检查");}
         if inner.suspended { return Err("正在退出，视频检查已暂停"); }
         if inner.cleanup_uncertain { return Err("视频进程清理未确认，请保留诊断并重启应用后再检查"); }
         if inner.active.is_some() { return Err("视频工作进程仍在运行，请先停止"); }
@@ -134,7 +141,10 @@ impl Run {
 }
 impl Drop for Run {
     fn drop(&mut self) {
-        if !self.finished { self.signal.stop(); self.controller.complete(self.id, false, Err(Reason::Abandoned)); }
+        if !self.finished {
+            let already_cancelled=self.signal.stopped();
+            self.signal.stop();self.controller.complete(self.id, already_cancelled, Err(Reason::Abandoned));
+        }
     }
 }
 

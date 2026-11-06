@@ -4,6 +4,7 @@ import {SavedSessionPreview} from '@/components/interview/SavedSessionPreview';
 import {useSessionCommands} from '@/lib/session-commands';
 import {PreviousMeetings} from '@/components/interview/PreviousMeetings';
 import {AudioSettings} from '@/components/interview/AudioSettings';
+import {VideoSettings} from '@/components/interview/VideoSettings';
 import {ChoiceMenu, ChoiceOption} from '@/components/ui/choice-menu';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
@@ -38,7 +39,7 @@ import { indexedDBService } from '@/services/indexedDBService';
 import { LatencyRecord, TurnLatency, latencyLabel } from '@/lib/interview-latency';
 import { AudioFault, InterviewAudioHealth } from '@/lib/interview-health';
 import { MicrophoneState, MicrophoneTranscriptGate, stopInterviewAudio } from '@/lib/interview-audio';
-import { AudioLines, History as HistoryIcon, ChevronRight, Camera, AppWindow, Columns2, Play, Pause, Square, Search, Snowflake, FolderOpen, Settings2, FileText, Trash2 } from 'lucide-react';
+import { AudioLines, Video, History as HistoryIcon, ChevronRight, Camera, AppWindow, Columns2, Play, Pause, Square, Search, Snowflake, FolderOpen, Settings2, FileText, Trash2 } from 'lucide-react';
 
 
 type File = { path: string; bytes: number; eligible: boolean; reason: string };
@@ -67,7 +68,7 @@ export default function InterviewPage() {
   const [answerWarning,setAnswerWarning] = useState('');
   const [compactControls,setCompactControls]=useState(false);
   const [settings, setSettings] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'资料库'|'事实与术语'|'模型接口'|'音频'>('资料库');
+  const [settingsTab, setSettingsTab] = useState<'资料库'|'事实与术语'|'模型接口'|'音频'|'视频'>('资料库');
   const [openBackground,setOpenBackground]=useState(false);
   const [openVision, setOpenVision] = useState(false);
   const settingsTrigger = useRef<HTMLButtonElement>(null);
@@ -742,7 +743,8 @@ export default function InterviewPage() {
         <nav className="tx-rail-nav" aria-label="工作台导航">
           <button type="button" aria-current={savedSessions!==null?'page':undefined} onClick={()=>sendCommand('history')}><HistoryIcon/>会议记录<ChevronRight/></button>
           <button type="button" aria-current={settings&&settingsTab==='音频'?'page':undefined} onClick={()=>sendCommand('audio')}><AudioLines/>音频设置<ChevronRight/></button>
-          <button ref={settingsTrigger} type="button" aria-current={settings&&settingsTab!=='音频'?'page':undefined} onClick={()=>{setSettingsTab('资料库');setSettings(true);setSavedSessions(null);}}><Settings2/>资料与模型<ChevronRight/></button>
+          <button type="button" aria-current={settings&&settingsTab==='视频'?'page':undefined} onClick={()=>{setSettingsTab('视频');setSettings(true);setSavedSessions(null);}}><Video/>视频设置<ChevronRight/></button>
+          <button ref={settingsTrigger} type="button" aria-current={settings&&!['音频','视频'].includes(settingsTab)?'page':undefined} onClick={()=>{setSettingsTab('资料库');setSettings(true);setSavedSessions(null);}}><Settings2/>资料与模型<ChevronRight/></button>
         </nav>
       </div>
       <footer className="desk-foot">
@@ -773,9 +775,10 @@ export default function InterviewPage() {
     </section>}
     {settings && <section className="desk-panel" aria-label="资料与设置" onKeyDown={e=>{if(e.key==='Escape' && !e.nativeEvent.isComposing && !e.defaultPrevented && !(e.target as Element).closest('[role=listbox]'))closeSettings();}}>
       <header className="desk-panel-heading"><h2>设置</h2><Button autoFocus variant="ghost" size="sm" onClick={closeSettings}>返回对话</Button></header>
-      <nav aria-label="设置分类" className="desk-tabs">{(['音频','资料库','事实与术语','模型接口'] as const).map(tab=><button key={tab} type="button" aria-pressed={settingsTab===tab} onClick={()=>setSettingsTab(tab)}>{tab}</button>)}</nav>
+      <nav aria-label="设置分类" className="desk-tabs">{(['音频','视频','资料库','事实与术语','模型接口'] as const).map(tab=><button key={tab} type="button" aria-pressed={settingsTab===tab} onClick={()=>setSettingsTab(tab)}>{tab}</button>)}</nav>
       <div className="desk-panel-body">
       {settingsTab==='音频'&&<AudioSettings locked={busy || recording.isRecording} microphone={recordMicrophone} onMicrophone={enabled=>void toggleMicrophone(enabled)}/>}
+      {settingsTab==='视频'&&<VideoSettings/>}
       <div hidden={settingsTab!=='资料库'} className="space-y-4">
 
       <div className="flex flex-wrap items-center justify-between gap-3 text-xs">

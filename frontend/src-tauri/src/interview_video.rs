@@ -19,11 +19,11 @@ pub fn video_status<R:tauri::Runtime>(window:WebviewWindow<R>,state:State<'_,Vid
     owner(&window)?;Ok(state.0.snapshot())
 }
 #[tauri::command]
-pub async fn video_inspect<R:tauri::Runtime>(window:WebviewWindow<R>,state:State<'_,VideoState>)->Result<Snapshot,String> {
+pub async fn video_inspect<R:tauri::Runtime>(window:WebviewWindow<R>,state:State<'_,VideoState>,expected_generation:u64)->Result<Snapshot,String> {
     owner(&window)?;
     crate::interview_exit::ensure_not_exiting(window.app_handle())?;
     let root=window.app_handle().path().resource_dir().map_err(|_|"无法读取应用组件目录")?;
-    let Some(run)=state.0.begin(pinned_worker(root)).map_err(str::to_owned)? else {return Ok(state.0.snapshot());};
+    let Some(run)=state.0.begin_if_current(pinned_worker(root),expected_generation).map_err(str::to_owned)? else {return Ok(state.0.snapshot());};
     tauri::async_runtime::spawn_blocking(move ||run.execute()).await.map_err(|_|"视频检查意外退出，请重新检查".into())
 }
 async fn wait_idle(controller:Arc<Controller>)->Result<(),String> {
@@ -80,16 +80,19 @@ mod tests {
                 error:tauri::ipc::CallbackFn(1),url:"tauri://localhost".parse().unwrap(),body:tauri::ipc::InvokeBody::Json(body),
                 headers:Default::default(),invoke_key:tauri::test::INVOKE_KEY.into()});
         for cmd in ["video_status","video_inspect","video_stop"] {
-            assert!(invoke(&display,cmd,json!({})).is_err(),"display invoked {cmd}");
+            assert!(invoke(&display,cmd,json!({"expectedGeneration":0})).is_err(),"display invoked {cmd}");
         }
         assert_eq!(app.state::<VideoState>().0.snapshot().generation,0,"display changed video state");
         assert!(invoke(&main,"video_status",json!({})).is_ok());
         crate::interview_exit::request_exit(app.handle(),false);
-        assert!(invoke(&main,"video_inspect",json!({})).is_err(),"inspection admitted during quit");
+        assert!(invoke(&main,"video_inspect",json!({"expectedGeneration":0})).is_err(),"inspection admitted during quit");
         let request:Value=invoke(&main,"interview_exit_status",json!({})).unwrap().deserialize().unwrap();
         invoke(&main,"interview_exit_cancel",json!({"requestId":request["request_id"]})).unwrap();
         assert_eq!(app.state::<VideoState>().0.snapshot().phase,video_worker_control::Phase::Off);
         assert!(app.state::<VideoState>().0.wait_idle(Duration::ZERO));
         invoke(&main,"video_stop",json!({})).unwrap();
+        let stopped=app.state::<VideoState>().0.snapshot().generation;
+        assert!(invoke(&main,"video_inspect",json!({"expectedGeneration":stopped-1})).is_err(),"stale webview launch survived stop");
+        assert_eq!(app.state::<VideoState>().0.snapshot().generation,stopped);
     }
 }
