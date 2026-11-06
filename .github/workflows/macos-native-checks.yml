@@ -72,5 +72,6 @@ jobs:
         run: |
           cargo test --locked -p meetily --lib audio::devices::discovery::discovery_tests -- --nocapture
           cargo test --locked -p meetily --lib audio::device_monitor::tests -- --nocapture
+          cargo test --locked -p meetily --lib audio::capture::core_audio::startup_tests -- --nocapture
       - name: Session recovery and interview regressions
         run: cargo test --locked -p meetily --lib interview -- --nocapture

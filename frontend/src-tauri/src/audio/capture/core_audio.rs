@@ -16,6 +16,59 @@ use log::{error, info, warn};
 #[cfg(target_os = "macos")]
 use cidre::{arc, av, cat, cf, core_audio as ca, os};
 
+// HAL startup and teardown can both wait on a driver. Keep ownership of the
+// native resource and the single-device slot together, including after timeout
+// or cancellation. A late result must be disposed of without blocking Tokio.
+#[cfg(target_os = "macos")]
+pub(crate) struct BackgroundResource<T: Send + 'static> {
+    resource: Option<(T, tokio::sync::OwnedSemaphorePermit)>,
+    runtime: tokio::runtime::Handle,
+}
+
+#[cfg(target_os = "macos")]
+impl<T: Send + 'static> std::ops::Deref for BackgroundResource<T> {
+    type Target = T;
+    fn deref(&self) -> &T { &self.resource.as_ref().unwrap().0 }
+}
+
+#[cfg(target_os = "macos")]
+impl<T: Send + 'static> std::ops::DerefMut for BackgroundResource<T> {
+    fn deref_mut(&mut self) -> &mut T { &mut self.resource.as_mut().unwrap().0 }
+}
+
+#[cfg(target_os = "macos")]
+impl<T: Send + 'static> Drop for BackgroundResource<T> {
+    fn drop(&mut self) {
+        if let Some(resource) = self.resource.take() {
+            // Tuple order matters: release the slot only after native teardown.
+            self.runtime.spawn_blocking(move || drop(resource));
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+async fn bounded_start<T, F>(
+    gate: Arc<tokio::sync::Semaphore>,
+    deadline: std::time::Duration,
+    open: F,
+) -> Result<BackgroundResource<T>>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    let permit = gate.try_acquire_owned().map_err(|_| anyhow::anyhow!(
+        "系统音频设备仍在启动或关闭，请稍后重试；若持续无响应，请重启听弦"
+    ))?;
+    let runtime = tokio::runtime::Handle::current();
+    let worker = tokio::task::spawn_blocking(move || {
+        open().map(|value| BackgroundResource { resource: Some((value, permit)), runtime })
+    });
+    tokio::time::timeout(deadline, worker)
+        .await
+        .map_err(|_| anyhow::anyhow!("等待系统音频启动超时，请确认 macOS 系统录音权限和输出设备后重试"))?
+        .map_err(|error| anyhow::anyhow!("系统音频启动任务失败：{error}"))?
+}
+
 /// Waker state for async polling
 struct WakerState {
     waker: Option<Waker>,
@@ -53,6 +106,15 @@ struct AudioContext {
 
 #[cfg(target_os = "macos")]
 impl CoreAudioCapture {
+    pub(crate) async fn start_for_output(name: Option<String>) -> Result<BackgroundResource<CoreAudioStream>> {
+        static START: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
+        bounded_start(
+            START.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(1))).clone(),
+            std::time::Duration::from_secs(15),
+            move || Self::for_output(name.as_deref())?.stream(),
+        ).await
+    }
+
     pub fn new() -> Result<Self> {
         Self::for_output(None)
     }
@@ -304,7 +366,9 @@ impl CoreAudioCapture {
 /// Process audio data from the IO proc callback
 #[cfg(target_os = "macos")]
 fn process_audio_data(ctx: &mut AudioContext, data: &[f32]) {
-    crate::interview::observe_system_audio(data);
+    // UI levels and transcription are published by AudioCapture only after
+    // startup has been accepted. A timed-out HAL call may finish later; its
+    // callback must not publish into a newer session while awaiting disposal.
     // Push raw samples directly to ring buffer
     // Let the pipeline handle all gain adjustments (post-mix 3x gain + mic normalization)
     let buffer_size = data.len();
@@ -421,6 +485,109 @@ impl Stream for CoreAudioStream {
         _cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         Poll::Ready(None)
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod startup_tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::sync::{oneshot, Semaphore};
+
+    struct FakeDevice {
+        dropped: Option<oneshot::Sender<()>>,
+        release: Option<std::sync::mpsc::Receiver<()>>,
+    }
+    impl Drop for FakeDevice {
+        fn drop(&mut self) {
+            if let Some(dropped) = self.dropped.take() { let _ = dropped.send(()); }
+            if let Some(release) = self.release.take() {
+                let _ = release.recv_timeout(Duration::from_secs(5));
+            }
+        }
+    }
+
+    async fn signal(receiver: oneshot::Receiver<()>) {
+        tokio::time::timeout(Duration::from_secs(2), receiver).await.unwrap().unwrap();
+    }
+
+    async fn wait_for_slot(gate: Arc<Semaphore>) {
+        let permit = tokio::time::timeout(Duration::from_secs(2), gate.acquire_owned()).await.unwrap().unwrap();
+        drop(permit);
+    }
+
+    #[tokio::test]
+    async fn timeout_keeps_late_start_isolated_and_does_not_open_another_device() {
+        let gate = Arc::new(Semaphore::new(1));
+        let (started, ready) = oneshot::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let (dropped, disposed) = oneshot::channel();
+        let first_gate = gate.clone();
+        let first = tokio::spawn(async move {
+            bounded_start(first_gate, Duration::from_secs(1), move || {
+                let _ = started.send(());
+                let _ = wait.recv_timeout(Duration::from_secs(5));
+                Ok(FakeDevice { dropped: Some(dropped), release: None })
+            }).await
+        });
+        signal(ready).await;
+        let result = first.await.unwrap();
+        assert!(matches!(result, Err(error) if error.to_string().contains("超时")));
+        let second = bounded_start(gate.clone(), Duration::from_secs(1), || -> Result<()> {
+            panic!("a timed-out driver must retain the single start slot")
+        }).await;
+        assert!(matches!(second, Err(error) if error.to_string().contains("仍在启动或关闭")));
+        release.send(()).unwrap();
+        signal(disposed).await;
+        wait_for_slot(gate.clone()).await;
+        let retry = bounded_start(gate, Duration::from_secs(1), || Ok(42)).await.unwrap();
+        assert_eq!(*retry, 42);
+    }
+
+    #[tokio::test]
+    async fn cancelled_caller_disposes_late_result_and_releases_slot() {
+        let gate = Arc::new(Semaphore::new(1));
+        let (started, ready) = oneshot::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let (dropped, disposed) = oneshot::channel();
+        let start_gate = gate.clone();
+        let start = tokio::spawn(async move {
+            bounded_start(start_gate, Duration::from_secs(10), move || {
+                let _ = started.send(());
+                let _ = wait.recv_timeout(Duration::from_secs(5));
+                Ok(FakeDevice { dropped: Some(dropped), release: None })
+            }).await
+        });
+        signal(ready).await;
+        start.abort();
+        assert!(start.await.is_err());
+        assert_eq!(gate.available_permits(), 0);
+        release.send(()).unwrap();
+        signal(disposed).await;
+        wait_for_slot(gate).await;
+    }
+
+    #[tokio::test]
+    async fn slow_teardown_does_not_block_runtime_or_release_device_slot_early() {
+        let gate = Arc::new(Semaphore::new(1));
+        let (dropped, disposing) = oneshot::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let resource = bounded_start(gate.clone(), Duration::from_secs(1), move || {
+            Ok(FakeDevice { dropped: Some(dropped), release: Some(wait) })
+        }).await.unwrap();
+        drop(resource);
+        signal(disposing).await;
+        assert_eq!(gate.available_permits(), 0);
+        // Current-thread runtime must still make progress during native Drop.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert_eq!(gate.available_permits(), 0);
+        release.send(()).unwrap();
+        wait_for_slot(gate.clone()).await;
+        let failed = bounded_start(gate.clone(), Duration::from_secs(1), || -> Result<()> {
+            anyhow::bail!("synthetic driver failure")
+        }).await;
+        assert!(matches!(failed, Err(error) if error.to_string() == "synthetic driver failure"));
+        wait_for_slot(gate).await;
     }
 }
 
