@@ -473,6 +473,7 @@ pub fn get_language_preference_internal() -> Option<String> {
 mod interview;
 pub mod interview_history;
 pub mod interview_exit;
+pub mod interview_video;
 mod interview_jobs;
 mod interview_screenshot;
 mod interview_windows;
@@ -514,6 +515,7 @@ pub fn run() {
         .manage(audio::init_system_audio_state())
         .manage(interview::InterviewState::default())
         .manage(interview_exit::ExitState::default())
+        .manage(interview_video::VideoState::default())
         .manage(interview_windows::PresentationState::default())
         .manage(summary::summary_engine::ModelManagerState(Arc::new(tokio::sync::Mutex::new(None))))
         .setup(|_app| {
@@ -607,6 +609,9 @@ pub fn run() {
           let handle: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
             database::setup::tingxian_storage_ready,
             interview::interview_status,
+            interview_video::video_status,
+            interview_video::video_inspect,
+            interview_video::video_stop,
             interview_windows::interview_presentation_publish,
             interview_windows::interview_presentation_get,
             interview_windows::interview_presentation_action,
@@ -903,6 +908,9 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app_handle, event| {
+            if matches!(&event,tauri::RunEvent::ExitRequested{..}|tauri::RunEvent::Exit) {
+                interview_video::suspend(_app_handle);
+            }
             match event {
                 tauri::RunEvent::ExitRequested { api, code, .. } if code != Some(tauri::RESTART_EXIT_CODE) => {
                     if _app_handle.try_state::<state::AppState>().is_some() && !_app_handle.state::<interview_exit::ExitState>().approved() {
@@ -917,6 +925,9 @@ pub fn run() {
                 tauri::RunEvent::Exit => {
                     log::info!("Application exiting, cleaning up resources...");
                     tauri::async_runtime::block_on(async {
+                        if let Err(error)=interview_video::quiesce(_app_handle).await {
+                            log::error!("Video worker cleanup not confirmed: {}",error);
+                        }
                         // Clean up database connection and checkpoint WAL
                         if let Some(app_state) = _app_handle.try_state::<state::AppState>() {
                             log::info!("Starting database cleanup...");

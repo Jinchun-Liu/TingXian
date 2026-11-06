@@ -41,6 +41,9 @@ impl ExitState {
     async fn prepare<R:tauri::Runtime>(&self,id:u64,app:&tauri::AppHandle<R>)->Result<(),String> {
         let _operation=self.operation.try_lock().map_err(|_|"退出清理正在进行，请等待")?;
         self.set_phase(id,&[Phase::Requested,Phase::Prepared,Phase::Archived,Phase::Failed],Phase::Preparing)?;
+        if let Err(error)=crate::interview_video::quiesce(app).await {
+            self.set_phase(id,&[Phase::Preparing],Phase::Failed)?;return Err(error);
+        }
         if self.gate.lock().unwrap_or_else(|e|e.into_inner()).lease.is_some() {
             return self.set_phase(id,&[Phase::Preparing],Phase::Prepared);
         }
@@ -91,6 +94,7 @@ pub(crate) fn ensure_history_generation<R:tauri::Runtime>(app:&tauri::AppHandle<
     if app.try_state::<ExitState>().is_some_and(|s|s.generation()!=generation){return Err("这份保存请求早于退出清理，已取消，避免重新写回旧记录".into());}Ok(())
 }
 pub(crate) fn request_exit<R:tauri::Runtime>(app:&tauri::AppHandle<R>,restart:bool) {
+    crate::interview_video::suspend(app);
     let request=app.state::<ExitState>().request(restart);
     crate::tray::focus_main_window(app);
     let _=app.emit("interview-exit-requested",request);
@@ -109,7 +113,9 @@ pub async fn interview_exit_archive<R:tauri::Runtime>(app:tauri::AppHandle<R>,st
     state.archive_with(request_id,app.state::<crate::state::AppState>().db_manager.pool(),&prefs.save_folder,recovery,crate::interview_history::move_to_trash).await
 }
 #[tauri::command]
-pub fn interview_exit_cancel(state:State<'_,ExitState>,request_id:u64)->Result<(),String> {state.cancel(request_id)}
+pub fn interview_exit_cancel<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,ExitState>,request_id:u64)->Result<(),String> {
+    state.cancel(request_id)?;crate::interview_video::resume(&app);Ok(())
+}
 #[tauri::command]
 pub fn interview_exit_finish<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,ExitState>,request_id:u64)->Result<(),String> {
     if state.approve(request_id)? {app.request_restart();}else{app.exit(0);}Ok(())

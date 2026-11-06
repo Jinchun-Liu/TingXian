@@ -3859,6 +3859,7 @@ dependencies = [
  "trash",
  "url",
  "uuid",
+ "video-worker-control",
  "whatlang",
  "which 6.0.3",
  "whisper-rs",

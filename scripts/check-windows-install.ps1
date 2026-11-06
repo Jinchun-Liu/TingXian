@@ -23,6 +23,31 @@ if ($LASTEXITCODE) { throw 'Installed runtime hashes differ' }
 $savedPath = $env:PATH
 try {
     $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$location"
+    $video = Start-Process -FilePath $exe -ArgumentList '--video-worker-check' -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput (Join-Path $env:RUNNER_TEMP 'tingxian-video-check.stdout') -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'tingxian-video-check.stderr')
+    if ($video.ExitCode -ne 0) { Get-Content (Join-Path $env:RUNNER_TEMP 'tingxian-video-check.stderr'); throw 'Installed video inspection worker check failed' }
+    # Disposable install only: a changed EXE plus matching mutable text digest
+    # must still fail against the pin embedded in the installed main executable.
+    $workerPath=Join-Path $location 'video-worker/tingxian-video-worker.exe'
+    $pinPath=Join-Path $location 'video-worker/worker-sha256.txt'
+    $savedWorker=Join-Path $location 'video-worker/worker-original-preserved.exe'
+    $savedPin=Join-Path $location 'video-worker/pin-original-preserved.txt'
+    if ((Test-Path -LiteralPath $savedWorker) -or (Test-Path -LiteralPath $savedPin)) {throw 'Worker integrity fixture already exists'}
+    Move-Item -LiteralPath $workerPath -Destination $savedWorker
+    Move-Item -LiteralPath $pinPath -Destination $savedPin
+    try {
+        $corrupt=[IO.File]::ReadAllBytes($savedWorker)
+        $corrupt[$corrupt.Length-1]=$corrupt[$corrupt.Length-1] -bxor 1
+        [IO.File]::WriteAllBytes($workerPath,$corrupt)
+        (Get-FileHash -Algorithm SHA256 -LiteralPath $workerPath).Hash.ToLowerInvariant() | Set-Content -LiteralPath $pinPath -Encoding ascii
+        $badVideo=Start-Process -FilePath $exe -ArgumentList '--video-worker-check' -WindowStyle Hidden -Wait -PassThru -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'tingxian-video-corrupt.stderr')
+        if ($badVideo.ExitCode -eq 0 -or !(Select-String -LiteralPath (Join-Path $env:RUNNER_TEMP 'tingxian-video-corrupt.stderr') -Pattern 'Integrity' -Quiet)) {throw 'Modified worker was not rejected by embedded integrity pin'}
+    } finally {
+        if (Test-Path -LiteralPath $workerPath) {Move-Item -LiteralPath $workerPath -Destination (Join-Path $location 'video-worker/worker-corrupt-preserved.exe')}
+        if (Test-Path -LiteralPath $pinPath) {Move-Item -LiteralPath $pinPath -Destination (Join-Path $location 'video-worker/pin-corrupt-preserved.txt')}
+        Move-Item -LiteralPath $savedWorker -Destination $workerPath
+        Move-Item -LiteralPath $savedPin -Destination $pinPath
+    }
+    Write-Host 'PASS installed local worker inspection and modified executable rejection; no media started'
     $check = Start-Process -FilePath $exe -ArgumentList '--installation-check' -Wait -PassThru -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'tingxian-install-check.stderr')
     if ($check.ExitCode -ne 0) { Get-Content (Join-Path $env:RUNNER_TEMP 'tingxian-install-check.stderr'); throw "Offline installation check failed: $($check.ExitCode)" }
     $platform = Start-Process -FilePath $exe -ArgumentList '--windows-platform-check' -Wait -PassThru -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'tingxian-platform-check.stderr')

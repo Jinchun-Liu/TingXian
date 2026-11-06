@@ -64,6 +64,7 @@ sha2 = "0.10"
 
 [dependencies]
 interview-core = { path = "../../crates/interview-core" }
+video-worker-control = { path = "../../crates/video-worker-control" }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 anyhow = "1.0"

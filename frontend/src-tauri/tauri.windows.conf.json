@@ -4,6 +4,7 @@
     "targets": ["nsis"],
     "resources": {
       "templates": "templates",
+      "binaries/video-worker/": "video-worker/",
       "binaries/onnxruntime/": "./",
       "binaries/windows-runtime/python/": "python/",
       "binaries/windows-runtime/whisper/": "whisper/",

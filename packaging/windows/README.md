@@ -49,9 +49,12 @@ git switch feat/windows-prd-v2
 corepack enable
 corepack prepare pnpm@9.15.9 --activate
 python scripts/prepare-windows-runtime.py
+./scripts/stage-windows-video-worker.ps1
 cd frontend
 pnpm install --frozen-lockfile
 pnpm exec tauri dev
 ```
 
 发布构建流程见 `.github/workflows/windows-preview.yml`。所有下载版本与摘要见 `runtime-lock.json`，依赖许可见 `THIRD-PARTY.md`。CI 的离线资源/安装检查通过并不等于真实设备音频、截图或 60 分钟会议已通过。
+
+当前开发分支另随包编译本地视频检查 worker，摘要在编译主程序时嵌入。主窗显式检查时才运行；退出会停止并回收，缺少已批准眼部运行时返回不可用。它不启动摄像头、音频或 SDK，也不注册虚拟设备。`meetily.exe --video-worker-check` 用同一控制路径作无采集安装检查；检查成功不代表眼部处理可用。普通用户仍无需 CMake、Visual Studio 或 CUDA Toolkit。

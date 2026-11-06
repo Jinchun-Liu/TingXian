@@ -8,6 +8,13 @@ use env_logger;
 
 fn main() {
     #[cfg(windows)]
+    if std::env::args().nth(1).as_deref()==Some("--video-worker-check") {
+        if let Err(error)=app_lib::interview_video::installation_check() {
+            eprintln!("{error}");std::process::exit(1);
+        }
+        return;
+    }
+    #[cfg(windows)]
     if std::env::args().nth(1).as_deref()==Some("--windows-platform-check") {
         if let Err(e)=app_lib::tingxian_runtime::windows_platform_check() {
             eprintln!("{e}");std::process::exit(1);

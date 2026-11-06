@@ -4,6 +4,7 @@ mod ffmpeg;
 mod onnxruntime;
 
 fn main() {
+    pin_video_worker();
     // GPU Acceleration Detection and Build Guidance
     detect_and_report_gpu_capabilities();
 
@@ -22,6 +23,24 @@ fn main() {
     onnxruntime::ensure_onnxruntime_runtime();
 
     tauri_build::build()
+}
+
+fn pin_video_worker() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref()!=Ok("windows") {return;}
+    use sha2::{Digest,Sha256};
+    let worker=std::path::Path::new("binaries/video-worker/tingxian-video-worker.exe");
+    let pin=std::path::Path::new("binaries/video-worker/worker-sha256.txt");
+    println!("cargo:rerun-if-changed={}",worker.display());
+    println!("cargo:rerun-if-changed={}",pin.display());
+    if !worker.is_file() {
+        assert_ne!(std::env::var("PROFILE").as_deref(),Ok("release"),"Stage video worker before release: scripts/stage-windows-video-worker.ps1");
+        println!("cargo:rustc-env=TINGXIAN_VIDEO_WORKER_SHA256=");return;
+    }
+    let expected=std::fs::read_to_string(pin).expect("Staged video worker pin is missing");
+    let bytes=std::fs::read(worker).expect("Cannot read staged video worker");
+    let actual=format!("{:x}",Sha256::digest(bytes));
+    assert_eq!(expected.trim(),actual,"Staged video worker digest differs");
+    println!("cargo:rustc-env=TINGXIAN_VIDEO_WORKER_SHA256={actual}");
 }
 
 /// Detects GPU acceleration capabilities and provides build guidance
