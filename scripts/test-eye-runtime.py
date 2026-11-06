@@ -226,13 +226,84 @@ class RuntimeTests(unittest.TestCase):
         self.assertNotIn(str(self.directory), json.dumps(result))
 
 
+class LegacyRuntimeTests(unittest.TestCase):
+    # Synthetic files exercise only our manifest contract, never NVIDIA code.
+    pin = RuntimeTests.pin
+    check = RuntimeTests.check
+    cli = RuntimeTests.cli
+
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp(prefix=self._testMethodName + "-", dir=EVIDENCE))
+        self.root = self.directory / "旧版运行时"
+        self.root.mkdir()
+        self.manifest = self.directory / "manifest.json"
+        self.data = {"schema_version": 2, "distribution": verifier.LEGACY_PACKAGE,
+            "provider": "nvidia_maxine_eye_contact", "platform": "windows_x86_64",
+            "packages": [{"id": verifier.LEGACY_PACKAGE, "version": "0.8.7.0",
+                "source_url": verifier.LEGACY_SOURCE, "archive_sha256": sha(b"synthetic metadata"),
+                "license_id": "SYNTHETIC-NOT-A-LICENSE"}], "files": []}
+        for path, kind in verifier.LEGACY_REQUIRED.items():
+            value = synthetic_pe() if kind == "pe" else b"synthetic content; no model or license"
+            destination = self.root / path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(value)
+            self.data["files"].append({"path": path, "package": verifier.LEGACY_PACKAGE,
+                "kind": kind, "bytes": len(value), "sha256": sha(value)})
+
+    def test_legacy_complete_tree_is_integrity_only(self):
+        code, result = self.cli(self.pin())
+        self.assertEqual(0, code)
+        self.assertEqual({verifier.LEGACY_PACKAGE: "0.8.7.0"}, result["versions"])
+        self.assertEqual("not_assessed", result["license_authorization"])
+        self.assertEqual("not_tested", result["runtime_load"])
+
+    def test_legacy_decoder_cannot_be_omitted_or_relabelled(self):
+        path = "models/gazeredir_decoder_fp16_89.engine.trtpkg"
+        entry = next(f for f in self.data["files"] if f["path"] == path)
+        entry["kind"] = "data"
+        self.check("incomplete_legacy_runtime")
+        self.data["files"].remove(entry)
+        self.check("incomplete_legacy_runtime")
+
+    def test_legacy_required_cuda_dependency(self):
+        self.data["files"] = [f for f in self.data["files"] if f["path"] != "cudart64_12.dll"]
+        self.check("incomplete_legacy_runtime")
+
+    def test_legacy_version_and_architecture_source_are_pinned(self):
+        package = self.data["packages"][0]
+        package["version"] = "0.8.2.0"
+        self.check("unsupported_legacy_version")
+        package["version"] = "0.8.7.0"
+        package["source_url"] = verifier.LEGACY_SOURCE.replace("_ada.exe", "_ampere.exe")
+        self.check("invalid_source_url")
+        package["source_url"] = verifier.LEGACY_SOURCE + "?key=synthetic"
+        self.check("invalid_source_url")
+
+    def test_legacy_cannot_mix_ngc_packages(self):
+        self.data["packages"][0]["id"] = "ar_sdk_core"
+        self.check("invalid_package")
+
+    def test_legacy_unknown_distribution_does_not_downgrade(self):
+        self.data["distribution"] = "latest"
+        self.check("unsupported_distribution")
+
+    def test_legacy_x86_helper_is_not_an_x64_runtime(self):
+        entry = self.data["files"][0]
+        value = synthetic_pe(machine=0x14c)
+        (self.root / entry["path"]).write_bytes(value)
+        entry["sha256"] = sha(value)
+        self.check("wrong_pe_architecture")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evidence-dir", type=Path, required=True, help="New directory; never overwrite or remove fixtures")
     args = parser.parse_args()
     EVIDENCE = args.evidence_dir.absolute()
     EVIDENCE.mkdir(parents=True, exist_ok=False)
-    outcome = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(RuntimeTests))
+    suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(case)
+                               for case in (RuntimeTests, LegacyRuntimeTests))
+    outcome = unittest.TextTestRunner(verbosity=2).run(suite)
     (EVIDENCE / "result.json").write_text(json.dumps({"tests": outcome.testsRun, "failures": len(outcome.failures),
         "errors": len(outcome.errors), "skipped": len(outcome.skipped), "synthetic_only": True,
         "fixture_cleanup": "retained", "camera_started": False, "sdk_loaded": False}, indent=2), encoding="utf-8")

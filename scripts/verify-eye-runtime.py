@@ -16,6 +16,25 @@ from urllib.parse import urlsplit
 
 
 PACKAGES = {"ar_sdk_core", "nvARGazeRedirection", "nvARLandmarkDetection", "nvARFaceBoxDetection"}
+LEGACY_PACKAGE = "ar_sdk_0_8_7_ada"
+LEGACY_SOURCE = "https://international.download.nvidia.com/Windows/broadcast/sdk/AR/nvidia_ar_sdk_installer_v0.8.7_ada.exe"
+# A curated execution tree, not the installer directory: x86 setup/uninstall
+# helpers must not be relabelled as data to pass this x64 runtime inspection.
+LEGACY_REQUIRED = {
+    **{name: "pe" for name in (
+        "nvARPose.dll", "NVCVImage.dll", "cublas64_12.dll", "cublasLt64_12.dll",
+        "cudart64_12.dll", "cufft64_10.dll", "cufft64_11.dll", "cufftw64_10.dll",
+        "cufftw64_11.dll", "libcrypto-3-x64.dll", "nppc64_12.dll", "nppial64_12.dll",
+        "nppidei64_12.dll", "nppif64_12.dll", "nppig64_12.dll", "nppim64_12.dll",
+        "nvinfer_10.dll", "nvinfer_plugin_10.dll", "nvonnxparser_10.dll",
+        "nvrtc-builtins64_121.dll", "nvrtc64_120_0.dll", "nvvpi2.dll")},
+    **{"models/" + name: "model" for name in (
+        "face_detection_89.engine.trtpkg", "faceland_fp16_rcn_mode0_89.engine.trtpkg",
+        "faceland_fp16_rcn_mode1_89.engine.trtpkg", "faceland_126_maxbatch1_mode0_89.engine.trtpkg",
+        "faceland_126_maxbatch1_mode1_89.engine.trtpkg", "gazeredir_encoder_fp16_89.engine.trtpkg",
+        "gazeredir_decoder_fp16_89.engine.trtpkg")},
+    "NVIDIA Maxine EULA.pdf": "license", "ThirdPartyLicenses.txt": "license",
+}
 MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 VERSION = re.compile(r"[0-9]+(?:\.[0-9]+){1,3}(?:[_-][A-Za-z0-9.]+)?\Z")
@@ -94,26 +113,37 @@ def manifest_data(path, expected_hash):
 
 
 def validate_manifest(manifest):
-    exact_keys(manifest, ("schema_version", "provider", "platform", "packages", "files"))
-    require(type(manifest["schema_version"]) is int and manifest["schema_version"] == 1, "unsupported_schema")
+    require(isinstance(manifest, dict), "invalid_schema")
+    schema = manifest.get("schema_version")
+    require(type(schema) is int and schema in {1, 2}, "unsupported_schema")
+    keys = ("schema_version", "provider", "platform", "packages", "files")
+    exact_keys(manifest, keys + (("distribution",) if schema == 2 else ()))
+    if schema == 2:
+        require(manifest["distribution"] == LEGACY_PACKAGE, "unsupported_distribution")
+    package_names = {LEGACY_PACKAGE} if schema == 2 else PACKAGES
     require(manifest["provider"] == "nvidia_maxine_eye_contact", "unsupported_provider")
     require(manifest["platform"] == "windows_x86_64", "unsupported_platform")
-    require(isinstance(manifest["packages"], list) and len(manifest["packages"]) == len(PACKAGES), "missing_package")
+    require(isinstance(manifest["packages"], list) and len(manifest["packages"]) == len(package_names), "missing_package")
     packages = {}
     for package in manifest["packages"]:
         exact_keys(package, ("id", "version", "source_url", "archive_sha256", "license_id"))
         name = package["id"]
-        require(isinstance(name, str) and name in PACKAGES and name not in packages, "invalid_package")
+        require(isinstance(name, str) and name in package_names and name not in packages, "invalid_package")
         require(isinstance(package["version"], str) and VERSION.fullmatch(package["version"]), "unpinned_version")
+        if schema == 2:
+            require(package["version"] == "0.8.7.0", "unsupported_legacy_version")
         require(is_hash(package["archive_sha256"]), "invalid_archive_digest")
         require(isinstance(package["license_id"], str) and 0 < len(package["license_id"].strip()) <= 256, "missing_license_id")
         source = package["source_url"]
         require(isinstance(source, str) and len(source) <= 2048 and not any(c.isspace() or ord(c) < 32 for c in source), "invalid_source_url")
         try:
             url = urlsplit(source)
-            require(url.scheme == "https" and url.hostname in {"catalog.ngc.nvidia.com", "api.ngc.nvidia.com"}
+            hosts = {"international.download.nvidia.com"} if schema == 2 else {"catalog.ngc.nvidia.com", "api.ngc.nvidia.com"}
+            require(url.scheme == "https" and url.hostname in hosts
                     and not url.username and not url.password and not url.query and not url.fragment
                     and url.port in {None, 443} and url.path.startswith("/"), "invalid_source_url")
+            if schema == 2:
+                require(source == LEGACY_SOURCE, "invalid_source_url")
         except ValueError:
             raise Rejected("invalid_source_url") from None
         packages[name] = package
@@ -121,23 +151,28 @@ def validate_manifest(manifest):
     files = manifest["files"]
     require(isinstance(files, list) and 0 < len(files) <= 10000, "invalid_files")
     paths = set()
-    roles = {name: set() for name in PACKAGES}
+    roles = {name: set() for name in package_names}
+    file_kinds = {}
     for entry in files:
         exact_keys(entry, ("path", "package", "kind", "bytes", "sha256"))
         safe_relative(entry["path"])
         key = entry["path"].casefold()
         require(key not in paths, "duplicate_path")
         paths.add(key)
-        require(isinstance(entry["package"], str) and entry["package"] in PACKAGES, "invalid_file_package")
+        require(isinstance(entry["package"], str) and entry["package"] in package_names, "invalid_file_package")
         require(isinstance(entry["kind"], str) and entry["kind"] in {"pe", "model", "license", "data"}, "invalid_file_kind")
         require(type(entry["bytes"]) is int and entry["bytes"] > 0, "invalid_file_size")
         require(is_hash(entry["sha256"]), "invalid_file_digest")
         binary = key.endswith((".dll", ".exe"))
         require(binary == (entry["kind"] == "pe"), "invalid_pe_role")
         roles[entry["package"]].add(entry["kind"])
+        file_kinds[key] = entry["kind"]
     for name, kinds in roles.items():
         expected = {"pe", "license"} if name == "ar_sdk_core" else {"pe", "model", "license"}
         require(expected <= kinds, "incomplete_package", name)
+    if schema == 2:
+        for path, kind in LEGACY_REQUIRED.items():
+            require(file_kinds.get(path.casefold()) == kind, "incomplete_legacy_runtime", path)
     return files
 
 
