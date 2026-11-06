@@ -35,3 +35,5 @@ python3 scripts/package-tingxian-macos.py \
 这条命令沿用既有本地 debug 包基线，嵌入静态前端资源，不依赖开发服务器；不是优化 release 性能验收。CMake 与 Rust 工具需在 PATH 中。配置使用 `npm run build` 构建已有依赖，不自动重新安装共享 node_modules。之后用上述打包脚本，传入实际生成的 debug/bundle/macos/听弦.app。安装前保留当前应用和用户输入；安装自检、恢复草稿、真实音频和60分钟会议分别验收。
 
 签名暂存目录位于系统临时目录并保留供核对；最终 pkg 写到指定输出目录。脚本仅清理生成副本中妨碍签名的 FinderInfo/ResourceFork，不修改源应用，也不清除其他扩展属性。若要节约解包空间，可用 `pkgutil --expand` 保留压缩 Payload，并流式对账普通文件、符号链接和 AppleDouble 元数据；这不代替安装后的实际运行验收。
+
+暂存应用、模型和运行时优先使用 macOS `clonefile` 写时复制：副本拥有独立 inode，签名或修改不会改变输入。非 APFS 或跨卷失败时回退普通复制，不使用硬链接。仍需为两个压缩 pkg、签名改写及后续安装保留空间。

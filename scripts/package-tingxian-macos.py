@@ -1,5 +1,6 @@
 """Package the Apple Silicon release with its offline runtime. Requires macOS."""
 import argparse
+import ctypes
 import hashlib
 import os
 from pathlib import Path
@@ -14,6 +15,18 @@ ROOT = Path(__file__).resolve().parents[1]
 MODEL_SHA = "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"
 FFMPEG_SOURCE_SHA = "05ee0b03119b45c0bdb4df654b96802e909e0a752f72e4fe3794f487229e5a41"
 MACH_HEADERS = {bytes.fromhex(x) for x in ["feedfacf","cffaedfe","feedface","cefaedfe","cafebabe","bebafeca"]}
+
+def copy_bundle_file(source, destination):
+    # Independent APFS copy-on-write files avoid duplicating the model/runtime
+    # before pkg compression. Never hard-link: codesign changes the new bundle.
+    if os.uname().sysname == "Darwin":
+        clone = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True).clonefile
+        clone.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint32]
+        clone.restype = ctypes.c_int
+        if clone(os.fsencode(source), os.fsencode(destination), 0) == 0:
+            return str(destination)
+    # Cross-volume/non-APFS inputs remain supported by a regular independent copy.
+    return shutil.copy2(source, destination)
 
 def run(*args):
     subprocess.run([str(a) for a in args], check=True)
@@ -55,16 +68,16 @@ def main():
     # may be reintroduced there after signing. Retain this stage for inspection.
     stage=Path(tempfile.mkdtemp(prefix="tingxian-package-"))
     payload=stage/"payload";app=payload/"听弦.app"
-    app.parent.mkdir();run("/usr/bin/ditto",a.app,app)
+    app.parent.mkdir();shutil.copytree(a.app,app,symlinks=True,copy_function=copy_bundle_file)
     resources=app/"Contents/Resources";macos=app/"Contents/MacOS";runtime=resources/"python"
     (runtime/"bin").mkdir(parents=True)
-    shutil.copy2(a.python/"bin/python3",runtime/"bin/python3")
-    shutil.copytree(a.python/"lib",runtime/"lib",symlinks=True,ignore=shutil.ignore_patterns("__pycache__","*.pyc","libpython*.a","pkgconfig","config-3.*","idlelib","ensurepip","pip","pip-*.dist-info"))
+    copy_bundle_file(a.python/"bin/python3",runtime/"bin/python3")
+    shutil.copytree(a.python/"lib",runtime/"lib",symlinks=True,copy_function=copy_bundle_file,ignore=shutil.ignore_patterns("__pycache__","*.pyc","libpython*.a","pkgconfig","config-3.*","idlelib","ensurepip","pip","pip-*.dist-info"))
     for link in runtime.rglob("*"):
         if link.is_symlink() and not link.resolve().is_relative_to(runtime.resolve()):
             raise SystemExit("External runtime link: "+str(link))
-    (resources/"whisper").mkdir();shutil.copyfile(a.model,resources/"whisper/ggml-small.bin")
-    shutil.copy2(a.media,macos/"ffmpeg")
+    (resources/"whisper").mkdir();copy_bundle_file(a.model,resources/"whisper/ggml-small.bin")
+    copy_bundle_file(a.media,macos/"ffmpeg")
     notices=resources/"Licenses";notices.mkdir(exist_ok=True)
     shutil.copy2(ROOT/"LICENSE.md",notices/"Meetily-MIT.md")
     shutil.copy2(ROOT/"NOTICE.md",notices)
@@ -75,7 +88,7 @@ def main():
     (notices/"python-licenses.txt").write_text("\n".join(python_notices)+"\n")
 
     shutil.copy2(ROOT/"packaging/macos/Whisper-LICENSE.txt",notices)
-    shutil.copy2(a.media_source,notices/"ffmpeg-8.0.1.tar.xz")
+    copy_bundle_file(a.media_source,notices/"ffmpeg-8.0.1.tar.xz")
     with tarfile.open(a.media_source) as src:
         (notices/"FFmpeg-LGPL-2.1.txt").write_bytes(src.extractfile("ffmpeg-8.0.1/COPYING.LGPLv2.1").read())
     (notices/"ffmpeg-build.txt").write_text(config+"\nSource and build instructions: https://github.com/Jinchun-Liu/TingXian\n")
