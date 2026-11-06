@@ -8,7 +8,9 @@
 
 实现离线完整性检查作为组件取得后的第一步。该检查读文件和 PE 头，不加载 DLL、执行下载脚本、注册设备或接受条款。通过结果只能称为 `integrity_verified`；GPU 兼容、模型加载、许可和摄像头仍是独立门槛。尚未接入应用启动或 UI，不会改变当前安装版。
 
-NGC 页面在核查时为访客且下载不可用；已请求用户自行登录或处理开发者计划条款。访问条件未满足前继续独立工作，不索取或输出凭证，不推断必须付费，也不把公开示例许可等同运行库许可。
+NGC 资料和免费的 NVIDIA Developer Program 登记已完成，实际会员入口可访问，未订阅营销通讯。登记后重新加载 Core 资源页，下载按钮仍禁用，页面要求 AI Enterprise 订阅，版本表被遮挡；没有读取受限版本内容或尝试绕过访问限制。当前可以确认账号登记与下载授权是两个门槛，不能宣称必须购买或已获 SDK 使用权。
+
+[官方 AI for Media 页面](https://developer.nvidia.com/topics/ai/generative-ai/ai-for-media)列有 90 天免费评估申请渠道，但获批条件、该账号是否适用及生产/分发许可尚未确认。尚未提交试用/销售申请、支付、生成 API Key 或下载 SDK。后续先确认授权类别，再固定 x64 Core、三个特征、摘要和许可；不以旧包或云端外发替换当前需求。免费计划登记适用的[Technology Access Terms](https://developer.nvidia.com/legal/terms/)与各软件产品协议仍须分开核对。
 
 ## 官方组件与版本
 
@@ -38,13 +40,15 @@ NGC 页面在核查时为访客且下载不可用；已请求用户自行登录�
 
 选定 Windows 11 Media Foundation 软件虚拟摄像头作为首个实现候选。基础程序不在启动时注册设备。[MFCreateVirtualCamera](https://learn.microsoft.com/en-us/windows/win32/api/mfvirtualcamera/nf-mfvirtualcamera-mfcreatevirtualcamera)最低系统版本为 build 22000，支持 CurrentUser 和 Session 生命周期；AllUsers 需要管理员权限。CurrentUser 不意味着媒体源 DLL 可以免系统安装。
 
-[微软官方示例](https://github.com/microsoft/Windows-Camera/blob/626f8b19c5f367602f2e89c6b314573d3776c9df/Samples/VirtualCamera/README.md)通过 MSI 部署媒体源并在 HKLM 注册 COM。媒体源运行在 FrameServer 服务中。因此规划为独立、可卸载的输出组件，必要时明确请求系统授权；本轮没有安装、注册或运行该组件。不能据一般驱动示例断言必须开发内核驱动，也不能承诺所有环境免管理员安装。
+[微软官方示例](https://github.com/microsoft/Windows-Camera/blob/626f8b19c5f367602f2e89c6b314573d3776c9df/Samples/VirtualCamera/README.md)通过 MSI 部署媒体源并在 HKLM 注册 COM。媒体源运行在 FrameServer 服务中。因此实现独立、可卸载的输出组件，安装需要系统授权；只在 CI 部署并激活 COM 媒体源，目标机尚未安装。不能据一般驱动示例断言必须开发内核驱动，也不能承诺所有环境免管理员安装。
 
 主控制窗管理用户意图；独立用户态 worker 管理采集和 GPU，媒体源只消费校正帧与中性占位帧。展示窗不获得帧句柄或启动权限。第一版 IPC 已采用可取消的本机命名管道，核对连接身份、代次和固定载荷，只允许当前登录会话及 LocalService，不开放局域网端口或 Everyone 权限。是否进一步使用共享内存/显存须依据实际帧时间与复制开销决定；当前未做性能达标声明。
 
-原生输出组件从 `6ba5a80` 的进程内媒体源推进到 `7abcfcf` 的双进程帧接收及 MF 激活配置，CI 和目标机各通过 15+10 组，见[IPC 验收](video-ipc-validation-2026-11-06.md)。当前只接受已经处理好的 NV12 字节；主应用/GPU worker 接入与真实 FrameServer 仍待验证，不含眼部推理或注册安装器。
+原生输出组件从 `6ba5a80` 的进程内媒体源推进到 `7abcfcf` 的双进程帧接收及 MF 激活配置，CI 和目标机各通过 15+10 组，见[IPC 验收](video-ipc-validation-2026-11-06.md)。当前只接受已经处理好的 NV12 字节；主应用/GPU worker 接入与真实 FrameServer 仍待验证，不含眼部推理。
 
-`ddada3c` 新增独立 Session/CurrentUser 生命周期控制层及只读诊断，CI/本机各通过 13 组新增检查。设备 OS 操作为故障注入，生产 API 后端仅完成编译及调用前拒绝检查；目标机确认 API 导出存在而媒体源尚未安装。主应用接入、独立安装组件和实际注册仍待完成，见[分层验收](video-session-validation-2026-11-06.md)。
+`ddada3c` 新增独立 Session/CurrentUser 生命周期控制层及只读诊断，CI/本机各通过 13 组新增检查。设备 OS 操作为故障注入，生产 API 后端仅完成编译及调用前拒绝检查；目标机确认 API 导出存在而媒体源尚未安装，见[生命周期验收](video-session-validation-2026-11-06.md)。
+
+`9eb55d3` 独立 MSI 在 Server 2025 CI 通过七组部署检查，包含两轮真实安装、COM 激活、15 组已安装源样本检查、卸载及同包重装。目标机只读核对摘要与安装前状态，尚未执行 MSI；无任何虚拟摄像头创建。主应用接入、目标机安装和真实 FrameServer 仍待完成，见[安装验收](video-installer-validation-2026-11-06.md)。
 
 关闭/故障时由输出端自己的看门狗切中性帧，即使 worker 已崩溃也不无限复用最后一帧。恢复只能恢复偏好，不能恢复采集、输出或原画面回退授权。后续实现须验证最多两帧的等待队列、旧 generation 丢弃、GPU 完成计时和独立音频路径；不把写入虚拟设备称为对端已收到。
 

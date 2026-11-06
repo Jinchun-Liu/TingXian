@@ -4,6 +4,8 @@
 
 ## 自动验证
 
+独立视频 MSI 的[部署检查](video-installer-validation-2026-11-06.md)：9eb55d3 在 Server 2025 CI 通过 7 组安装/失败回滚/卸载/重装检查及真实注册 COM/MF 加载；每轮已安装 DLL 的 15 组样本检查通过。首轮 ACL 检查失败与 SID 根因修复均保留记录。目标机仅核对包和只读安装前状态，未运行 MSI；该结果不替代正常防护安装、虚拟设备/FrameServer、SDK 或基础安装器验收。
+
 设备生命周期的[组件检查](video-session-validation-2026-11-06.md)：ddada3c 在 CI 与本机通过 15+10+13 组及只读诊断。13 组中 OS 设备操作是故障注入，实际管道撤销/中性输出另测；本机 API 导出存在而 COM 媒体源未安装。未执行真实设备注册或摄像头采集，不能推导安装/FrameServer 已通过。
 
 受限 IPC 的[最新组件检查](video-ipc-validation-2026-11-06.md)：7abcfcf 在 Windows CI 与本机各通过 15 组媒体源、10 组双进程检查。实际传输合成像素，验证错误身份拒绝、停止/断线中性化及显式恢复；尚未注册虚拟设备或验证 LocalService/FrameServer、真实摄像头和会议。
