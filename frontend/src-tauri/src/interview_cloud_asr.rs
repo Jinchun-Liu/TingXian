@@ -112,8 +112,11 @@ pub fn start<R:Runtime>(app:AppHandle<R>,mut input:AsrReceiver,state:Arc<Recordi
 }
 fn fail<R:Runtime>(app:&AppHandle<R>,state:&RecordingState,error:&str){
     state.stop_recording();state.transcription_control.cancel();
-    crate::audio::interview_health::report(app,&state.health,"cloud_asr_failed");
-    let _=app.emit("transcription-error",json!({"error":error,"userMessage":format!("{error}。已保留文字，请停止后重试或切换本地转写。"),"actionable":false,"phase":"active"}));
+    // Transport errors are fixed local messages or sanitized provider codes;
+    // never retain the provider payload, credentials or audio in diagnostics.
+    log::warn!("Cloud ASR stopped: {}",error);
+    let _=app.emit("interview-audio-fault",state.health.record_fault_detail("cloud_asr_failed",Some(error)));
+    let _=app.emit("transcription-error",json!({"native_session_id":state.health.session_id,"error":error,"userMessage":format!("{error}。已保留文字，请停止后重试或切换本地转写。"),"actionable":false,"phase":"active"}));
 }
 struct ChannelOutput<R:Runtime>{
     app:AppHandle<R>,state:Arc<RecordingState>,cancel:CancellationToken,gate:Option<Arc<MicrophoneGate>>,source:&'static str,epoch:u64,offset:f64,ids:HashMap<u64,u64>,unfinished:HashMap<u64,u64>,
@@ -133,7 +136,7 @@ impl<R:Runtime> ChannelOutput<R>{
                 // A provider timestamp ahead of the capture clock is unknown,
                 // not a measured zero-millisecond response.
                 let latency=self.state.get_recording_duration().filter(|now|now.is_finite()&&*now>=end).map(|now|(now-end)*1000.0);
-                let _=self.app.emit("interview-utterance-end",json!({"source":self.source,"native_session_id":self.state.health.session_id,"utterance_id":utterance,"success":true,"timing":{"stable_text_unix_ms":chrono::Utc::now().timestamp_millis(),"audio_end_to_stable_ms":latency}}));
+                let _=self.app.emit("interview-utterance-end",json!({"source":self.source,"native_session_id":self.state.health.session_id,"utterance_id":utterance,"success":true,"timing":{"stable_text_unix_ms":chrono::Utc::now().timestamp_millis(),"audio_end_basis":"provider_estimate","audio_end_to_stable_ms":latency}}));
                 let _=self.app.emit("interview-cloud-asr-usage",json!({"source":self.source,"native_session_id":self.state.health.session_id,"task_billed_seconds":billed_seconds}));
             }
         }
@@ -155,6 +158,19 @@ async fn run_channel<R:Runtime>(app:AppHandle<R>,state:Arc<RecordingState>,confi
 #[cfg(test)]
 mod tests{
     use super::*;use tauri::Listener;
+    #[test]
+    fn failure_detail_survives_stop_and_is_scoped_to_the_native_session(){
+        let app=tauri::test::mock_builder().build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let observed=Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+        let events=observed.clone();app.listen("transcription-error",move|e|events.lock().unwrap().push(serde_json::from_str(e.payload()).unwrap()));
+        let state=RecordingState::new();state.start_recording().unwrap();
+        fail(app.handle(),&state,"云转写连接无响应，已暂停该通道");
+        let snapshot=state.health.snapshot(true,false,false,true,false);
+        assert_eq!(snapshot.fault.unwrap().detail.as_deref(),Some("云转写连接无响应，已暂停该通道"));
+        assert_eq!(snapshot.restart_reason.as_deref(),Some("cloud_asr_failed"));
+        assert!(state.transcription_control.is_cancelled());
+        assert_eq!(observed.lock().unwrap()[0]["native_session_id"],state.health.session_id);
+    }
     #[test]
     fn cloud_sources_partials_mute_pause_and_completion_stay_isolated(){
         let app=tauri::test::mock_builder().build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();

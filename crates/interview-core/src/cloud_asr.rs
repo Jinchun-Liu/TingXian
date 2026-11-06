@@ -110,17 +110,29 @@ impl PreparedTask {
     }
     /// Bounded audio admission is owned by the caller. Closing input requests a
     /// final result; cancellation drops the socket without retrying or replaying.
-    pub async fn stream<F,T>(mut self,mut audio:mpsc::Receiver<T>,cancel:CancellationToken,mut notify:F)->Result<()>
+    pub async fn stream<F,T>(self,audio:mpsc::Receiver<T>,cancel:CancellationToken,notify:F)->Result<()>
+    where F:FnMut(AsrEvent)+Send,T:AsRef<[u8]>+Send {
+        self.stream_with_liveness(audio,cancel,notify,Duration::from_secs(15),Duration::from_secs(45)).await
+    }
+    async fn stream_with_liveness<F,T>(mut self,mut audio:mpsc::Receiver<T>,cancel:CancellationToken,mut notify:F,ping_every:Duration,receive_timeout:Duration)->Result<()>
     where F:FnMut(AsrEvent)+Send,T:AsRef<[u8]>+Send {
         notify(AsrEvent::Ready);
-        let mut finishing=false;let mut deadline=Instant::now()+Duration::from_secs(45);
+        let mut finishing=false;let mut deadline=Instant::now()+receive_timeout;
+        // Recognition results can legitimately stop during silence. Probe the
+        // WebSocket instead; only an actual inbound response extends liveness.
+        // The provider's ASR heartbeat option still keeps its task alive.
+        let mut ping=tokio::time::interval_at(Instant::now()+ping_every,ping_every);
+        ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop{
             tokio::select!{biased;
                 _=cancel.cancelled()=>return Err("云转写已取消".into()),
                 _=tokio::time::sleep_until(deadline)=>return Err(if finishing{"云转写结束超时，已保留收到的文字"}else{"云转写连接无响应，已暂停该通道"}.into()),
                 event=read_event(&mut self.socket,&mut self.protocol)=>{
-                    let event=event?;if !finishing{deadline=Instant::now()+Duration::from_secs(45);}
+                    let event=event?;if !finishing{deadline=Instant::now()+receive_timeout;}
                     if let Some(event)=event{let done=matches!(event,AsrEvent::Finished);notify(event);if done{return if finishing{Ok(())}else{Err("云转写意外结束，当前发言可能不完整".into())};}}
+                },
+                _=ping.tick(),if !finishing=>{
+                    tokio::select!{biased;_=cancel.cancelled()=>return Err("云转写已取消".into()),sent=timeout(Duration::from_secs(3),self.socket.send(Message::Ping(b"tingxian".to_vec().into())))=>sent.map_err(|_|"云转写心跳发送超时")?.map_err(|_|"云转写连接中断，未重发音频")?}
                 },
                 pcm=audio.recv(),if !finishing=>{
                     let (message,_lease)=if let Some(pcm)=pcm{
@@ -195,6 +207,33 @@ mod tests {
             assert!(observed.iter().any(|e|matches!(e,AsrEvent::Sentence{final_result:false,text,..} if text=="null 和零")));
             assert_eq!(observed.iter().filter(|e|matches!(e,AsrEvent::Sentence{final_result:true,..})).count(),if broken{0}else{1});
             assert_eq!(observed.contains(&AsrEvent::Finished),!broken);server.await.unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn quiet_socket_uses_pongs_without_fabricating_text_and_dead_peer_still_times_out(){
+        for responds in [true,false]{
+            let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let endpoint=format!("ws://{}",listener.local_addr().unwrap());
+            let server=tokio::spawn(async move{
+                let (tcp,_)=listener.accept().await.unwrap();let mut ws=tokio_tungstenite::accept_async(tcp).await.unwrap();
+                let run:Value=serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+                assert_eq!(run["payload"]["parameters"]["heartbeat"],true);
+                ws.send(Message::Text(event("task-started").to_string().into())).await.unwrap();
+                if !responds{tokio::time::sleep(Duration::from_millis(500)).await;return 0;}
+                let mut pings=0;
+                while let Some(Ok(message))=ws.next().await{match message{
+                    Message::Ping(data)=>{pings+=1;ws.send(Message::Pong(data)).await.unwrap();},
+                    Message::Text(text)=>{let finish:Value=serde_json::from_str(&text).unwrap();assert_eq!(finish["header"]["action"],"finish-task");ws.send(Message::Text(event("task-finished").to_string().into())).await.unwrap();break;},
+                    _=>panic!("quiet stream unexpectedly sent audio"),
+                }}pings
+            });
+            let cancel=CancellationToken::new();let prepared=PreparedTask::connect_to(&endpoint,&CloudAsrConfig::default(),"synthetic",ID.into(),48000,"auto","",&cancel).await.unwrap();
+            let (tx,rx)=mpsc::channel::<Vec<u8>>(1);
+            let closer=tokio::spawn(async move{tokio::time::sleep(Duration::from_millis(450)).await;drop(tx)});
+            let mut observed=vec![];
+            let result=prepared.stream_with_liveness(rx,cancel,|event|observed.push(event),Duration::from_millis(40),Duration::from_millis(160)).await;
+            if responds{assert_eq!(result,Ok(()));assert_eq!(observed,vec![AsrEvent::Ready,AsrEvent::Finished]);assert!(server.await.unwrap()>=4);}
+            else{assert!(result.unwrap_err().contains("无响应"));assert_eq!(observed,vec![AsrEvent::Ready]);server.await.unwrap();}
+            closer.abort();
         }
     }
     #[tokio::test]

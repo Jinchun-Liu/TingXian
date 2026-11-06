@@ -7,7 +7,7 @@ use tauri::{Emitter,Runtime};
 
 static NEXT_SESSION:AtomicU64=AtomicU64::new(1);
 #[derive(Clone,Debug,Serialize)]
-pub struct AudioFault {pub session_id:u64,pub sequence:u64,pub code:String,pub at_ms:u64}
+pub struct AudioFault {pub session_id:u64,pub sequence:u64,pub code:String,pub at_ms:u64,#[serde(skip_serializing_if="Option::is_none")]pub detail:Option<String>}
 #[derive(Clone,Debug,Serialize)]
 pub struct AudioHealthSnapshot {
     pub session_id:u64,pub recording:bool,pub active:bool,pub paused:bool,
@@ -45,11 +45,14 @@ impl AudioHealth {
     }
     fn completed(&self,bytes:u64) {let mut work=self.work.lock().unwrap();work.pending=work.pending.saturating_sub(1);work.bytes=work.bytes.saturating_sub(bytes);work.last_progress_ms=self.now();}
     pub fn record_fault(&self,code:&str)->AudioFault {
+        self.record_fault_detail(code,None)
+    }
+    pub fn record_fault_detail(&self,code:&str,detail:Option<&str>)->AudioFault {
         if matches!(code,"asr_init_failed"|"asr_worker_failed"|"cloud_asr_failed") {
             self.restart_reason.lock().unwrap().get_or_insert_with(||code.to_string());
             self.restart_required.store(true,Ordering::Relaxed);
         }
-        let mut current=self.fault.lock().unwrap();let event=AudioFault {session_id:self.session_id,sequence:current.as_ref().map_or(1,|f|f.sequence+1),code:code.into(),at_ms:self.now()};*current=Some(event.clone());event
+        let mut current=self.fault.lock().unwrap();let event=AudioFault {session_id:self.session_id,sequence:current.as_ref().map_or(1,|f|f.sequence+1),code:code.into(),at_ms:self.now(),detail:detail.map(str::to_owned)};*current=Some(event.clone());event
     }
     pub fn snapshot(&self,recording:bool,active:bool,paused:bool,system_started:bool,microphone_enabled:bool)->AudioHealthSnapshot {
         let now=self.now();let age=|counter:&AtomicU64|{let value=counter.load(Ordering::Relaxed);(value!=0).then(||now.saturating_sub(value))};

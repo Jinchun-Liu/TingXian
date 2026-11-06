@@ -438,7 +438,7 @@ export default function InterviewPage() {
     }).catch(error);
     // Modern faults carry a recording ID. Unscoped compatibility events from
     // an older worker must not pause a newly started recording.
-    void add<{ userMessage?: string }>('transcription-error', event => { if (audioHealth.current.accepts()) { live.current.automatic = false; setAutomatic(false); setNotice(event.userMessage || '转写失败，已暂停自动发送'); } }).catch(error);
+    void add<{ native_session_id?: number; userMessage?: string }>('transcription-error', event => { if (audioHealth.current.accepts(event.native_session_id)) { live.current.automatic = false; setAutomatic(false); setNotice(event.userMessage || '转写失败，已暂停自动发送'); } }).catch(error);
     void add<string>('recording-error', message => { if (audioHealth.current.accepts()) { live.current.automatic = false; setAutomatic(false); setNotice(message || '采集失败，已暂停自动发送'); } }).catch(error);
     void add<MicrophoneState>('interview-microphone-state', state => {
       if (!microphoneChanging.current && (!state.health || audioHealth.current.accepts(state.health.session_id))) applyMicrophoneState(state);

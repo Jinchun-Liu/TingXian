@@ -1,4 +1,4 @@
-export interface AudioFault { session_id: number; sequence: number; code: string; at_ms?: number }
+export interface AudioFault { session_id: number; sequence: number; code: string; at_ms?: number; detail?: string }
 export interface AudioHealthSnapshot {
   session_id: number; recording: boolean; active: boolean; paused: boolean;
   system_started: boolean; microphone_enabled: boolean; active_for_ms: number;
@@ -35,6 +35,7 @@ export class InterviewAudioHealth {
   private closed = false;
   private sequence = 0;
   private reason = '';
+  private detail = '';
   private restartRequired = false;
   private snapshot: AudioHealthSnapshot | null = null;
   private lastPoll = 0;
@@ -43,10 +44,10 @@ export class InterviewAudioHealth {
   constructor(private now: () => number = () => performance.now()) {}
   prepareStart() {
     this.session = null; this.awaitingStart = true; this.closed = false;
-    this.sequence = 0; this.reason = ''; this.restartRequired = false; this.snapshot = null;
+    this.sequence = 0; this.reason = ''; this.detail = ''; this.restartRequired = false; this.snapshot = null;
     this.lastPoll = this.now(); this.lastTranscript = this.now(); this.faultAt = this.now();
   }
-  close() { this.closed = true; this.reason = ''; this.snapshot = null; }
+  close() { this.closed = true; this.reason = ''; this.detail = ''; this.snapshot = null; }
   private bind(id: number) {
     if (this.closed || !Number.isSafeInteger(id) || id < 1) return false;
     if (this.session !== null) return id === this.session;
@@ -64,7 +65,7 @@ export class InterviewAudioHealth {
     // Only a native status response may establish the current recording.
     // A delayed event cannot claim an unbound page while start is in flight.
     if (!this.accepts(event.session_id) || event.sequence <= this.sequence) return false;
-    this.sequence = event.sequence; this.reason = event.code; this.faultAt = this.now();
+    this.sequence = event.sequence; this.reason = event.code; this.detail = event.detail || ''; this.faultAt = this.now();
     if (['asr_init_failed', 'asr_worker_failed', 'asr_overflow','cloud_asr_failed'].includes(event.code)) this.restartRequired = true;
     return true;
   }
@@ -75,7 +76,7 @@ export class InterviewAudioHealth {
     if (snapshot.fault) this.fault(snapshot.fault);
     if (snapshot.restart_required) { this.restartRequired = true; this.reason = snapshot.restart_reason || 'asr_init_failed'; }
     if (snapshot.recording) {
-      if (!snapshot.active) { if (this.reason !== 'asr_overflow') this.reason = 'inactive'; this.restartRequired = true; }
+      if (!snapshot.active) { if (!this.reason || (!snapshot.fault && !snapshot.restart_reason && this.reason !== 'asr_overflow')) { this.reason = 'inactive'; this.detail = ''; } this.restartRequired = true; }
       else if (!snapshot.system_started) { this.reason = 'system_missing'; this.restartRequired = true; }
       else if (!snapshot.paused && !this.reason) {
         if (snapshot.asr_streaming ? (snapshot.asr_pending_bytes ?? 0) >= 384000 : snapshot.asr_pending >= 4) { this.reason = 'backlog'; this.faultAt = this.now(); }
@@ -106,7 +107,7 @@ export class InterviewAudioHealth {
       else if (s.system_signal_age_ms === null || s.system_signal_age_ms > 15000) advisory = '尚未检测到对方声音；等待开场或静音时属于正常情况。若对方正在说话，请检查飞书输出和系统音频权限。';
       else if (s.active_for_ms > 20000 && this.now() - this.lastTranscript > 20000) advisory = '检测到系统声音，但近期没有字幕；请确认声音包含人声，并检查转写模型。';
     }
-    return { paused: !!this.reason, message: this.reason ? `${messages[this.reason] || '采集或转写异常'}，已暂停自动回答。转写保留，可手动输入或本地检索。` : '', canResume, advisory };
+    return { paused: !!this.reason, message: this.reason ? `${this.detail || messages[this.reason] || '采集或转写异常'}，已暂停自动回答。转写保留，可手动输入或本地检索。` : '', canResume, advisory };
   }
   resume() { if (!this.view().canResume) return false; this.reason = ''; return true; }
 }

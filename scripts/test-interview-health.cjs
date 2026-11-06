@@ -56,3 +56,10 @@ observe(healthy({session_id:7,asr_streaming:true,asr_pending:16,asr_pending_byte
 observe(healthy({session_id:7,asr_streaming:true}));assert.equal(guard.resume(),true);
 guard.fault({session_id:7,sequence:1,code:'cloud_asr_failed'});observe(healthy({session_id:7,asr_streaming:true}));
 assert.equal(guard.resume(),false,'a failed cloud socket cannot be resumed as if still connected');
+guard.close();guard.prepareStart();
+const cloudFault={session_id:8,sequence:1,code:'cloud_asr_failed',detail:'云转写连接无响应，已暂停该通道'};
+observe(healthy({session_id:8,active:false,restart_required:true,restart_reason:'cloud_asr_failed',fault:cloudFault}));
+assert.match(guard.view().message,/连接无响应/,'poll must preserve the concrete cause after capture stops');
+assert.equal(guard.accepts(8),true);assert.equal(guard.accepts(7),false);
+guard.close();guard.prepareStart();observe(healthy({session_id:9}));
+assert.equal(guard.fault(cloudFault),false);assert.equal(guard.view().message,'','previous capture detail must not leak into restart');

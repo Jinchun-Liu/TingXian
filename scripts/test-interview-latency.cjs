@@ -29,3 +29,8 @@ const correction=new TurnLatency(0);correction.observe('听写纠正：企业测
 assert.equal(correction.snapshot().stages_ms.first_useful_text,undefined);
 assert.ok(latencyLabel(correction.snapshot()).includes('未测得'));
 console.log('PASS: queue/ASR/delivery accounting, retries, useful answer vs heading/correction, sentence boundary, manual/missing/invalid clocks, partial errors, immutable export');
+const cloud=new TurnLatency(0,{stable_text_unix_ms:9950,audio_end_to_stable_ms:1600,audio_end_basis:'provider_estimate'},10000,true);
+cloud.observe('建议回答：这是云转写。',500);
+assert.equal(cloud.snapshot().audio_end_basis,'provider_estimate');
+assert.equal(cloud.snapshot().vad_to_stable_ms,undefined);
+assert.match(latencyLabel(cloud.snapshot()),/云端终点估计/);
