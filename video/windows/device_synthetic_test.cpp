@@ -164,8 +164,13 @@ HRESULT run_cycle(unsigned cycle) {
         require(listed ? S_OK : E_UNEXPECTED, "own_device_present");
         require(backend->preview_source(&preview), "own_shared_preview");
         ComPtr<IMFAttributes> options;
-        require(MFCreateAttributes(&options, 1), "reader_options");
+        require(MFCreateAttributes(&options, 2), "reader_options");
         require(options->SetUnknown(MF_SOURCE_READER_ASYNC_CALLBACK, callback.Get()), "async_callback");
+        // This scope explicitly shuts down its preview below. Without this
+        // option releasing the reader already shuts it down, so the second call
+        // fails on the Windows proxy even when device output/cleanup succeeded.
+        require(options->SetUINT32(MF_SOURCE_READER_DISCONNECT_MEDIASOURCE_ON_SHUTDOWN, TRUE),
+            "explicit_preview_shutdown_owner");
         require(MFCreateSourceReaderFromMediaSource(preview.Get(), options.Get(), &reader), "source_reader");
         ComPtr<IMFMediaType> type;
         require(MFCreateMediaType(&type), "nv12_type");
@@ -211,7 +216,12 @@ HRESULT run_cycle(unsigned cycle) {
     // All acquired handles have a cleanup path, including failed Start/preview.
     session.request_stop();
     reader.Reset(); // callback refcounts remain owned until the reader has released them
-    if (preview) { const auto hr = preview->Shutdown(); if (FAILED(hr) && SUCCEEDED(original)) original = hr; }
+    if (preview) {
+        const auto hr = preview->Shutdown();
+        std::cout << "{\"stage\":\"preview_cleanup\",\"hr\":\"0x" << std::hex
+            << static_cast<unsigned long>(hr) << std::dec << "\"}" << std::endl;
+        if (FAILED(hr) && SUCCEEDED(original)) original = hr;
+    }
     preview.Reset(); callback.Reset();
     const auto stopped = session.stop();
     std::cout << "{\"stage\":\"session_cleanup\",\"hr\":\"0x" << std::hex
