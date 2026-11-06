@@ -40,7 +40,7 @@ NGC 资料和免费的 NVIDIA Developer Program 登记已完成，实际会员�
 
 选定 Windows 11 Media Foundation 软件虚拟摄像头作为首个实现候选。基础程序不在启动时注册设备。[MFCreateVirtualCamera](https://learn.microsoft.com/en-us/windows/win32/api/mfvirtualcamera/nf-mfvirtualcamera-mfcreatevirtualcamera)最低系统版本为 build 22000，支持 CurrentUser 和 Session 生命周期；AllUsers 需要管理员权限。CurrentUser 不意味着媒体源 DLL 可以免系统安装。
 
-[微软官方示例](https://github.com/microsoft/Windows-Camera/blob/626f8b19c5f367602f2e89c6b314573d3776c9df/Samples/VirtualCamera/README.md)通过 MSI 部署媒体源并在 HKLM 注册 COM。媒体源运行在 FrameServer 服务中。因此实现独立、可卸载的输出组件，安装需要系统授权；只在 CI 部署并激活 COM 媒体源，目标机尚未安装。不能据一般驱动示例断言必须开发内核驱动，也不能承诺所有环境免管理员安装。
+[微软官方示例](https://github.com/microsoft/Windows-Camera/blob/626f8b19c5f367602f2e89c6b314573d3776c9df/Samples/VirtualCamera/README.md)通过 MSI 部署媒体源并在 HKLM 注册 COM。媒体源运行在 FrameServer 服务中。因此实现独立、可卸载的输出组件，安装需要系统授权；已在 CI 和目标机部署并激活 COM 媒体源，实际合成设备启动正在验证。不能据一般驱动示例断言必须开发内核驱动，也不能承诺所有环境免管理员安装。
 
 主控制窗管理用户意图；独立用户态 worker 管理采集和 GPU，媒体源只消费校正帧与中性占位帧。展示窗不获得帧句柄或启动权限。第一版 IPC 已采用可取消的本机命名管道，核对连接身份、代次和固定载荷，只允许当前登录会话及 LocalService，不开放局域网端口或 Everyone 权限。是否进一步使用共享内存/显存须依据实际帧时间与复制开销决定；当前未做性能达标声明。
 
@@ -48,7 +48,7 @@ NGC 资料和免费的 NVIDIA Developer Program 登记已完成，实际会员�
 
 `ddada3c` 新增独立 Session/CurrentUser 生命周期控制层及只读诊断，CI/本机各通过 13 组新增检查。设备 OS 操作为故障注入，生产 API 后端仅完成编译及调用前拒绝检查；目标机确认 API 导出存在而媒体源尚未安装，见[生命周期验收](video-session-validation-2026-11-06.md)。
 
-`9eb55d3` 独立 MSI 在 Server 2025 CI 通过七组部署检查，包含两轮真实安装、COM 激活、15 组已安装源样本检查、卸载及同包重装。目标机只读核对摘要与安装前状态，尚未执行 MSI；无任何虚拟摄像头创建。主应用接入、目标机安装和真实 FrameServer 仍待完成，见[安装验收](video-installer-validation-2026-11-06.md)。
+`9eb55d3` 独立 MSI 完成 CI 与目标机安装后，实际纯合成设备测试暴露激活器析构提前关闭源、格式探测消耗生产者连接。两处已修复，当前目标机安装 `084dae5` / 0.1.2，21 条安装断言通过；`c4a8a8e` 工具完成三轮实际 FrameServer 合成像素、停止中性化及设备移除/再启。16+12+13 组原生及 7+5 组部署/升级 CI 通过。见[设备记录](video-device-validation-2026-11-06.md)与[安装验收](video-installer-validation-2026-11-06.md)。主应用、GPU/SDK、真实摄像头与会议仍未验收完成。
 
 关闭/故障时由输出端自己的看门狗切中性帧，即使 worker 已崩溃也不无限复用最后一帧。恢复只能恢复偏好，不能恢复采集、输出或原画面回退授权。后续实现须验证最多两帧的等待队列、旧 generation 丢弃、GPU 完成计时和独立音频路径；不把写入虚拟设备称为对端已收到。
 
