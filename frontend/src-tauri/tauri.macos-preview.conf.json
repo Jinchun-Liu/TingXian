@@ -1,5 +1,5 @@
 {
-  "version": "0.7.0-beta.1",
+  "version": "0.7.0-beta.2",
   "build": {"beforeBuildCommand": "npm run build"},
   "bundle": {"targets": ["app"]}
 }
