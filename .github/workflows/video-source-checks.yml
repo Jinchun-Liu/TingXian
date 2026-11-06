@@ -2,9 +2,9 @@ name: Windows native video source
 on:
   push:
     branches: [feat/windows-eye-local-20261106]
-    paths: ['video/windows/**', '.github/workflows/video-source-checks.yml']
+    paths: ['video/windows/**', 'crates/video-worker-control/**', 'Cargo.lock', '.github/workflows/video-source-checks.yml']
   pull_request:
-    paths: ['video/windows/**', '.github/workflows/video-source-checks.yml']
+    paths: ['video/windows/**', 'crates/video-worker-control/**', 'Cargo.lock', '.github/workflows/video-source-checks.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -23,6 +23,18 @@ jobs:
         run: cmake --build "$env:RUNNER_TEMP/video-source-build" --config Release --parallel 2
       - name: Test real COM samples without registering a camera
         run: ctest --test-dir "$env:RUNNER_TEMP/video-source-build" -C Release --output-on-failure
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.1
+      - name: Test main-controller and native worker without media
+        run: |
+          $env:TINGXIAN_VIDEO_TEST_BIN = "$env:RUNNER_TEMP/video-source-build/Release"
+          $env:TINGXIAN_VIDEO_TEST_ROOT = "$env:RUNNER_TEMP/video-controller-fixtures"
+          cargo test -p video-worker-control --locked -- --test-threads=1 2>&1 | Tee-Object "$env:RUNNER_TEMP/video-source-build/controller-test.log"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $test = @(Get-ChildItem target/debug/deps/video_worker_control-*.exe)
+          if ($test.Count -ne 1) { throw 'Expected one controller test executable' }
+          Copy-Item -LiteralPath $test[0].FullName -Destination "$env:RUNNER_TEMP/video-source-build/Release/tingxian-video-controller-test.exe"
       - name: Public source check
         run: python -I -B scripts/check-public-source.py
       - name: Preserve native test binaries and logs
@@ -36,6 +48,10 @@ jobs:
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-ipc-test.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-session-test.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-worker-owner-test.exe
+            ${{ runner.temp }}/video-source-build/Release/tingxian-video-worker.exe
+            ${{ runner.temp }}/video-source-build/Release/tingxian-video-worker-fixture.exe
+            ${{ runner.temp }}/video-source-build/Release/tingxian-video-controller-test.exe
+            ${{ runner.temp }}/video-source-build/controller-test.log
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-device-probe.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-device-synthetic-test.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-registration-test.exe
