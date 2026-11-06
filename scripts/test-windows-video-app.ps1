@@ -36,8 +36,11 @@ try {
     if ($LASTEXITCODE) { throw 'Test manifest is missing after preparation' }
     $manifest = Get-Content "$evidence/test-manifest.xml" -Raw
     if ($manifest -notmatch 'Microsoft.Windows.Common-Controls' -or $manifest -notmatch '6.0.0.0') { throw 'Test manifest lacks Common Controls v6' }
-    & $copy 'interview_video::tests' --nocapture 2>&1 | Tee-Object "$evidence/test.log"
-    $testExit = $LASTEXITCODE
+    $testExit = 0
+    foreach ($suite in @('interview_video::tests','interview_windows::tests')) {
+        & $copy $suite --nocapture 2>&1 | Tee-Object "$evidence/test.log" -Append
+        if ($LASTEXITCODE) { $testExit = $LASTEXITCODE; break }
+    }
     if ((Get-FileHash -LiteralPath $original -Algorithm SHA256).Hash.ToLower() -ne $originalHash) { throw 'Original test artifact changed' }
     @{original_manifest_present=$hasManifest;original_sha256=$originalHash;prepared_sha256=(Get-FileHash -LiteralPath $copy -Algorithm SHA256).Hash.ToLower();test_exit=$testExit;production_manifest_changed=$false} |
         ConvertTo-Json | Set-Content "$evidence/result.json" -Encoding utf8

@@ -77,13 +77,15 @@ mod tests {
         let display=tauri::WebviewWindowBuilder::new(&app,"interview-conversation",Default::default()).build().unwrap();
         let invoke=|window:&tauri::WebviewWindow<tauri::test::MockRuntime>,cmd:&str,body:Value|
             tauri::test::get_ipc_response(window,tauri::webview::InvokeRequest{cmd:cmd.into(),callback:tauri::ipc::CallbackFn(0),
-                error:tauri::ipc::CallbackFn(1),url:"tauri://localhost".parse().unwrap(),body:tauri::ipc::InvokeBody::Json(body),
+                error:tauri::ipc::CallbackFn(1),url:if cfg!(any(windows,target_os="android")){"http://tauri.localhost"}else{"tauri://localhost"}.parse().unwrap(),body:tauri::ipc::InvokeBody::Json(body),
                 headers:Default::default(),invoke_key:tauri::test::INVOKE_KEY.into()});
         for cmd in ["video_status","video_inspect","video_stop"] {
-            assert!(invoke(&display,cmd,json!({"expectedGeneration":0})).is_err(),"display invoked {cmd}");
+            let error=invoke(&display,cmd,json!({"expectedGeneration":0})).err().expect("display must be rejected");
+            assert_eq!(error,json!("仅主窗口可以管理视频"),"wrong denial for {cmd}");
         }
         assert_eq!(app.state::<VideoState>().0.snapshot().generation,0,"display changed video state");
-        assert!(invoke(&main,"video_status",json!({})).is_ok());
+        let initial:Value=invoke(&main,"video_status",json!({})).expect("main status must reach the handler").deserialize().unwrap();
+        assert_eq!(initial["phase"],"off");
         crate::interview_exit::request_exit(app.handle(),false);
         assert!(invoke(&main,"video_inspect",json!({"expectedGeneration":0})).is_err(),"inspection admitted during quit");
         let request:Value=invoke(&main,"interview_exit_status",json!({})).unwrap().deserialize().unwrap();
@@ -92,7 +94,7 @@ mod tests {
         assert!(app.state::<VideoState>().0.wait_idle(Duration::ZERO));
         invoke(&main,"video_stop",json!({})).unwrap();
         let stopped=app.state::<VideoState>().0.snapshot().generation;
-        assert!(invoke(&main,"video_inspect",json!({"expectedGeneration":stopped-1})).is_err(),"stale webview launch survived stop");
+        assert_eq!(invoke(&main,"video_inspect",json!({"expectedGeneration":stopped-1})).err(),Some(json!("视频状态已变化，请重新检查")),"stale webview launch must reach generation admission");
         assert_eq!(app.state::<VideoState>().0.snapshot().generation,stopped);
     }
 }

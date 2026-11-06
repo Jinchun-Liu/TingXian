@@ -90,7 +90,7 @@ mod tests {
         let main=WebviewWindowBuilder::new(&app,"main",Default::default()).build().unwrap();
         let child=WebviewWindowBuilder::new(&app,DISPLAY,Default::default()).build().unwrap();
         let call=|window:&WebviewWindow<tauri::test::MockRuntime>,cmd:&str,body:Value|tauri::test::get_ipc_response(window,tauri::webview::InvokeRequest {
-            cmd:cmd.into(),callback:tauri::ipc::CallbackFn(0),error:tauri::ipc::CallbackFn(1),url:"tauri://localhost".parse().unwrap(),body:tauri::ipc::InvokeBody::Json(body),headers:Default::default(),invoke_key:tauri::test::INVOKE_KEY.into(),
+            cmd:cmd.into(),callback:tauri::ipc::CallbackFn(0),error:tauri::ipc::CallbackFn(1),url:if cfg!(any(windows,target_os="android")){"http://tauri.localhost"}else{"tauri://localhost"}.parse().unwrap(),body:tauri::ipc::InvokeBody::Json(body),headers:Default::default(),invoke_key:tauri::test::INVOKE_KEY.into(),
         });
         assert!(call(&child,"interview_presentation_publish",json!({"snapshot":snapshot})).is_err());
         call(&main,"interview_presentation_publish",json!({"snapshot":snapshot})).unwrap();
