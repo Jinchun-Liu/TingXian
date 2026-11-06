@@ -20,6 +20,7 @@ os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 os.environ["TORCH_FORCE_WEIGHTS_ONLY_LOAD"] = "1"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from avatar.liveportrait_renderer import HeadMotion, LivePortraitRenderer, UPSTREAM_COMMIT
+from avatar.idle_motion import IdleMotion
 
 
 class SilentVideoWriter:
@@ -70,6 +71,8 @@ def main():
     parser.add_argument("--seconds", type=int, default=10, choices=range(1, 11))
     parser.add_argument("--cudnn-benchmark", action="store_true",
                         help="test cuDNN kernel selection for this fixed portrait size")
+    parser.add_argument("--sequence", choices=("controls", "idle"), default="controls")
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
     # Fail rather than overwrite a previous result or user file.
     args.output.mkdir(parents=True, exist_ok=False)
@@ -83,6 +86,7 @@ def main():
               "audio": False, "virtual_device": False, "meeting": False,
               "target_fps": 25, "native_size": [512, 512], "status": "started",
               "cudnn_benchmark": args.cudnn_benchmark,
+              "motion_source": "synthetic_" + args.sequence, "motion_seed": args.seed,
               "timing_boundary": "render, CPU transfer, encode and flush; PNG writes excluded"}
     writer = None
     rows = []
@@ -111,12 +115,14 @@ def main():
         torch.cuda.synchronize()
         torch.cuda.reset_peak_memory_stats()
         writer = SilentVideoWriter(args.output / "silent-controls.mp4")
+        motion_at = IdleMotion(args.seed).sample if args.sequence == "idle" else controls
+        peak_blink = -1.0
         wall_start = time.perf_counter()
         for index in range(args.seconds * 25):
             if time.perf_counter() - wall_start > 120:
                 raise TimeoutError("120 second render ceiling exceeded")
             t0 = time.perf_counter()
-            motion = controls(index / 25)
+            motion = motion_at(index / 25)
             frame = renderer.render(motion)
             torch.cuda.synchronize()
             render_ms = (time.perf_counter() - t0) * 1000
@@ -126,7 +132,12 @@ def main():
             full_ms = (time.perf_counter() - t0) * 1000
             rows.append({"frame": index, "pts_ms": index * 40,
                          "render_ms": render_ms, "render_and_encode_submit_ms": full_ms,
-                         "blink": motion.blink, "yaw_deg": motion.yaw_deg})
+                         "blink": motion.blink, "yaw_deg": motion.yaw_deg,
+                         "pitch_deg": motion.pitch_deg, "roll_deg": motion.roll_deg,
+                         "gaze_x": motion.gaze_x, "gaze_y": motion.gaze_y})
+            if motion.blink > peak_blink:
+                peak_blink = motion.blink
+                snapshots["peak-blink"] = frame.copy()
             if index in (0, 40, 80, 110, 160, 195, 249):
                 snapshots[index] = frame.copy()
         writer.close()
@@ -142,7 +153,8 @@ def main():
                        "visual_review": "pending", "real_time_output_acceptance": "not_tested"})
         # Disk-heavy evidence capture must not distort renderer/encoder throughput.
         for index, frame in snapshots.items():
-            Image.fromarray(frame).save(args.output / f"frame-{index:04d}.png")
+            name = f"frame-{index:04d}.png" if isinstance(index, int) else f"{index}.png"
+            Image.fromarray(frame).save(args.output / name)
     except Exception as exc:
         report.update({"status": "failed", "error_type": type(exc).__name__, "error": str(exc)})
         raise

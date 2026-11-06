@@ -4,7 +4,9 @@
 
 `original_voice.py` 把已经重采样的本人原声 PCM16 mono 分成腾讯云 / LiveAvatar LITE 文档规定的请求，并生成结束与打断事件。它不采集、不重采样、不发送、不渲染、不输出音频。`VoicePacket` 的采样位置是输入媒体时间，不能当作“已播放”或“对方已听见”。
 
-`liveportrait_renderer.py` 是已实际出画的独立 CUDA 适配器，接受准备好的正面方形肖像裁切及头姿/眨眼参数，返回 512×512 RGB 帧。当前不支持眼神方向、身体跟踪、音频口型、摄像头采集或虚拟输出，能力表如实标 false；与原声模块尚未连接。它固定校验第三方源码 commit，使用单次 CPU 关键点注册和 GPU 渲染，不静默回落到 CPU 渲染。
+`liveportrait_renderer.py` 是已实际出画的独立 CUDA 适配器，接受准备好的正面方形肖像裁切及头姿/眨眼/相对视线参数，返回 512×512 RGB 帧。相对视线控制已用合成照片出画验证，不是用户眼动跟踪或角度校准。身体跟踪、音频口型、摄像头采集和虚拟输出仍为 false；与原声模块尚未连接。它固定校验第三方源码 commit，使用单次 CPU 关键点注册和 GPU 渲染，不静默回落到 CPU 渲染。
+
+`IdleMotion(seed).sample(elapsed_seconds)` 生成无摄像头的合成待机动作：有停留时间的微视线调整、平滑头姿和非固定间隔眨眼。相同 seed/媒体时间不因渲染帧率或跳帧改变；迟到、非有限时间戳拒绝且不推进状态。会话最长 24 小时，重开会话创建新实例。它不是注意力、情绪或同意的测量，也还没有说话/聆听状态融合。`gaze_x/gaze_y` 是 [-1,1] 的相对调整量；不写成眼球角度。所有动作先本地预览，当前自然度仅抽帧检查。
 
 ```python
 from avatar.original_voice import OriginalVoicePackets
@@ -26,6 +28,7 @@ LiveAvatar 默认 1000ms 分片来自上游推荐，不是低延迟目标的通�
 
 ```powershell
 python scripts/test-avatar-original-voice.py
+python scripts/test-avatar-motion.py
 ```
 
 协议来源（2026-11-06）：[腾讯音频驱动](https://cloud.tencent.com/document/product/1240/100398)、[LiveAvatar LITE 事件](https://docs.liveavatar.com/docs/lite-mode/events)。市场与选型见 [研究报告](../docs/avatar-research-2026-11-06.md)。
@@ -40,6 +43,8 @@ python scripts/avatar-generate-fixture.py --model D:\TingXian-avatar-runtime\mod
 python scripts/avatar-render-probe.py --source D:\TingXian-third-party\LivePortrait --weights D:\TingXian-avatar-runtime\models\liveportrait --portrait D:\TingXian-avatar-evidence\portrait.png --output D:\TingXian-avatar-evidence\render-01
 python scripts/avatar-inspect-video.py --run D:\TingXian-avatar-evidence\render-01
 ```
+
+在渲染命令增加 `--sequence idle --seed 42` 可生成 10 秒合成待机序列；使用新的输出目录。默认 `controls` 保留原头姿/眨眼测试序列。两种序列的吞吐不能当同素材加速对照。
 
 - 准备脚本只下载公开、固定 revision 的白名单文件，使用 LFS SHA-256 或 Git blob 摘要核验；不安装依赖、不获取凭证。
 - 生成合成肖像使用本地 SD-Turbo，推理设置离线，不能把这项工程测试工具描述成已完成个人形象注册。

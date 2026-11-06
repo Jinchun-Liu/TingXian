@@ -11,6 +11,7 @@ from pathlib import Path
 import subprocess
 import sys
 import types
+from .gaze import gaze_offsets
 
 UPSTREAM_COMMIT = "9b294b3d0536135442ea73cb01e6cb3ca7029dd3"
 
@@ -21,13 +22,18 @@ class HeadMotion:
     yaw_deg: float = 0.0
     roll_deg: float = 0.0
     blink: float = 0.0  # 0 = source eye opening; 1 = closed, both eyes
+    gaze_x: float = 0.0  # relative artistic adjustment, NOT eye angle in degrees
+    gaze_y: float = 0.0
 
     def __post_init__(self):
-        values = (self.pitch_deg, self.yaw_deg, self.roll_deg, self.blink)
+        values = (self.pitch_deg, self.yaw_deg, self.roll_deg, self.blink,
+                  self.gaze_x, self.gaze_y)
         if not all(math.isfinite(v) for v in values):
             raise ValueError("motion controls must be finite")
         if max(abs(v) for v in values[:3]) > 15 or not 0 <= self.blink <= 1:
             raise ValueError("prototype head angles must be within 15 degrees; blink within [0,1]")
+        if abs(self.gaze_x) > 1 or abs(self.gaze_y) > 1:
+            raise ValueError("relative gaze controls must be within [-1,1]")
 
 
 def load_upstream(source_root: Path):
@@ -62,7 +68,9 @@ class LivePortraitRenderer:
     capabilities = {
         "head_pose": True,
         "blink": True,
-        "gaze": False,
+        "gaze": True,
+        "gaze_tracking": False,
+        "gaze_units": "relative_uncalibrated",
         "body_tracking": False,
         "audio_lip_sync": False,
         "camera_capture": False,
@@ -126,6 +134,11 @@ class LivePortraitRenderer:
         info["pitch"] = info["pitch"] + motion.pitch_deg
         info["yaw"] = info["yaw"] + motion.yaw_deg
         info["roll"] = info["roll"] + motion.roll_deg
+        if motion.gaze_x or motion.gaze_y:
+            # Never edit the cached source expression: otherwise idle motions drift.
+            info["exp"] = info["exp"].clone()
+            for point, axis, offset in gaze_offsets(motion.gaze_x, motion.gaze_y, motion.blink):
+                info["exp"][0, point, axis] += offset
         driving = self.wrapper.transform_keypoint(info)
         if motion.blink > 0:
             ratios = self.eye_ratios.clone()
