@@ -48,6 +48,8 @@ schema 2 是独立配置，增加 `distribution: "ar_sdk_0_8_7_ada"`，仅接受
 含原有 20 项。证据在源码外 `artifacts/2026-11-07/eye-legacy-manifest-001/`；全部夹具保留，
 没有用这些结果声明 NVIDIA 功能或许可通过。
 
+源码 `ffaaf760227def8d15879a5c60c51b906d8a1d60` 的[独立完整性 CI](https://github.com/Jinchun-Liu/TingXian/actions/runs/42252552995)在 Windows 2022 与 Ubuntu 均通过；只生成合成 PE/模型字节并验证本仓库校验器，不下载、执行或评测 NVIDIA SDK。
+
 ## 本地验证与下一阶段
 
 实际取得文件、许可全文、环境、安装观察、离线输入/输出、网络隔离和失败恢复记录在

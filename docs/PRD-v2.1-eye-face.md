@@ -88,6 +88,8 @@ R11 全程自动代理同时冻结。语音合成与脸部接口的存在，不�
 
 优先集成 NVIDIA Maxine AR SDK Eye Contact，采用独立可选运行时。NVIDIA Broadcast 可作为现成效果参照或用户自行选择的外部摄像头来源，不将 Broadcast 当作可直接重新分发的产品 SDK。Windows Studio Effects 作为具备兼容 NPU/驱动的设备后续适配，不作为所有 Windows 电脑的默认能力。
 
+2026-11-07 按用户补充要求，先验证官方公开 AR SDK 0.8.7 Ada 与匹配示例；新版 NGC Core 的访问资格不是此路线的前置条件。两条路线分别固定 ABI、组件与实际许可，详见[旧版获取与许可记录](eye-ar087-acquisition.md)。本机开发测试授权、商业使用和第三方二进制再分发分别判断；不因后两项尚未明确而把已允许的本地验证一并阻塞，也不因本地验证而推定生产交付获准。
+
 固定 SDK、模型、GPU 支持范围、驱动、校验摘要与许可版本。基础安装包继续支持无独显的转写和资料功能；不把眼部模型、CUDA Toolkit 或 Visual Studio 变成普通安装用户的强制依赖。运行时只在用户启用能力时加载，停止后释放相应资源。组件下载与测试默认使用 D 盘。
 
 缺少 GPU、驱动不兼容、模型损坏、许可或组件不可用时，禁用眼部校正并提供具体原因。不能静默改为云处理、降低其他基础功能可靠性，或假装使用了 CPU 等价实现。
@@ -187,7 +189,7 @@ R11 全程自动代理同时冻结。语音合成与脸部接口的存在，不�
 
 | 轮次 | 假设与决策价值 | 停止条件 | 影响的结论 |
 | --- | --- | --- | --- |
-| E1 合成输入与许可 | 锁定组件能在目标 Windows/GPU 上正确加载并处理授权测试视频；决定是否选用该 SDK | 不支持硬件、许可不允许所需分发、模型校验失败或稳定复现的加载错误 | 可部署性，不能称为实机摄像头通过 |
+| E1 合成/授权离线输入与许可 | 锁定组件能在目标 Windows/GPU 上正确加载并处理授权测试视频；决定是否继续原生集成 | 许可不允许当前开发测试、关键组件无法合法取得、模型校验失败或定位后确认无法解决的兼容性障碍；不反复重跑同一失败 | 本地可行性，不能称为实机摄像头或商业分发通过 |
 | E2 眼区质量 | 轻度偏视可自然修正，闭眼/遮挡/超范围可退回；决定默认范围 | 严重错位或眨眼破坏稳定复现后先修根因，不继续堆样例 | 适用角度与自然度边界 |
 | E3 输出与停止 | 虚拟设备可被会议软件识别，时间和停止语义正确 | 原帧泄露、停止无效、旧帧回填、队列超界 | 真实输出支持范围 |
 | E4 资源共存 | 与本地 small、问答和拆窗并行仍满足目标 | OOM、基础链路失稳或持续不达帧率 | 默认配置及并发支持范围 |
@@ -223,6 +225,8 @@ R11 全程自动代理同时冻结。语音合成与脸部接口的存在，不�
 ## 12 官方技术依据
 
 以下为 2026-11-06 查阅的候选依据；真正接入时再次固定版本与许可。供应商数据不作为听弦的实测成绩。
+
+旧版路线补充：[官方 0.8.7 资源页](https://www.nvidia.com/en-us/geforce/broadcasting/broadcast-sdk/resources/)、[固定官方源码](https://github.com/NVIDIA-Maxine/Maxine-AR-SDK/tree/f54db7ecaa0534b696d6194ac7252fc39e4d94a1)、[对应系统指南](https://docs.nvidia.com/deeplearning/maxine/ar-sdk-system-guide/index.html)。下列 latest 文档中的参数不能未经核对直接用于 0.8.7。
 
 - [Maxine Eye Contact 技术说明](https://developer.nvidia.com/blog/improve-human-connection-in-video-conferences-with-nvidia-maxine-eye-contact/)：局部眼区处理与融合、眨眼和遮挡处理。
 - [Eye Contact 范围与自然移视控制](https://docs.nvidia.com/maxine/ar/latest/API/Architecture/using-ar-features.html)：范围控制、平滑退出和随机轻微移视。
