@@ -8,7 +8,7 @@
 | --- | --- |
 | 原数字人分支 | feat/windows-avatar-20261106，c15d554c4674e6b1fbab541c05da5fff13bfdd2d；原引用不动 |
 | WIP 冻结源码 | 978592d922a313b88942fe658806a4e8e24fb88d |
-| 归档说明及远端 | archive/avatar-frozen-20261106，a2a1ba8d9931df3b43e8172db98cc6d891f0bb0d；普通 push 后 ls-remote 一致 |
+| 归档说明及远端 | archive/avatar-frozen-20261106，2a80d7bf280d75d67ab985fe6cd10f10b095f5e9；普通 push 后 ls-remote 一致 |
 | 新分支 | feat/windows-eye-local-20261106 |
 | 精确起点 | a152bbb8f23b5e03013c323d73582962aad38b77；新 worktree 建立时干净 |
 | 对应程序修复 | 2dd84b3563de185b0bd45b30824913a1b6544f83；到起点只有三份文档变化 |
@@ -23,7 +23,7 @@ fetch 发现 Mac 开发分支从 3d836f3 前进到 2a37627，包含恢复、云 
 
 ## 可恢复归档
 
-[公开冻结说明](https://github.com/Jinchun-Liu/TingXian/blob/a2a1ba8d9931df3b43e8172db98cc6d891f0bb0d/docs/avatar-freeze-2026-11-06.md)。
+[公开冻结说明](https://github.com/Jinchun-Liu/TingXian/blob/2a80d7bf280d75d67ab985fe6cd10f10b095f5e9/docs/avatar-freeze-2026-11-06.md)。
 
 本地证据位于源码外 `artifacts/2026-11-06/avatar-freeze-20261106-171715-retry-1/`：
 

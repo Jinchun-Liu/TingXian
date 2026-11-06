@@ -1,7 +1,7 @@
 <!-- Public copy: personal local paths replaced; original is retained in the private handoff. -->
 # 听弦 · 后续演进产品需求文档
 
-> **2026-11-06 修订：** 摄像头增强、数字人及开发优先级由 [PRD v2.1](PRD-v2.1-eye-face.md) 覆盖。R10 改为本地眼部校正 R10E 优先，脸部替换 R10F 仅保留禁用入口与接口，R11 全程代理冻结。R01—R09 与既有验收要求继续有效。旧路线见[冻结归档](https://github.com/Jinchun-Liu/TingXian/blob/a2a1ba8d9931df3b43e8172db98cc6d891f0bb0d/docs/avatar-freeze-2026-11-06.md)。Windows 源码起点为 a152bbb；安装问题未解除。界面以用户指定的已发布 Mac 0.6.5（f80ba86）为基准，保留平台提示和资料保护修复。
+> **2026-11-06 修订：** 摄像头增强、数字人及开发优先级由 [PRD v2.1](PRD-v2.1-eye-face.md) 覆盖。R10 改为本地眼部校正 R10E 优先，脸部替换 R10F 仅保留禁用入口与接口，R11 全程代理冻结。R01—R09 与既有验收要求继续有效。旧路线见[冻结归档](https://github.com/Jinchun-Liu/TingXian/blob/2a80d7bf280d75d67ab985fe6cd10f10b095f5e9/docs/avatar-freeze-2026-11-06.md)。Windows 源码起点为 a152bbb；安装问题未解除。界面以用户指定的已发布 Mac 0.6.5（f80ba86）为基准，保留平台提示和资料保护修复。
 
 **原始文档版本：v2.0｜日期：2026-11-05｜当前产品基线：0.6.5｜状态：后续需求草案，未启动实施**
 
@@ -386,7 +386,7 @@ Codex 与 Claude Code 的实际安装路径和命令在发布时以各自当前�
 
 ## 15. R11：全程自动代理冻结
 
-R11 不列为当前实施或发布依赖。历史状态机、TTS、串行播放、接管、防回声及 30 轮要求保存在 [归档 PRD 第 15 节](https://github.com/Jinchun-Liu/TingXian/blob/a2a1ba8d9931df3b43e8172db98cc6d891f0bb0d/docs/PRD-v2.0.md)。眼部开发或脸部接口占位不构成启动代理的授权。
+R11 不列为当前实施或发布依赖。历史状态机、TTS、串行播放、接管、防回声及 30 轮要求保存在 [归档 PRD 第 15 节](https://github.com/Jinchun-Liu/TingXian/blob/2a80d7bf280d75d67ab985fe6cd10f10b095f5e9/docs/PRD-v2.0.md)。眼部开发或脸部接口占位不构成启动代理的授权。
 
 真实本人发言、AI 草稿、未来合成输出始终分别记账。任何未来重启需要另行明确范围；不得恢复配置后自动发声、采集或请求模型。
 
