@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <?ifdef RollbackFixture?>
+    <?define ProductLabel="听弦视频组件（回滚测试夹具）"?>
+  <?else?>
+    <?define ProductLabel="听弦视频组件（实验版）"?>
+  <?endif?>
+  <!-- Independent from the ordinary-user TingXian app. Bump ProductVersion and
+       Product Id together for the next component release; keep UpgradeCode. -->
+  <Product Id="{2265B958-40D3-48B6-8670-6402EB4F03EB}"
+           UpgradeCode="{C714EC90-881E-4B28-9969-13F563009429}"
+           Name="$(var.ProductLabel)" Version="0.1.0" Language="2052"
+           Codepage="936" Manufacturer="TingXian">
+    <Package Id="*" InstallerVersion="500" Compressed="yes" Platform="x64"
+             InstallScope="perMachine" InstallPrivileges="elevated" SummaryCodepage="936"
+             Description="听弦可选视频媒体源；不包含眼部 SDK，不自动创建摄像头。" />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <MajorUpgrade Schedule="afterInstallInitialize"
+                  DowngradeErrorMessage="已安装更新版本的听弦视频组件。请保留该版本。" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/Jinchun-Liu/TingXian" />
+    <Property Id="ARPCOMMENTS" Value="实验组件；独立卸载不清理听弦会话和资料。" />
+    <Property Id="WINDOWS_BUILD">
+      <RegistrySearch Id="ReadWindowsBuild" Root="HKLM"
+                      Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion"
+                      Name="CurrentBuildNumber" Type="raw" Win64="yes" />
+    </Property>
+    <Property Id="EXISTING_SOURCE" Secure="yes">
+      <RegistrySearch Id="ReadExistingSource" Root="HKLM"
+                      Key="SOFTWARE\Classes\CLSID\{44D20DA7-55EC-4B4A-A767-99E97D6E5A90}\InprocServer32"
+                      Type="raw" Win64="yes" />
+    </Property>
+    <Condition Message="此组件需要 Windows 11 x64（build 22000 或更高）。">Installed OR (VersionNT64 AND WINDOWS_BUILD &gt;= 22000)</Condition>
+    <Condition Message="发现已有媒体源注册。安装已停止，请先核对来源；不会覆盖该注册。">Installed OR WIX_UPGRADE_DETECTED OR NOT EXISTING_SOURCE</Condition>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="tingxianFolder" Name="TingXian">
+          <Directory Id="videoFolder" Name="VideoSource">
+            <Component Id="SourceComponent" Guid="{CB25AD35-311B-4987-B427-489B13D5E00F}" Win64="yes">
+              <File Id="SourceDll" Source="$(var.PayloadDir)\TingXianVideoSource.dll" KeyPath="yes" />
+              <!-- Do not force-delete the whole key: unknown values must survive. -->
+              <RegistryValue Root="HKLM" Key="SOFTWARE\Classes\CLSID\{44D20DA7-55EC-4B4A-A767-99E97D6E5A90}"
+                             Type="string" Value="听弦视频媒体源" />
+              <RegistryValue Root="HKLM" Key="SOFTWARE\Classes\CLSID\{44D20DA7-55EC-4B4A-A767-99E97D6E5A90}\InprocServer32"
+                             Type="string" Value="[#SourceDll]" />
+              <RegistryValue Root="HKLM" Key="SOFTWARE\Classes\CLSID\{44D20DA7-55EC-4B4A-A767-99E97D6E5A90}\InprocServer32"
+                             Name="ThreadingModel" Type="string" Value="Both" />
+            </Component>
+            <Component Id="ProbeComponent" Guid="*" Win64="yes">
+              <File Id="ProbeExe" Source="$(var.PayloadDir)\tingxian-video-device-probe.exe" KeyPath="yes" />
+            </Component>
+            <Component Id="ManifestComponent" Guid="*" Win64="yes">
+              <File Id="ManifestFile" Source="$(var.PayloadDir)\component-manifest.json" KeyPath="yes" />
+            </Component>
+            <Component Id="LicenseComponent" Guid="*" Win64="yes">
+              <File Id="LicenseFile" Source="$(var.PayloadDir)\LICENSE-Microsoft.txt" KeyPath="yes" />
+            </Component>
+            <Component Id="NoticeComponent" Guid="*" Win64="yes">
+              <File Id="NoticeFile" Source="$(var.PayloadDir)\THIRD-PARTY.md" KeyPath="yes" />
+            </Component>
+            <Component Id="ProjectLicenseComponent" Guid="*" Win64="yes">
+              <File Id="ProjectLicenseFile" Source="$(var.PayloadDir)\LICENSE.md" KeyPath="yes" />
+            </Component>
+            <Component Id="ProjectNoticeComponent" Guid="*" Win64="yes">
+              <File Id="ProjectNoticeFile" Source="$(var.PayloadDir)\NOTICE.md" KeyPath="yes" />
+            </Component>
+          </Directory>
+        </Directory>
+      </Directory>
+    </Directory>
+    <Feature Id="VideoSource" Title="听弦视频媒体源" Level="1">
+      <ComponentRef Id="SourceComponent" />
+      <ComponentRef Id="ProbeComponent" />
+      <ComponentRef Id="ManifestComponent" />
+      <ComponentRef Id="LicenseComponent" />
+      <ComponentRef Id="NoticeComponent" />
+      <ComponentRef Id="ProjectLicenseComponent" />
+      <ComponentRef Id="ProjectNoticeComponent" />
+    </Feature>
+    <?ifdef RollbackFixture?>
+      <!-- Only the separately named CI fixture executes this built-in MSI error.
+           InstallExecute applies the script before we fail, exercising rollback. -->
+      <CustomAction Id="FailAfterAppliedScript" Error="TingXian synthetic rollback fixture" />
+      <InstallExecuteSequence>
+        <InstallExecute After="WriteRegistryValues" />
+        <Custom Action="FailAfterAppliedScript" After="InstallExecute">NOT Installed</Custom>
+      </InstallExecuteSequence>
+    <?endif?>
+  </Product>
+</Wix>

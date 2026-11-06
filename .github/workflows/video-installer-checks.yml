@@ -1,0 +1,46 @@
+name: Windows optional video component installer
+on:
+  push:
+    branches: [feat/windows-eye-local-20261106]
+    paths: ['video/windows/**', 'packaging/windows-video/**', '.github/workflows/video-installer-checks.yml']
+  pull_request:
+    paths: ['video/windows/**', 'packaging/windows-video/**', '.github/workflows/video-installer-checks.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  isolated-component-install:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Build native component
+        run: |
+          cmake -S video/windows -B "$env:RUNNER_TEMP/video-install-build" -A x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build "$env:RUNNER_TEMP/video-install-build" --config Release --parallel 2
+      - name: Native checks without creating devices
+        run: ctest --test-dir "$env:RUNNER_TEMP/video-install-build" -C Release --output-on-failure
+      - name: Build experimental MSI and separate rollback fixture
+        run: ./packaging/windows-video/build.ps1 -BinaryDirectory "$env:RUNNER_TEMP/video-install-build/Release" -OutputDirectory "$env:RUNNER_TEMP/video-msi" -BuildRollbackFixture
+      - name: Disposable-runner install, rollback, uninstall and reinstall
+        run: ./packaging/windows-video/test-install.ps1 -PackageDirectory "$env:RUNNER_TEMP/video-msi" -BinaryDirectory "$env:RUNNER_TEMP/video-install-build/Release" -EvidenceDirectory "$env:RUNNER_TEMP/video-install-evidence"
+      - name: Public source check
+        run: python -I -B scripts/check-public-source.py
+      - name: Preserve experimental installer and verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TingXian-video-component-experimental
+          path: |
+            ${{ runner.temp }}/video-msi/TingXian-VideoSource-0.1.0-experimental-x64.msi
+            ${{ runner.temp }}/video-msi/build-manifest.json
+            ${{ runner.temp }}/video-msi/payload/component-manifest.json
+            ${{ runner.temp }}/video-install-evidence/
+            ${{ runner.temp }}/video-install-build/Testing/Temporary/LastTest.log
+            ${{ runner.temp }}/video-install-build/Release/tingxian-video-registration-test.exe
+          if-no-files-found: error
+          retention-days: 14
