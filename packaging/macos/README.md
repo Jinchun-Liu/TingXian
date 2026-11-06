@@ -26,13 +26,18 @@ python3 scripts/package-tingxian-macos.py \
 
 ## PRD v2 Mac 预览配置
 
-`frontend/src-tauri/tauri.macos-preview.conf.json` 将 Mac 测试包标为0.7.0-beta.2，独立于 Windows 配置和原0.6.5默认配置。此版包含设备枚举/停止等待和 Core Audio 启动隔离修复；真实收音仍须单独验收。依赖按根说明安装后，在 frontend 运行：
+`frontend/src-tauri/tauri.macos-preview.conf.json` 将 Mac 测试包标为0.7.0-beta.3，独立于 Windows 配置和原0.6.5默认配置。此版另修复系统声音模式仍进行麦克风预检、唤醒阶段探测无关设备的问题；真实收音仍须单独验收。依赖按根说明安装后，在 frontend 运行：
 
 ```bash
+export CARGO_TARGET_DIR=/private/tmp/tingxian-build-target
+export CLANG_MODULE_CACHE_PATH=/private/tmp/tingxian-clang-module-cache
+export CARGO_INCREMENTAL=0
+export CARGO_PROFILE_DEV_DEBUG=0
+export CARGO_PROFILE_TEST_DEBUG=0
 ./node_modules/.bin/tauri build --debug --bundles app --config src-tauri/tauri.macos-preview.conf.json
 ```
 
-这条命令沿用既有本地 debug 包基线，嵌入静态前端资源，不依赖开发服务器；不是优化 release 性能验收。CMake 与 Rust 工具需在 PATH 中。配置使用 `npm run build` 构建已有依赖，不自动重新安装共享 node_modules。之后用上述打包脚本，传入实际生成的 debug/bundle/macos/听弦.app。安装前保留当前应用和用户输入；安装自检、恢复草稿、真实音频和60分钟会议分别验收。
+这条命令使用关闭Rust调试符号和增量缓存的 debug 包，嵌入静态前端资源，不依赖开发服务器；不是优化 release 性能验收。测试与打包应保持相同环境，避免重复生成多套缓存。系统临时目录缓存可重建，更新前后按AGENTS核验旧包和中间文件；源资料与回退文件保留。CMake 与 Rust 工具需在 PATH 中。配置使用 `npm run build` 构建已有依赖，不自动重新安装共享 node_modules。之后用上述打包脚本，传入实际生成的 debug/bundle/macos/听弦.app。安装前保留当前应用和用户输入；安装自检、恢复草稿、真实音频和60分钟会议分别验收。
 
 签名暂存目录位于系统临时目录并保留供核对；最终 pkg 写到指定输出目录。脚本仅清理生成副本中妨碍签名的 FinderInfo/ResourceFork，不修改源应用，也不清除其他扩展属性。若要节约解包空间，可用 `pkgutil --expand` 保留压缩 Payload，并流式对账普通文件、符号链接和 AppleDouble 元数据；这不代替安装后的实际运行验收。
 
