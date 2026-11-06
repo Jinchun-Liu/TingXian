@@ -1,5 +1,7 @@
 # 听弦开发约定
 
+> 本工作树已冻结归档（2026-11-06）。先读 `docs/avatar-freeze-2026-11-06.md`；此处不再继续数字人、照片注册、口型或 TTS 开发。后续工作进入同级 `TingXian-eye-local/` 的 `feat/windows-eye-local-20261106` 分支，并读取 PRD v2.1。原运行时、素材、缓存与日志保留，不能清理来腾空间。
+
 - 先读 `docs/PRD-v2-progress.md` 和 `docs/PRD-v2.0.md`，使用当前代码/运行证据核对交接状态。
 - Preserve unrelated worktree changes. Never force-push shared history.
 - Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining.

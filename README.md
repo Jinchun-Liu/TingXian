@@ -1,5 +1,7 @@
 # 听弦 · 听懂弦外之音
 
+> 此分支为旧数字人路线的冻结归档。源码与实验保留，后续开发使用 [Windows 本地眼部分支](https://github.com/Jinchun-Liu/TingXian/tree/feat/windows-eye-local-20261106)。恢复范围与限制见 [冻结说明](docs/avatar-freeze-2026-11-06.md)。
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.md)
 [![Source checks](https://github.com/Jinchun-Liu/TingXian/actions/workflows/source-checks.yml/badge.svg)](https://github.com/Jinchun-Liu/TingXian/actions/workflows/source-checks.yml)
 
