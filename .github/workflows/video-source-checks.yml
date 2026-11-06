@@ -33,6 +33,7 @@ jobs:
           path: |
             ${{ runner.temp }}/video-source-build/Release/TingXianVideoSource.dll
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-source-test.exe
+            ${{ runner.temp }}/video-source-build/Release/tingxian-video-ipc-test.exe
             ${{ runner.temp }}/video-source-build/Testing/Temporary/LastTest.log
             video/windows/LICENSE-Microsoft.txt
             video/windows/THIRD-PARTY.md

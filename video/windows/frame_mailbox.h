@@ -52,6 +52,7 @@ public:
         return S_OK;
     }
     void stop() { std::lock_guard guard(lock_); invalidate(); }
+    void reject() { std::lock_guard guard(lock_); ++metrics_.rejected; }
     FrameMetrics metrics() { std::lock_guard guard(lock_); return metrics_; }
 
     // The caller owns the allocator's locked NV12 buffer. Padding is cleared too.

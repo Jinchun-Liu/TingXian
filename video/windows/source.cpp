@@ -2,6 +2,7 @@
 // See THIRD-PARTY.md and LICENSE-Microsoft.txt. TingXian supplies only NV12 frames;
 // there is no physical-camera wrapper, network client, GPU SDK or registration code.
 #include "frame_mailbox.h"
+#include "frame_transport.h"
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mferror.h>
@@ -197,7 +198,7 @@ public:
 
 class Source final : public RuntimeClass<RuntimeClassFlags<ClassicCom>,
     ChainInterfaces<IMFMediaSourceEx, IMFMediaSource, IMFMediaEventGenerator>,
-    IMFGetService, IKsControl, IMFSampleAllocatorControl, IFrameReceiver>, public Tracked {
+    IMFGetService, IKsControl, IMFSampleAllocatorControl, IFrameReceiver, IFrameTransport>, public Tracked {
     std::mutex lock_;
     bool shutdown_ = false;
     bool started_ = false;
@@ -207,6 +208,7 @@ class Source final : public RuntimeClass<RuntimeClassFlags<ClassicCom>,
     ComPtr<IMFPresentationDescriptor> descriptor_;
     ComPtr<Stream> stream_;
     std::shared_ptr<FrameMailbox> mailbox_ = std::make_shared<FrameMailbox>();
+    PipeReceiver transport_{mailbox_};
     HRESULT event_queue(IMFMediaEventQueue** queue) {
         std::lock_guard guard(lock_);
         return shutdown_ ? MF_E_SHUTDOWN : events_.CopyTo(queue);
@@ -216,6 +218,8 @@ public:
         TX_CHECK(MFCreateEventQueue(&events_));
         TX_CHECK(MFCreateAttributes(&attributes_, 8));
         if (activation) TX_CHECK(activation->CopyAllItems(attributes_.Get()));
+        // Do not expose the ephemeral channel capability through source attributes.
+        TX_CHECK(attributes_->DeleteItem(PipeEndpointAttribute));
         ComPtr<IMFSensorProfileCollection> collection;
         ComPtr<IMFSensorProfile> profile;
         TX_CHECK(MFCreateSensorProfileCollection(&collection));
@@ -231,7 +235,22 @@ public:
         TX_CHECK(stream_->GetStreamDescriptor(&stream_descriptor));
         IMFStreamDescriptor* descriptors[] = {stream_descriptor.Get()};
         TX_CHECK(MFCreatePresentationDescriptor(1, descriptors, &descriptor_));
-        return descriptor_->SelectStream(0);
+        TX_CHECK(descriptor_->SelectStream(0));
+        if (activation) {
+            UINT32 bytes = 0;
+            const HRESULT configured = activation->GetBlobSize(PipeEndpointAttribute, &bytes);
+            if (configured != MF_E_ATTRIBUTENOTFOUND) {
+                TX_CHECK(configured);
+                if (bytes != sizeof(VideoPipeEndpoint)) return E_INVALIDARG;
+                VideoPipeEndpoint endpoint{};
+                TX_CHECK(activation->GetBlob(PipeEndpointAttribute, reinterpret_cast<BYTE*>(&endpoint), sizeof(endpoint), &bytes));
+                // Connection failure leaves a usable neutral source and a queryable
+                // fault. It never opens a camera, reconnects, or selects another peer.
+                transport_.connect(endpoint);
+                SecureZeroMemory(&endpoint, sizeof(endpoint));
+            }
+        }
+        return S_OK;
     }
     TX_EVENTS
     STDMETHODIMP GetCharacteristics(DWORD* characteristics) override {
@@ -276,6 +295,7 @@ public:
         std::lock_guard guard(lock_);
         if (shutdown_) return MF_E_SHUTDOWN;
         if (!started_) return MF_E_INVALID_STATE_TRANSITION;
+        transport_.disconnect();
         TX_CHECK(stream_->stop());
         started_ = false;
         return events_->QueueEventParamVar(MESourceStopped, GUID_NULL, S_OK, nullptr);
@@ -285,6 +305,7 @@ public:
         std::lock_guard guard(lock_);
         if (shutdown_) return S_OK;
         shutdown_ = true; started_ = false;
+        transport_.disconnect();
         mailbox_->stop();
         if (stream_) stream_->shutdown();
         if (events_) events_->Shutdown();
@@ -337,6 +358,7 @@ public:
     STDMETHODIMP StopVideo() override {
         std::lock_guard guard(lock_);
         if (shutdown_) return MF_E_SHUTDOWN;
+        transport_.disconnect();
         mailbox_->stop(); return S_OK;
     }
     STDMETHODIMP GetFrameMetrics(FrameMetrics* metrics) override {
@@ -344,6 +366,22 @@ public:
         std::lock_guard guard(lock_);
         if (shutdown_) return MF_E_SHUTDOWN;
         *metrics = mailbox_->metrics(); return S_OK;
+    }
+    STDMETHODIMP ConnectPipe(const VideoPipeEndpoint* endpoint) override {
+        if (!endpoint) return E_POINTER;
+        std::lock_guard guard(lock_);
+        return shutdown_ ? MF_E_SHUTDOWN : transport_.connect(*endpoint);
+    }
+    STDMETHODIMP DisconnectPipe() override {
+        std::lock_guard guard(lock_);
+        if (shutdown_) return MF_E_SHUTDOWN;
+        transport_.disconnect(); return S_OK;
+    }
+    STDMETHODIMP GetTransportStatus(TransportStatus* status) override {
+        if (!status) return E_POINTER;
+        std::lock_guard guard(lock_);
+        if (shutdown_) return MF_E_SHUTDOWN;
+        *status = transport_.status(); return S_OK;
     }
 };
 

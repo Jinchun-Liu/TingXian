@@ -5,12 +5,13 @@ object, a Media Foundation live source and a single 1280×720 NV12 video stream 
 an advertised 30 fps. The GPU worker and application integration are not yet
 implemented. The advertised format is not a measured effective-frame-rate result.
 
-The component accepts already processed local frames through an **in-process**
-`IFrameReceiver` interface. This is the seam for a future authenticated IPC
-receiver inside the media-source process. It is not a registered cross-process COM
-interface, and the Tauri app cannot currently send frames to FrameServer through
-it. There is no physical-camera enumeration/opening, audio, network, GPU loading,
-automatic download or registry modification in this DLL.
+The component accepts already processed local frames through an in-process
+`IFrameReceiver` or the [authenticated local pipe transport](IPC.md). A producer
+helper can send frames from a separate Windows process. MF activation attributes
+can configure the transient channel without exposing its capability to source
+consumers. Tauri/eye-worker integration and actual FrameServer installation remain
+pending. There is no physical-camera enumeration/opening, audio, external network,
+GPU loading, automatic download or registry modification in this DLL.
 
 ## Frame and lifecycle behavior
 
@@ -65,7 +66,7 @@ installer or a stable product release. It contains no registration routine.
 
 ## Remaining delivery gates
 
-Authenticated and cancellable worker-to-FrameServer IPC; local eye worker;
+Actual LocalService/FrameServer IPC validation; local eye worker and main controller;
 installation/COM registration and session-scoped `MFCreateVirtualCamera` lifetime;
 main-window-only controls; output watchdog on actual producer disconnect; real
 conference enumeration and pixels; ordinary-user install with normal protection;
