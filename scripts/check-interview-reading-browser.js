@@ -17,11 +17,11 @@
   feed.dispatchEvent(new WheelEvent('wheel',{deltaY:-180,bubbles:true}));
   feed.scrollTop-=180; await settle(); held=feed.scrollTop;
   await click('续写答复'); check(feed.scrollTop === held,'Stream interrupted manual reading');
-  await click('返回最新答复'); check(aligned(),'Return missed the latest answer');
+  await click('回到最新'); check(aligned(),'Return missed the latest answer');
   await click('续写答复'); check(aligned(),'Return did not restore following');
   held=feed.scrollTop; await click('纠正问句'); check(feed.scrollTop === held,'Corrected question moved the viewport');
-  await click('单题或列表'); await click('新增转写');
-  check(feed.querySelector('article')?.querySelector('[data-latest-answer]'),'Unanswered turn replaced focus card');
+  await click('旧版单题设置'); await click('新增转写');
+  check(feed.querySelectorAll('article').length===20,'Legacy focus preference collapsed the timeline');
   await click('清空记录'); check(!feed.isConnected || !feed.querySelector('[data-latest-answer]'),'Clear retained previous answer');
   return 'PASS';
 })()

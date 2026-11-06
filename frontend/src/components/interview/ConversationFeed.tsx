@@ -6,16 +6,14 @@ type Props = {
   children: ReactNode;
   latest?: {id: string; text: string};
   className?: string;
-  readingHistory?: boolean;
-  onRead?: () => void;
-  onReturn?: () => void;
+  answerRevision?: string;
 };
 
-export function ConversationFeed({children, latest, className = 'answer-scroll', readingHistory, onRead, onReturn}: Props) {
+export function ConversationFeed({children, latest, className = 'answer-scroll', answerRevision}: Props) {
   const feed = useRef<HTMLDivElement>(null);
   const [paused, setPaused] = useState(false);
   const [jump, setJump] = useState(0);
-  const following = !paused && !readingHistory;
+  const following = !paused;
 
   useLayoutEffect(() => {
     const region = feed.current;
@@ -28,20 +26,18 @@ export function ConversationFeed({children, latest, className = 'answer-scroll',
     if (answer.bottom > bottom || answer.bottom < top || (answer.top < top && answer.height <= region.clientHeight)) {
       region.scrollTop += answer.bottom - bottom;
     }
-  }, [following, latest?.id, latest?.text, jump]);
+  }, [following, latest?.id, latest?.text, answerRevision, jump]);
 
   const pause = () => {
     if (!following) return;
     setPaused(true);
-    onRead?.();
   };
   const resume = () => {
-    onReturn?.();
     setPaused(false);
     setJump(n => n + 1);
   };
 
-  return <>
+  return <div className="answer-feed">
     <div ref={feed} role="region" aria-label="面试对话记录" tabIndex={0} aria-live="off"
       className={className} style={{overflowAnchor:'none'}}
       onWheel={event => { if (event.deltaY !== 0) pause(); }}
@@ -49,8 +45,8 @@ export function ConversationFeed({children, latest, className = 'answer-scroll',
       onKeyDown={event => { if (['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key)) pause(); }}>
       {children}
     </div>
-    {latest && <div className="answer-scroll-tools flex shrink-0 justify-end px-4 py-1">
-      <button type="button" className="text-sm" onClick={resume}>返回最新答复</button>
+    {latest && paused && <div className="answer-scroll-tools">
+      <button type="button" onClick={resume}><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 4v16m-6-6 6 6 6-6"/></svg>回到最新</button>
     </div>}
-  </>;
+  </div>;
 }

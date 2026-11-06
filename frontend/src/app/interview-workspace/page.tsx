@@ -143,7 +143,6 @@ export default function InterviewPage() {
   const [screenDisplays,setScreenDisplays]=useState<ScreenDisplay[]>([]);
   const [screenId,setScreenId]=useState<number|null>(null);
   const [preferences,setPreferences]=useState<PresentationPreferences>(presentationDefaults);
-  const [selectedQuestion,setSelectedQuestion]=useState<string|null>(null);
   const [split,setSplit]=useState(false),[windowChanging,setWindowChanging]=useState(false);
   const presentationEpoch=useRef(''),presentationVersion=useRef(0);
   const presentationRef=useRef<unknown>(null);
@@ -304,17 +303,16 @@ export default function InterviewPage() {
   useEffect(()=>{
     if(!presentationEpoch.current)presentationEpoch.current=crypto.randomUUID();
     presentationRef.current={epoch:presentationEpoch.current,version:++presentationVersion.current,
-      call_notice:meeting.notice,history:history.map(({id,role,question,suggestion,status,time,passive})=>({id,role,question,suggestion,status,time,passive})),preferences,selected_id:selectedQuestion};
+      call_notice:meeting.notice,history:history.map(({id,role,question,suggestion,status,time,passive})=>({id,role,question,suggestion,status,time,passive})),preferences,selected_id:null};
     presentationDirty.current=true;
-  },[history,preferences,selectedQuestion,meeting.notice]);
+  },[history,preferences,meeting.notice]);
   useEffect(()=>{
     if(!isTauri())return;
     let disposed=false;const stops:UnlistenFn[]=[];
     const add=async<T,>(name:string,receive:(value:T)=>void)=>{const off=await listen<T>(name,e=>receive(e.payload));if(disposed)off();else stops.push(off);};
     void add<boolean>('interview-window-mode',value=>{setSplit(value);presentationDirty.current=true;}).catch(error);
     void add<{type:string;id:string|null}>('interview-presentation-action',action=>{
-      if(action.type==='select')setSelectedQuestion(action.id);
-      else if(action.type==='edit'&&action.id)editTurn(action.id);
+      if(action.type==='edit'&&action.id)editTurn(action.id);
     }).catch(error);
     void invoke<boolean>('interview_window_mode_get').then(value=>{if(!disposed)setSplit(value);}).catch(error);
     return()=>{disposed=true;stops.forEach(off=>off());};
@@ -516,7 +514,7 @@ export default function InterviewPage() {
       microphoneGate.current.close();audioHealth.current.close();syncHealth();
       captureSession.current=Math.max(0,...saved.spoken_dialogue.map(t=>t.capture_session || 0),...saved.history.map(t=>t.capture_session || 0))+1;
       historyRef.current=saved.history;setHistory(saved.history);setTranscripts(saved.transcripts);spoken.current=saved.spoken_dialogue;
-      presentationEpoch.current=crypto.randomUUID();setSelectedQuestion(null);setFeedGeneration(v=>v+1);
+      presentationEpoch.current=crypto.randomUUID();setFeedGeneration(v=>v+1);
       current.current=saved.current;setCalls(saved.calls);setUsage(saved.usage);setLimit(Math.max(DEFAULT_REQUEST_LIMIT,saved.calls));
       usageLedger.current=new InterviewUsage(saved.usage_ledger??undefined,saved.calls);setUsageVersion(v=>v+1);
       setQuestion(draft?.composer.question||'');setAnswer('');setSources([]);setConflicts([]);setConfirmedAnswer(draft?.composer.confirmed_answer||'');setEditingSelfId(null);setTiming('');
@@ -573,7 +571,7 @@ export default function InterviewPage() {
       selfEditBase.current=null;
       usageLedger.current=new InterviewUsage();setUsageVersion(v=>v+1);
       setTiming(''); setUsage('未知'); setGenerating(false); setFrozen(false); setLevel(0); setMicLevel(0);
-      presentationEpoch.current=crypto.randomUUID();setSelectedQuestion(null);setFeedGeneration(v=>v+1);
+      presentationEpoch.current=crypto.randomUUID();setFeedGeneration(v=>v+1);
       await draftRecovery.writer.resetAfterClear();
       setPhase('历史已清空 · 可重新开始');
       setNotice(`历史已移入废纸篓：${report.recording_folders} 个录音记录目录、${report.database_meetings} 条已保存会议、${report.saved_sessions || 0} 份会话快照，以及本次对话和恢复缓存。个人资料库已保留。点击“开始持续聆听与回答”进行新测试。`);
@@ -713,7 +711,6 @@ export default function InterviewPage() {
       <CallNotice text={split ? meeting.notice : null}/><div className="desk-tools">
         <details className="desk-fold"><summary>屏幕与显示</summary><div>
         <label className="block">对话字号<ChoiceMenu aria-label="对话字号" className="ml-2" value={preferences.fontSize} onValueChange={nextValue =>changePreferences({...preferences,fontSize:nextValue as PresentationPreferences['fontSize']})}><ChoiceOption value="small">小</ChoiceOption><ChoiceOption value="medium">中</ChoiceOption><ChoiceOption value="large">大</ChoiceOption></ChoiceMenu></label>
-        <label className="block"><input type="checkbox" checked={preferences.focus} onChange={e=>changePreferences({...preferences,focus:e.target.checked})} /> 每次只看一问一答</label>
         <label className="block"><input type="checkbox" checked={preferences.showSelf} onChange={e=>changePreferences({...preferences,showSelf:e.target.checked})} /> 展示我的发言</label>
         <label className="block">截屏范围<ChoiceMenu aria-label="截屏范围" className="w-full" value={screenId??''} onValueChange={nextValue =>setScreenId(nextValue?Number(nextValue):null)}><ChoiceOption value="">当前主屏幕（完整屏幕）</ChoiceOption>{screenDisplays.map((d,i)=><ChoiceOption key={d.id} value={d.id}>屏幕 {i+1}{d.primary?' · 主屏':''} · {d.width}×{d.height}</ChoiceOption>)}</ChoiceMenu></label>
         <Button size="sm" variant="outline" disabled={busy} onClick={async()=>{try{const screens=await invoke<ScreenDisplay[]>('interview_screenshot_displays');setScreenDisplays(screens);if(screenId&&!screens.some(d=>d.id===screenId))setScreenId(null);}catch(e){error(e);}}}>刷新屏幕列表</Button>
@@ -818,7 +815,7 @@ export default function InterviewPage() {
       <div className="tx-session-actions">{history.length>0 && <div><Button variant="outline" size="sm" disabled={busy || !history.length} onClick={()=>run(saveSessionSnapshot)}>保存当前会话到本机</Button><Button variant="outline" size="sm" onClick={exportSession}>导出本次记录</Button><Button variant="outline" size="sm" disabled={busy || !history.length} onClick={end}>结束会话并保留历史</Button></div>}<details><summary>清理历史</summary><p>已保存会话将一并移入废纸篓。</p><Button variant="outline" size="sm" disabled={busy} onClick={()=>sendCommand('clear')}>清空历史，重新开始</Button></details></div>
       </div></div></section>}
     {!split && <div className="desk-reading" hidden={panelOpen}>
-      <AnswerConversation key={feedGeneration} history={history} preferences={preferences} selectedId={selectedQuestion} onSelect={setSelectedQuestion} onEdit={editTurn} />
+      <AnswerConversation key={feedGeneration} history={history} preferences={preferences} onEdit={editTurn} />
       <div className="desk-compose-dock">{composer}
         {phase.startsWith('仅本地') && <div className="text-xs space-y-2"><ConflictNotice conflicts={conflicts} onReview={()=>{setSettingsTab('事实与术语');setSettings(true);}} />{sources.map(source => <details key={source.source_id}><summary>{source.path} · {source.location} · {sourceStatusLabel(source.metadata)}</summary><p className="whitespace-pre-wrap">{source.text}</p></details>)}</div>}
       </div>

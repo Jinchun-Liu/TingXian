@@ -5,11 +5,11 @@ const mod={exports:{}};
 const code=ts.transpileModule(fs.readFileSync(path.resolve(__dirname,'../frontend/src/components/interview/ConversationFeed.tsx'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,jsx:ts.JsxEmit.ReactJSX}}).outputText;
 new Function('require','module','exports',code)(req,mod,mod.exports);
 (async()=>{
-  let tree,end=1200,latest,search=false;
+  let tree,end=1200,latest,answerRevision='';
   const region={scrollTop:0,clientTop:0,clientHeight:400,getBoundingClientRect:()=>({top:0}),querySelector:()=>({
     getBoundingClientRect:()=>({bottom:end-region.scrollTop,top:end-region.scrollTop-60,height:60})
   })};
-  const render=()=>React.createElement(mod.exports.ConversationFeed,{latest,readingHistory:search,onReturn:()=>{search=false;}},'history');
+  const render=()=>React.createElement(mod.exports.ConversationFeed,{latest,answerRevision},'history');
   const update=()=>act(async()=>tree.update(render()));
   await act(async()=>{tree=create(render(),{createNodeMock:el=>el.props.role==='region'?region:null});});
   assert.equal(region.scrollTop,0);assert.equal(tree.root.findAllByType('button').length,0);
@@ -23,7 +23,12 @@ new Function('require','module','exports',code)(req,mod,mod.exports);
     await act(async()=>tree.root.findByType('button').props.onClick());assert.equal(region.scrollTop,end-400);
     end+=80;latest.text+=' more';await update();assert.equal(region.scrollTop,end-400);
   }
-  search=true;await update();region.scrollTop=200;end+=90;latest.text+=' more';await update();assert.equal(region.scrollTop,200);
-  await act(async()=>tree.root.findByType('button').props.onClick());await update();assert.equal(region.scrollTop,end-400);
-  await act(async()=>tree.unmount());console.log('PASS: follows answer text only, wheel in both directions locks reading, return resumes, search is preserved');
+  assert.equal(tree.root.findAllByType('button').length,0,'following should not show a redundant return button');
+  end+=120;answerRevision='older parallel answer grew';await update();assert.equal(region.scrollTop,end-400,'an earlier answer growing displaced the latest answer');
+  for (const [handler,event] of [['onKeyDown',{key:'PageUp'}],['onTouchMove',{}],['onPointerDownCapture',{}]]) {
+    await act(async()=>tree.root.findByProps({role:'region'}).props[handler](event));
+    region.scrollTop=200;end+=90;latest.text+=' more';await update();assert.equal(region.scrollTop,200,handler+' did not pause following');
+    await act(async()=>tree.root.findByType('button').props.onClick());assert.equal(region.scrollTop,end-400);
+  }
+  await act(async()=>tree.unmount());console.log('PASS: follows answer text only, wheel in both directions locks reading, return resumes, touch/keyboard/selection pause, parallel answer growth keeps latest visible');
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -64,11 +64,11 @@
 .desk-stage-overlay { position: fixed; inset: 0; z-index: 40; background: var(--paper); }
 .answer-nav, .desk-panel-heading { min-height: 61px; padding: 10px clamp(14px,2.4vw,40px); display: flex; flex: none; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; border-bottom: 1px solid var(--line); }
 .answer-nav h2, .desk-panel-heading h2 { font-size: 17px; font-weight: 600; letter-spacing: -.024em; white-space: nowrap; }
-.answer-history-controls { display: flex; align-items: center; gap: 8px; max-width: 100%; min-width: 0; }
-.answer-history-controls :is(input,select) { min-width: 0; padding: 4px 7px; font-size: 12px; border: 1px solid var(--line); border-radius: 5px; }
-.answer-history-controls input { width: clamp(66px,9vw,135px); }
-.answer-history-controls .tx-select-trigger { width: clamp(86px,16vw,240px); }
-.answer-history-controls button, .answer-scroll-tools button { color: var(--accent); flex-shrink: 0; padding: 4px; font-size: 12px; }
+.answer-feed { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+.answer-scroll-tools { position: absolute; inset-inline: 0; bottom: 16px; display: flex; justify-content: center; pointer-events: none; }
+.answer-scroll-tools button { display: inline-flex; align-items: center; gap: 7px; padding: 9px 14px; border: 1px solid var(--line); border-radius: 24px; background: var(--paper); color: var(--ink); font-size: 13px; box-shadow: 0 3px 12px #17181A14; pointer-events: auto; }
+.answer-scroll-tools button svg { color: var(--accent); }
+.answer-scroll-tools button:hover { border-color: var(--accent); }
 .answer-scroll { position: relative; flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: clamp(18px,3.5vw,62px) clamp(15px,4.5vw,84px); }
 .answer-scroll.fixed-feed { min-height: 20rem; height: 58vh; }
 .answer-sheet { max-width: 76ch; margin-inline: auto; padding-bottom: 1.1em; line-height: 1.72; overflow-wrap: anywhere; }
@@ -82,9 +82,6 @@
 .answer-empty { display: grid; align-content: center; justify-items: center; gap: 12px; min-height: 100%; }
 .answer-empty svg { color: #55585D; }
 .answer-status { font-size: 13px; color: #855c27; }
-.answer-scroll-tools { display: flex; justify-content: flex-end; align-items: center; gap: 10px; flex-shrink: 0; padding: 4px clamp(12px,2.4vw,40px); }
-.answer-scroll-tools span { font-size: 12px; color: var(--muted); margin-right: auto; }
-.answer-scroll-tools [aria-pressed=true] { background: var(--rail); border-radius: 4px; }
 .desk-compose-dock { flex-shrink: 0; max-height: 32vh; overflow: auto; border-top: 1px solid var(--line); padding: 12px clamp(14px,2.4vw,40px) 8px; }
 .desk-composer { display: grid; gap: 4px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--paper); }
 .desk-composer:focus-within { border-color: var(--accent); }
@@ -115,8 +112,6 @@
   .desk-panel-body .flex { flex-wrap: wrap; }
 }
 @media (max-width: 420px) {
-  .answer-history-controls { flex: 1 1 100%; }
-  .answer-history-controls .tx-select-trigger { flex: 1; }
   .desk-panel-body :is(input,select) { max-width: 100%; }
   .desk-tabs { gap: 10px; }
 }
@@ -236,4 +231,3 @@
 
 .desk-brand .desk-state {flex:1 1 0;justify-content:flex-end;min-width:0;}
 .desk-brand .desk-state [role=status] {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-@media(max-width:420px){.answer-history-controls input {width:84px;}}

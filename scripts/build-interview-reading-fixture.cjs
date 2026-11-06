@@ -8,7 +8,7 @@ const page = fs.readFileSync(path.join(build, 'interview-display.html'), 'utf8')
 
 function fixture() {
   const paragraph = '先按租户验证幂等键，再分别验证字段缺失、null 和零。';
-  let sequence = 0, version = 0, epoch = 'synthetic', focus = false;
+  let sequence = 0, version = 0, epoch = 'synthetic', focus = true;
   const callbacks = new Map();
   let listener;
   const row = (n, answered) => ({
@@ -39,7 +39,7 @@ function fixture() {
       ['生成答复', () => history[history.length-1]={...history.at(-1),status:'generating',suggestion:'新答复。'+(paragraph+'\n').repeat(32)}],
       ['续写答复', () => history[history.length-1]={...history.at(-1),suggestion:history.at(-1).suggestion+(paragraph+'\n').repeat(20)}],
       ['纠正问句', () => history[history.length-1]={...history.at(-1),status:'done',suggestion:history.at(-1).suggestion+'\n<<<QUESTION>>>\n'+paragraph.repeat(25)}],
-      ['单题或列表', () => { focus=!focus; }],
+      ['旧版单题设置', () => { focus=!focus; }],
       ['清空记录', () => { history=[];epoch+='-new'; }]
     ]) {
       const btn=document.createElement('button'); btn.textContent=label;

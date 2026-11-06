@@ -135,7 +135,7 @@ function text(node) { return typeof node === 'string' ? node : (node?.children||
     await act(async()=>{await node.findByType('input').props.onChange({target:{checked:value}});});
   };
   const emit = async payload => {await act(async()=>{listeners.get('transcript-update')({payload});});};
-  assert.equal(button('返回最新答复'),undefined,'empty conversation has no answer target');
+  assert.equal(button('回到最新'),undefined,'empty conversation has no answer target');
   assert.equal(calls.filter(c=>c.name==='interview_connection_test').length,0,'mount must not test the provider automatically');
   await click('测试 DeepSeek 连接');assert.ok(text(tree.toJSON()).includes('上次测试成功'));assert.equal(calls.filter(c=>c.name==='answer_start').length,0);
   // Connection checking disables both button and shortcut, including the pre-render window.
@@ -218,7 +218,7 @@ function text(node) { return typeof node === 'string' ? node : (node?.children||
   failClear=true;await click('清空历史，重新开始');assert.equal(native.recording,false);
   assert.ok(text(tree.toJSON()).includes('自己的答案保留'),'failed Trash operation erased history');
   failClear=false;await click('开始持续聆听与回答');await click('清空历史，重新开始');
-  assert.equal(button('返回最新答复'),undefined,'clearing history removed the old answer target');
+  assert.equal(button('回到最新'),undefined,'clearing history removed the old answer target');
   assert.equal(native.recording,false);assert.ok(!text(tree.toJSON()).includes('自己的答案保留'));
   await click('开始持续聆听与回答');assert.equal(native.recording,true);
   assert.equal(calls.filter(c=>c.name==='stop_recording').length,4);
@@ -355,7 +355,9 @@ function text(node) { return typeof node === 'string' ? node : (node?.children||
   await click('查看已保存会话');assert.equal(button('恢复这份会话').props.disabled,true,'unsaved display must not be silently replaced');
   await check('我已保存需要的内容',true);corruptLoad=true;await click('恢复这份会话');assert.ok(text(tree.toJSON()).includes('容量故障重开后的完整问题'),'bad restore replaced existing history');
   corruptLoad=false;await click('恢复这份会话');assert.ok(text(tree.toJSON()).includes('已恢复的历史建议'));
-  assert.ok(button('返回最新答复'),'restored answers should be navigable');
+  assert.equal(button('回到最新'),undefined,'restored answers start in follow mode');
+  await act(async()=>tree.root.findByProps({role:'region','aria-label':'面试对话记录'}).props.onWheel({deltaY:-100}));
+  assert.ok(button('回到最新'),'browsing restored answers must offer return to latest');
   assert.equal(calls.filter(c=>c.name==='answer_start').length,beforeSaveCalls);
   const savedCount=savedRows.length;const explicitlySaved=JSON.parse(JSON.stringify(savedRows[0]));
   await act(async()=>tree.unmount());

@@ -26,7 +26,7 @@ const snapshot=(epoch,version,question)=>({epoch,version,history:[{id:'q',role:'
   assert.equal(current().history[0].question,'新会话问题');
   await act(async()=>listener({payload:snapshot('new-owner',3,'当前完整问题')}));
   assert.equal(current().history[0].question,'当前完整问题');
-  await act(async()=>current().onSelect('q'));assert.equal(current().selectedId,'q');assert.equal(current().onEdit,undefined);
+  assert.equal(current().onSelect,undefined);assert.equal(current().selectedId,undefined);assert.equal(current().onEdit,undefined);
   assert.deepEqual(calls.map(c=>c.command),['interview_presentation_get']);
   assert.ok(calls.every(c=>['interview_presentation_get','interview_presentation_action'].includes(c.command)),'display invoked capture/model work');
   await act(async()=>tree.unmount());assert.equal(removed,1);
