@@ -140,6 +140,8 @@ async fn run_stream_with_protocol<F>(client:reqwest::Client,endpoint:&str,key:&s
 where F:FnMut(StreamEvent)+Send {
     config.validate()?;
     let (mut payload,image_budget_unknown)=request_payload(key,messages,config)?;
+    config.check_capabilities(endpoint,true,image_budget_unknown)?;
+    if config.usage_unsupported(){payload.as_object_mut().unwrap().remove("stream_options");}
     if *protocol!=crate::ProviderProtocol::Deepseek {payload.as_object_mut().unwrap().remove("thinking");}
     if *protocol==crate::ProviderProtocol::Qwen {payload["enable_thinking"]=json!(false);}
     let notify=std::sync::Mutex::new(notify);

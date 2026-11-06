@@ -14,6 +14,8 @@ pub mod credentials;
 pub mod request_config;
 pub use request_config::RequestConfig;
 pub mod context_budget;
+pub mod model_capabilities;
+pub use model_capabilities::*;
 pub mod providers;
 pub use providers::*;
 pub mod vision;

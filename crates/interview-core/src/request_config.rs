@@ -9,10 +9,12 @@ pub struct RequestConfig {
     pub total_timeout_secs: u64,
     #[serde(default)]
     pub budget:crate::context_budget::ContextBudget,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub capabilities:Option<crate::ModelCapabilities>,
 }
 impl Default for RequestConfig {
     fn default() -> Self {
-        Self {model:"deepseek-flash".into(),connect_timeout_secs:5,first_answer_warning_secs:8,total_timeout_secs:20,budget:Default::default()}
+        Self {model:"deepseek-flash".into(),connect_timeout_secs:5,first_answer_warning_secs:8,total_timeout_secs:20,budget:Default::default(),capabilities:None}
     }
 }
 impl RequestConfig {
@@ -24,7 +26,8 @@ impl RequestConfig {
             || self.connect_timeout_secs>self.total_timeout_secs || self.first_answer_warning_secs==0 || self.first_answer_warning_secs>=self.total_timeout_secs {
             return Err("连接超时须为1–30秒且不超过总截止；总截止须为5–120秒；等待提示须大于0且早于总截止".into());
         }
-        self.budget.validate()
+        self.budget.validate()?;
+        if let Some(c)=&self.capabilities {c.validate(self)?;}Ok(())
     }
 }
 impl crate::Index {
@@ -35,6 +38,7 @@ impl crate::Index {
     }
     pub async fn set_request_config(&self,config:&RequestConfig)->crate::Result<()> {
         config.validate()?;
+        if let Some(c)=&config.capabilities {c.endpoint_matches(crate::DEEPSEEK_ENDPOINT)?;}
         self.set("request_config",&serde_json::to_string(config).map_err(|_|"请求配置序列化失败")?).await
     }
 }

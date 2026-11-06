@@ -23,3 +23,13 @@ python3 scripts/package-tingxian-macos.py \
 输出为安装到 /Applications 的 .pkg 和 SHA256SUMS.txt。安装包按 arm64、macOS 14.4 或更新版本筛选目标。应用默认 ad hoc 签名；拥有相应证书的构建者可通过 TINGXIAN_APP_SIGN 和 TINGXIAN_PKG_SIGN 指定身份。Apple 公证需另行办理。
 
 复验时用 `pkgutil --expand-full` 展开最终 .pkg，在展开得到的 听弦.app 上运行 `codesign --verify --deep --strict` 和 `Contents/MacOS/meetily --installation-check`。自检会实际加载随包 Whisper small、生成并读取内存中的 DOCX/PDF，运行音频工具，不需要账号或 API Key。
+
+## PRD v2 Mac 预览配置
+
+`frontend/src-tauri/tauri.macos-preview.conf.json` 将 Mac 测试包标为0.7.0-beta.1，独立于 Windows 配置和原0.6.5默认配置。依赖按根说明安装后，在 frontend 运行：
+
+```bash
+./node_modules/.bin/tauri build --debug --bundles app --config src-tauri/tauri.macos-preview.conf.json
+```
+
+这条命令沿用既有本地 debug 包基线，嵌入静态前端资源，不依赖开发服务器；不是优化 release 性能验收。CMake 与 Rust 工具需在 PATH 中。配置使用 `npm run build` 构建已有依赖，不自动重新安装共享 node_modules。之后用上述打包脚本，传入实际生成的 debug/bundle/macos/听弦.app。安装前保留当前应用和用户输入；安装自检、恢复草稿、真实音频和60分钟会议分别验收。

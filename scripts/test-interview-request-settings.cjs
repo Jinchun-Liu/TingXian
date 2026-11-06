@@ -9,9 +9,11 @@ const invoke=async(name,args)=>{
  if(name==='interview_request_config_get'){if(failRead)throw Error('synthetic read failure');if(pendingRead)return new Promise(resolve=>{pendingRead=resolve;});return {...stored};}
  assert.equal(name,'interview_request_config_save');if(failSave)throw Error('synthetic save failure');stored={...args.config};return {...stored};
 };
+const caps={exports:{}};
+new Function('require','module','exports',ts.transpileModule(fs.readFileSync(path.resolve(__dirname,'../frontend/src/components/interview/ModelCapabilities.tsx'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,jsx:ts.JsxEmit.ReactJSX}}).outputText)(n=>n==='@/components/ui/choice-menu'?{ChoiceMenu:'select',ChoiceOption:'option'}:n==='@/components/ui/button'?{Button:'button'}:frontend(n),caps,caps.exports);
 const moduleObject={exports:{}};
 const code=ts.transpileModule(fs.readFileSync(path.resolve(__dirname,'../frontend/src/components/interview/RequestSettings.tsx'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
-new Function('require','module','exports',code)(name=>name==='@tauri-apps/api/core'?{invoke}:name==='@/components/ui/button'?{Button:props=>React.createElement('button',props)}:frontend(name),moduleObject,moduleObject.exports);
+new Function('require','module','exports',code)(name=>name==='@/components/interview/ModelCapabilities'?caps.exports:name==='@tauri-apps/api/core'?{invoke}:name==='@/components/ui/button'?{Button:props=>React.createElement('button',props)}:frontend(name),moduleObject,moduleObject.exports);
 const {RequestSettings}=moduleObject.exports;
 const text=node=>typeof node==='string'?node:(node?.children||[]).map(text).join('');
 (async()=>{

@@ -45,6 +45,23 @@ fn warnings(events:&[StreamEvent])->usize {events.iter().filter(|e|matches!(e,St
 fn completed(events:&[StreamEvent])->bool {events.iter().any(|e|matches!(e,StreamEvent::Done{..}))}
 
 #[tokio::test]
+async fn unsupported_capabilities_block_before_transport_and_usage_absence_stays_unknown(){
+    use crate::{CapabilitySupport as S,ModelCapabilities};
+    let server=serve(vec![ok(vec![(0,delta("建议回答：合成结果")),(0,done())])]).await;
+    let mut cfg=config();cfg.capabilities=Some(ModelCapabilities{text:S::Supported,image:S::Unsupported,streaming:S::Supported,usage:S::Unsupported,checked_on:"2020-01-02".into(),reference:"虚构规格".into(),model:cfg.model.clone(),endpoint:server.url.clone(),context_tokens:cfg.budget.context_tokens,max_output_tokens:cfg.budget.max_output_tokens});
+    let image=json!([{"role":"user","content":[{"type":"text","text":"合成题目"},{"type":"image_url","image_url":{"url":"data:image/png;base64,synthetic"}}]}]);
+    for (field,messages) in [("image",image),("streaming",json!([{"role":"user","content":"合成题目"}])),("text",json!([{"role":"user","content":"合成题目"}]))]{
+        let mut blocked=cfg.clone();let caps=blocked.capabilities.as_mut().unwrap();if field=="streaming"{caps.streaming=S::Unsupported;}if field=="text"{caps.text=S::Unsupported;}
+        let mut events=vec![];
+        let result=run_stream(reqwest::Client::builder().no_proxy().build().unwrap(),&server.url,"synthetic",messages,CancellationToken::new(),&blocked,|e|events.push(e)).await;
+        assert!(result.unwrap_err().contains("未发送"));assert_eq!(attempts(&events),0);assert!(server.requests.lock().unwrap().is_empty());
+    }
+    let mut events=vec![];run_stream(reqwest::Client::builder().no_proxy().build().unwrap(),&server.url,"synthetic",json!([{"role":"user","content":"合成题目"}]),CancellationToken::new(),&cfg,|e|events.push(e)).await.unwrap();
+    assert!(server.requests.lock().unwrap()[0].0.get("stream_options").is_none());
+    assert!(events.iter().any(|e|matches!(e,StreamEvent::Done{usage:None,..})));assert!(!events.iter().any(|e|matches!(e,StreamEvent::Usage{..})));
+}
+
+#[tokio::test]
 async fn model_budget_blocks_mandatory_overflow_before_any_network_attempt(){
     let server=serve(vec![ok(vec![(0,done())])]).await;
     let mut cfg=config();cfg.budget=crate::context_budget::ContextBudget{context_tokens:4096,max_output_tokens:512,safety_tokens:256};

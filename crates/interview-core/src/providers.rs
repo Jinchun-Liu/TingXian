@@ -17,16 +17,20 @@ impl ProviderProfile {
         if !["answer-1","answer-2","answer-3","vision","background"].contains(&self.id.as_str()) {return Err("未知模型位置".into());}
         if self.name.trim().is_empty() || self.name.chars().count()>40 || crate::contains_credential(&self.name) {return Err("接口名称须为1–40字，不能包含凭证".into());}
         self.request.validate()?;
-        let url=reqwest::Url::parse(&self.endpoint).map_err(|_|"请填写完整 chat/completions 接口地址")?;
+        validate_endpoint(&self.endpoint)?;
+        if let Some(c)=&self.request.capabilities {c.endpoint_matches(&self.endpoint)?;}Ok(())
+    }
+    pub fn accepts_empty_key(&self)->bool {self.endpoint.starts_with("http://")}
+}
+pub(crate) fn validate_endpoint(endpoint:&str)->Result<()> {
+        let url=reqwest::Url::parse(endpoint).map_err(|_|"请填写完整 chat/completions 接口地址")?;
         let local=matches!(url.host_str(),Some("localhost"|"127.0.0.1"|"[::1]"|"::1"));
         if !(url.scheme()=="https" || (url.scheme()=="http" && local)) || url.host_str().is_none()
             || !url.username().is_empty() || url.password().is_some() || url.query().is_some() || url.fragment().is_some()
-            || !url.path().ends_with("/chat/completions") || crate::contains_credential(&self.endpoint) {
+            || !url.path().ends_with("/chat/completions") || crate::contains_credential(endpoint) {
             return Err("接口须为 HTTPS 的完整 /chat/completions 地址（本机 localhost 可用 HTTP），不能包含凭证、查询参数或片段".into());
         }
         Ok(())
-    }
-    pub fn accepts_empty_key(&self)->bool {self.endpoint.starts_with("http://")}
 }
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -5,6 +5,7 @@ import {invoke} from '@tauri-apps/api/core';
 import {Button} from '@/components/ui/button';
 import type {RequestConfig} from './RequestSettings';
 import {BudgetFields,defaultBudget,budgetValid} from './RequestSettings';
+import {CapabilityFields,capabilitiesError,matchingCapabilities} from '@/components/interview/ModelCapabilities';
 type Profile={id:string;name:string;enabled:boolean;endpoint:string;protocol:'deepseek'|'openai'|'qwen';request:RequestConfig};
 type Config={answers:Profile[];vision:Profile;background:Profile};
 type View={config:Config;key_configured:Record<string,boolean>;capacity:number};
@@ -13,7 +14,10 @@ export function ProviderSettings({locked,onSaved,onBusyChange,openVision=false,o
   const [message,setMessage]=useState(''),[working,setWorking]=useState(false);
   const load=async()=>setView(await invoke<View>('interview_providers_get'));
   useEffect(()=>{void load().catch(e=>setMessage(String(e)));},[]);
-  const patch=(id:string,values:Partial<Profile>)=>setView(v=>v?{...v,config:{...v.config,background:v.config.background?.id===id?{...v.config.background,...values}:v.config.background,answers:v.config.answers.map(p=>p.id===id?{...p,...values}:p),vision:v.config.vision.id===id?{...v.config.vision,...values}:v.config.vision}}:v);
+  const patch=(id:string,values:Partial<Profile>)=>setView(v=>{
+    const update=(p:Profile)=>{if(p.id!==id)return p;const next={...p,...values};return {...next,request:{...next.request,capabilities:matchingCapabilities(next.request.capabilities,next.request.model,next.request.budget||defaultBudget,next.endpoint)}};};
+    return v?{...v,config:{answers:v.config.answers.map(update),vision:update(v.config.vision),background:v.config.background?update(v.config.background):v.config.background}}:v;
+  });
   const work=async(action:()=>Promise<void>)=>{setWorking(true);onBusyChange(true);setMessage('');try{await action();}catch(e){setMessage(String(e));}finally{setWorking(false);onBusyChange(false);}};
   if(!view)return <div role="status">{message||'读取多接口配置…'}<Button variant="outline" size="sm" onClick={()=>void load().catch(e=>setMessage(String(e)))}>重新读取</Button></div>;
   const disabled=locked||working;
@@ -35,14 +39,17 @@ export function ProviderSettings({locked,onSaved,onBusyChange,openVision=false,o
         <label className="block">API Key<input aria-label={`${p.id} API Key`} className="w-full rounded border p-2" type="password" autoComplete="off" disabled={disabled} value={keys[p.id]||''} placeholder="留空保留当前进程凭证；地址改变需重新填写" onChange={e=>setKeys(k=>({...k,[p.id]:e.target.value}))} /></label>
         <details><summary>超时设置</summary><div className="grid sm:grid-cols-3 gap-2">{([['connect_timeout_secs','连接超时',1,30],['first_answer_warning_secs','等待提示',1,119],['total_timeout_secs','总截止',5,120]] as const).map(([field,label,min,max])=><label key={field}>{label}（秒）<input type="number" className="w-full rounded border p-2" min={min} max={max} disabled={disabled} value={p.request[field]} onChange={e=>patch(p.id,{request:{...p.request,[field]:Number(e.target.value)}})} /></label>)}</div></details>
         <BudgetFields prefix={p.id} value={p.request.budget||defaultBudget} disabled={disabled} onChange={budget=>patch(p.id,{request:{...p.request,budget}})}/>
-        <Button size="sm" variant="outline" disabled={disabled} onClick={()=>void work(async()=>{
+        <CapabilityFields prefix={p.id} value={p.request.capabilities} model={p.request.model} endpoint={p.endpoint} budget={p.request.budget||defaultBudget} disabled={disabled} onChange={capabilities=>patch(p.id,{request:{...p.request,capabilities}})}/>
+        {p.id==='background'&&p.request.capabilities?.streaming==='unsupported'&&<p className="text-xs text-slate-500">背景整理使用非流式请求，仍可使用此模型。</p>}
+        <Button size="sm" variant="outline" disabled={disabled||p.request.capabilities?.streaming==='unsupported'} onClick={()=>void work(async()=>{
           const r=await invoke<{success:boolean;message:string;elapsed_ms:number}>('interview_provider_test',{profileId:p.id});
           setMessage(`${p.name}：${r.message}（${r.elapsed_ms} ms）。测试使用已保存配置。`);
-        })}>测试已保存接口（仅固定文字）</Button>
+        })}>测试已保存接口（流式文字）</Button>
       </div>
     </details>)}
     <Button disabled={disabled} onClick={()=>void work(async()=>{
       if([...view.config.answers,view.config.vision,...(view.config.background?[view.config.background]:[])].some(p=>!budgetValid(p.request.budget||defaultBudget)))throw Error('请检查模型预算：输出上限和安全余量须小于模型窗口及 256K 应用上限。');
+      for(const p of [...view.config.answers,view.config.vision,...(view.config.background?[view.config.background]:[])]){const error=capabilitiesError(p.request.capabilities,p.request.model,p.request.budget||defaultBudget,p.endpoint);if(error)throw Error(`${p.name}：${error}`);}
       await invoke('interview_providers_save',{config:view.config,keys:Object.fromEntries(Object.entries(keys).filter(([,v])=>v.trim()))});
       setKeys({});await load();await onSaved();setMessage('接口配置已保存，未发送模型请求。');
     })}>保存多接口配置</Button>

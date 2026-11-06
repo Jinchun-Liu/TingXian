@@ -11,6 +11,8 @@ function fixture(versions){
  const oldRow={location:'行 1',kind:'personal',quote:'Orchid 生产经验：无。仅完成本地模拟。',note:'旧版来源，尚未完成生产回归。'};
  const newRow={location:'行 1',kind:'personal',quote:'Orchid 生产经验：有。已参与生产回归。',note:'新版说法不同，需本人核对职责与完成时间。'};
  const documents=versions?[{path:'.背景/'+source+'/项目说明.md',root:'背景资料库',hash:expected,kind:'personal',allow_external:false,chunks:1,metadata:{confirmation:'content_changed',validity:'content_changed',confirmed_at:null,valid_from:null,valid_until:null,updated_at:null}}]:[];
+ const provider=id=>({id,name:'合成 '+id,enabled:id==='answer-1',endpoint:'https://synthetic.invalid/chat/completions',protocol:'openai',request:{model:'synthetic-model',connect_timeout_secs:5,first_answer_warning_secs:8,total_timeout_secs:20}});
+ let providers={answers:[1,2,3].map(i=>provider('answer-'+i)),vision:provider('vision'),background:provider('background')};
  window.isTauri=true;
  window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'},currentWebview:{label:'main'}},
   transformCallback(fn){callbacks.set(++sequence,fn);return sequence;},unregisterCallback(id){callbacks.delete(id);},
@@ -29,6 +31,9 @@ function fixture(versions){
     for(const c of args.changes){if(!['role','organization','context','terminology'].includes(c.field))throw Error('unsupported field');preferences[c.field]=c.value;}return;
    }
    if(cmd==='interview_preferences_get')return preferences;
+   if(cmd==='interview_providers_get')return {config:structuredClone(providers),key_configured:{},capacity:0};
+   if(cmd==='interview_providers_save'){if(Object.keys(args.keys).length)throw Error('合成页面不接收凭证');providers=structuredClone(args.config);return;}
+   if(cmd==='interview_provider_test')return {success:true,message:'合成固定文字结果，未连接真实模型',elapsed_ms:0,attempts:0,total_tokens:null};
    if(cmd==='interview_recovery_list')return {epoch:0,drafts:[]};
    if(cmd==='interview_request_config_get')return {model:'synthetic',connect_timeout_secs:5,first_answer_warning_secs:8,total_timeout_secs:60};
    if(cmd==='interview_connection_status')return {status:'untested',message:'尚未测试连接'};

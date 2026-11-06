@@ -159,6 +159,8 @@ async fn generate(app:&AppHandle,state:&InterviewState,selection:&str,include_li
     let index=state.index(&app).await?;let p=index.provider_config().await?.background;
     let key=state.provider_key(&p).await;
     if !p.enabled||(!p.accepts_empty_key()&&key.is_empty()){return Err("请先配置独立的背景整理模型".into())}
+    p.request.check_capabilities(&p.endpoint,false,false)?;
+    if measure&&p.request.usage_unsupported(){return Err("此背景模型标记为不返回用量，无法实测 tokens；请核对能力或更换接口".into());}
     let (paths,folder)=if measure||resume.is_some(){(vec![],false)}else{let work=state.background.0.lock().unwrap();
         let (_,paths,folder)=work.selection.as_ref().filter(|s|s.0==selection).ok_or("请重新选择文件夹或重点文件")?;(paths.clone(),*folder)};
     let previous=if !measure && include_library{index.background_inputs(false).await?}else{vec![]};
