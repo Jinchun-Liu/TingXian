@@ -1,0 +1,35 @@
+name: Eye provider isolation contracts
+on:
+  push:
+    branches: [feat/windows-eye-local-20261106]
+    paths: ['video/eye/**', '.github/workflows/eye-provider-checks.yml']
+  pull_request:
+    paths: ['video/eye/**', '.github/workflows/eye-provider-checks.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  synthetic-provider:
+    strategy:
+      matrix:
+        os: [windows-2022, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure without NVIDIA dependencies
+        run: cmake -S video/eye -B build/eye -DCMAKE_BUILD_TYPE=Release
+      - name: Build own provider contract tests
+        run: cmake --build build/eye --config Release --parallel 2
+      - name: Test synthetic frames and controlled failure races
+        run: ctest --test-dir build/eye -C Release --output-on-failure
+      - name: Public source check
+        run: python -I -B scripts/check-public-source.py
+      - name: Preserve own synthetic test result only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Eye-provider-synthetic-${{ matrix.os }}
+          path: build/eye/Testing/Temporary/LastTest.log
+          if-no-files-found: error
+          retention-days: 14

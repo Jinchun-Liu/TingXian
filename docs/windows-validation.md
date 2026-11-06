@@ -1,5 +1,9 @@
 # Windows 验收与交接
 
+2026-11-07 续作：[EyeCorrectionProvider 独立边界](eye-provider-validation-2026-11-07.md)
+新增自身合成故障/并发检查及显式离线 SDK 适配器；没有接入当前安装版。SDK/素材
+详细结果保留源码外，真实摄像头、虚拟输出、飞书与长期稳定性仍待验收。
+
 本文件记录 0.7.0-beta.1 的验收边界。2026-11-06 源码恢复与新方向见 [恢复记录](windows-eye-baseline-2026-11-06.md) 和 [PRD v2.1](PRD-v2.1-eye-face.md)，历史成绩不算本轮重跑。源码基线为 macOS 0.6.5 `f80ba86`。Windows 安装包是测试版，发布物必须来自 `.github/workflows/windows-preview.yml` 的成功运行。
 
 ## 自动验证
