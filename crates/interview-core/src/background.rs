@@ -21,7 +21,8 @@ pub struct Doc{pub id:String,pub name:String,pub hash:String,pub records:Vec<Rec
 pub struct Profile{pub overview:String,pub role:String,pub aliases:String}
 #[derive(Clone,Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Bundle{pub format:String,pub documents:Vec<Doc>,pub profile:Profile}
+pub struct Bundle{pub format:String,pub documents:Vec<Doc>,pub profile:Profile,
+    #[serde(default,skip_serializing_if="Option::is_none")] pub settings:Option<crate::background_settings::Suggestions>}
 
 fn bounded(s:&str,n:usize,empty:bool)->bool {
     (empty||!s.trim().is_empty()) && s.chars().count()<=n && !contains_credential(s)
@@ -33,8 +34,9 @@ impl Bundle {
     }
     fn validate_fields(&self)->Result<()> {
         let p=&self.profile;
-        if self.format!="meetily-background-v1" || self.documents.len()>2000
+        if !["meetily-background-v1","meetily-background-v2"].contains(&self.format.as_str()) || (self.format=="meetily-background-v1"&&self.settings.is_some()) || (self.format=="meetily-background-v2"&&self.settings.is_none()) || self.documents.len()>2000
             || !bounded(&p.overview,8000,false) || !bounded(&p.role,200,true) || !bounded(&p.aliases,2000,true) {return Err("背景资料包或设置格式无效".into())}
+        if let Some(settings)=&self.settings{settings.validate()?;}
         let mut ids=std::collections::HashSet::new();
         for d in &self.documents {
             let hex=|s:&str|s.len()==64 && s.bytes().all(|b|b.is_ascii_hexdigit()&&!b.is_ascii_uppercase());
@@ -93,7 +95,7 @@ impl Index {
         self.save_background(bundle,version,share,metrics,merge_terms).await
     }
     pub async fn edit_background(&self,profile:Profile,version:&str,share:bool,metrics:Value,merge_terms:bool)->Result<()>{
-        let bundle=Bundle{format:"meetily-background-v1".into(),documents:vec![],profile};
+        let bundle=Bundle{format:"meetily-background-v1".into(),documents:vec![],profile,settings:None};
         bundle.validate_fields()?;
         self.save_background(&bundle,version,share,metrics,merge_terms).await
     }
@@ -136,7 +138,7 @@ impl Index {
             let aliases=lines.join("\n"); if aliases.chars().count()>4000{return Err("合并后术语超过 4000 字，请先精简".into())}
             sqlx::query("INSERT OR REPLACE INTO settings VALUES('aliases',?)").bind(aliases).execute(&mut *tx).await.map_err(|e|e.to_string())?;
         }
-        sqlx::query("INSERT OR REPLACE INTO background_library VALUES('profile',?)").bind(json!({"profile":bundle.profile,"share":share,"metrics":metrics}).to_string()).execute(&mut *tx).await.map_err(|e|e.to_string())?;
+        sqlx::query("INSERT OR REPLACE INTO background_library VALUES('profile',?)").bind(json!({"profile":bundle.profile,"share":share,"metrics":metrics,"settings":bundle.settings}).to_string()).execute(&mut *tx).await.map_err(|e|e.to_string())?;
         sqlx::query("UPDATE settings SET value=CAST(value AS INTEGER)+1 WHERE key='version'").execute(&mut *tx).await.map_err(|e|e.to_string())?;
         tx.commit().await.map_err(|e|e.to_string())
     }

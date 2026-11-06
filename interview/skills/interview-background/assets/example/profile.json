@@ -1,0 +1,12 @@
+{
+  "overview": "source.txt 为虚构案例。林晓目标为示例组织云产品测试实习。旧材料称已完成接口自动化，新说明限定为本地模拟、生产回归尚未实施，需本人核实。Orchid、pytest、null 等为练习内容，不可当作真实生产经验。",
+  "role": "云产品测试实习生",
+  "aliases": "契约测试,contract test",
+  "settings": {
+    "role": "云产品测试实习生",
+    "organization": "示例组织",
+    "context": "仅为虚构练习；接口自动化完成状态有冲突，须保留本地模拟与未实施生产回归的限制。",
+    "terminology": "Orchid, pytest, null, 契约测试",
+    "call_names": "林晓"
+  }
+}

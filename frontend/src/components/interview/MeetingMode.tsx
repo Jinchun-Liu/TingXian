@@ -19,6 +19,15 @@ export function useMeetingMode(clearQueue:()=>void) {
     clearQueue();reset();current.current=next;setSetup(next);
     try{localStorage.setItem(storageKey,JSON.stringify(next));}catch{}
   };
+  const applyNames=(expected:string,names:string)=>{
+    if(current.current.names!==expected||names.length>240)return false;
+    try{
+      const saved=readMeeting(JSON.parse(localStorage.getItem(storageKey)||'null'));
+      if(saved.names!==expected||saved.mode!==current.current.mode)return false;
+      const next={...current.current,names};localStorage.setItem(storageKey,JSON.stringify(next));
+      clearQueue();reset();current.current=next;setSetup(next);return true;
+    }catch{return false;}
+  };
   const decide=useCallback((text:string)=>{
     const result=gate.current.decide(current.current,text);
     if(result.alert){
@@ -27,7 +36,7 @@ export function useMeetingMode(clearQueue:()=>void) {
     }
     return result.answer;
   },[]);
-  return {setup,current,change,notice,decide,reset,interrupt:()=>gate.current.reset()};
+  return {setup,current,change,applyNames,notice,decide,reset,interrupt:()=>gate.current.reset()};
 }
 export function MeetingControls({setup,change}:{setup:MeetingSetup;change:(value:MeetingSetup)=>void}){
   return <div className="meeting-controls">

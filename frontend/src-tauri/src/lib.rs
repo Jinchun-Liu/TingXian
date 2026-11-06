@@ -627,6 +627,8 @@ pub fn run() {
             interview_background::background_edit,
             interview_background::background_preview,
             interview_background::background_apply,
+            interview_background::background_settings_preview,
+            interview_background::background_settings_apply,
             interview_background::background_export_skill,
             interview::profile_choose,
             interview::profile_scan,

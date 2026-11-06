@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TingXian background exchange v1/v2",
+  "type": "object",
+  "properties": {
+    "format": {
+      "enum": [
+        "meetily-background-v1",
+        "meetily-background-v2"
+      ]
+    },
+    "documents": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2000,
+      "items": {
+        "$ref": "#/$defs/document"
+      }
+    },
+    "profile": {
+      "type": "object",
+      "properties": {
+        "overview": {
+          "type": "string",
+          "maxLength": 8000,
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "role": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "aliases": {
+          "type": "string",
+          "maxLength": 2000
+        }
+      },
+      "required": [
+        "overview",
+        "role",
+        "aliases"
+      ],
+      "additionalProperties": false
+    },
+    "settings": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "organization": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "context": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "terminology": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "call_names": {
+          "type": "string",
+          "maxLength": 240
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "format",
+    "documents",
+    "profile"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "format": {
+            "const": "meetily-background-v2"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "settings"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "settings"
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "document": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 1024,
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.)(?!.*//)(?!.*/$).+$"
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "records": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16000,
+          "items": {
+            "$ref": "#/$defs/record"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "hash",
+        "records"
+      ],
+      "additionalProperties": false
+    },
+    "record": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "personal",
+            "evidence",
+            "practice",
+            "job",
+            "technical"
+          ]
+        },
+        "location": {
+          "type": "string",
+          "maxLength": 180,
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "quote": {
+          "type": "string",
+          "maxLength": 650,
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 450,
+          "minLength": 1,
+          "pattern": "\\S"
+        }
+      },
+      "required": [
+        "kind",
+        "location",
+        "quote",
+        "note"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$comment": "Use background.py validate for byte-size, duplicate document IDs, credential and control-character checks; pack additionally verifies current source hashes and exact quotes."
+}

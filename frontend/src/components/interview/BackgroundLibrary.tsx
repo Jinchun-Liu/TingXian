@@ -2,6 +2,7 @@
 import {useEffect,useRef,useState} from 'react';
 import {invoke} from '@tauri-apps/api/core';
 import {Button} from '@/components/ui/button';
+import {BackgroundSettings} from '@/components/interview/BackgroundSettings';
 type Profile={overview:string;role:string;aliases:string};
 type Metrics={peak_prompt_tokens:number|null;sum_prompt_tokens?:number;calls:number};
 type Draft={id:string;job?:string;profile:Profile;documents:{id:string;name:string;count:number}[];failures:[string,string][];metrics:Metrics|null};
@@ -11,7 +12,7 @@ type JobFile={name:string;status:string;reason:string;done:number;total:number};
 type View={library:Report;model:string;ready:boolean;jobs?:Job[];work:{busy:boolean;progress:string;draft:Draft|null}};
 type Selection={id:string;label:string;count:number;folder:boolean};
 const num=(n:number)=>n.toLocaleString('zh-CN');
-export function BackgroundLibrary({locked,onBusy,onApplied,onModels,revision,active}:{locked:boolean;onBusy:(v:boolean)=>void;onApplied:()=>Promise<void>;onModels:()=>void;revision?:string;active:boolean}){
+export function BackgroundLibrary({locked,onBusy,onApplied,onModels,revision,active,names,applyNames}:{locked:boolean;onBusy:(v:boolean)=>void;onApplied:()=>Promise<void>;onModels:()=>void;revision?:string;active:boolean;names?:string;applyNames?:(expected:string,value:string)=>boolean}){
   const [v,setV]=useState<View|null>(null),[selected,select]=useState<Selection|null>(null),[msg,setMsg]=useState(''),[progress,setProgress]=useState(''),[working,setWorking]=useState(false);
   const [edit,setEdit]=useState<Profile|null>(null),[base,setBase]=useState(''),[share,setShare]=useState(false),[terms,setTerms]=useState(true),[include,setInclude]=useState(true);
   const [preview,setPreview]=useState<{id:string;offset:number;more:boolean;rows:{location:string;quote:string;note:string}[]}|null>(null);
@@ -87,6 +88,7 @@ export function BackgroundLibrary({locked,onBusy,onApplied,onModels,revision,act
     </div>}
     {v?.library.state&&!edit&&<details><summary>当前背景</summary><p className="whitespace-pre-wrap py-2">{v.library.state.profile.overview}</p>
       <Button size="sm" variant="outline" disabled={off} onClick={()=>{setEdit(v.library.state!.profile);setBase(v.library.version);setShare(v.library.state!.share);}}>微调背景与岗位</Button></details>}
+    {active&&v?.library.state&&!edit&&<BackgroundSettings revision={v.library.version} locked={off} names={names} applyNames={applyNames} onBusy={onBusy} onApplied={onApplied}/>}
     {v&&<details><summary>上下文预算 · 256K</summary>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 py-2">
         <dt>整库一次读入</dt><dd>≤ 约 {num(v.library.full_budget)} tokens</dd>

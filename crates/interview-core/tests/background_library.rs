@@ -40,3 +40,27 @@ fn pre_background_provider_config_migrates_to_an_independent_disabled_slot(){
     let migrated:interview_core::ProviderConfig=serde_json::from_value(legacy).unwrap();
     migrated.validate().unwrap();assert!(!migrated.background.enabled);assert_eq!(migrated.background.id,"background");
 }
+
+#[tokio::test]
+async fn settings_suggestions_are_reviewed_selective_and_guard_manual_values(){
+    use interview_core::{background_settings::{Suggestions,Change,Field},InterviewPreferences,ConversationScenario};
+    let dir=tempfile::tempdir().unwrap().keep();let index=Index::open(&dir.join("index.sqlite")).await.unwrap();
+    let mut b=fixture();b.format="meetily-background-v2".into();b.settings=Some(Suggestions{role:"建议岗位".into(),organization:"示例组织".into(),context:"仅为练习项目".into(),terminology:"幂等键".into(),call_names:"小林".into()});
+    b.validate().unwrap();let mut invalid=b.clone();invalid.format="meetily-background-v1".into();assert!(invalid.validate().is_err());fixture().validate().unwrap();
+    let manual=InterviewPreferences{scenario:ConversationScenario::Meeting,role:"原岗位".into(),organization:"手填团队".into(),answer_language:"en".into(),..Default::default()};
+    index.set_preferences(&manual).await.unwrap();index.set("protected_test_metadata","unchanged").await.unwrap();
+    index.apply_background(&b,&index.setting("version").await.unwrap(),false,json!(null),false).await.unwrap();
+    assert_eq!(index.preferences().await.unwrap(),manual,"generating/importing a proposal changed settings");
+    let preview=index.background_settings_preview().await.unwrap();assert_eq!(preview["suggestions"]["call_names"],"小林");
+    // No-op validation for local reminder names must not change preferences.
+    index.apply_background_settings(preview["version"].as_str().unwrap(),preview["profile_hash"].as_str().unwrap(),&[]).await.unwrap();
+    let change=Change{field:Field::Role,expected:"原岗位".into(),value:"核对后的岗位".into()};
+    let saved=index.apply_background_settings(preview["version"].as_str().unwrap(),preview["profile_hash"].as_str().unwrap(),&[change.clone()]).await.unwrap();
+    assert_eq!(saved.role,"核对后的岗位");assert_eq!(saved.organization,manual.organization);assert_eq!(saved.scenario,ConversationScenario::Meeting);assert_eq!(saved.answer_language,"en");
+    let attempt=vec![Change{field:Field::Organization,expected:manual.organization.clone(),value:"不应部分写入".into()},change];
+    assert!(index.apply_background_settings(preview["version"].as_str().unwrap(),preview["profile_hash"].as_str().unwrap(),&attempt).await.is_err());
+    assert_eq!(index.preferences().await.unwrap(),saved);assert_eq!(index.setting("protected_test_metadata").await.unwrap(),"unchanged");
+    assert!(serde_json::from_value::<Change>(json!({"field":"key","expected":"","value":"forbidden"})).is_err());
+    index.set("version","99").await.unwrap();
+    assert!(index.apply_background_settings(preview["version"].as_str().unwrap(),preview["profile_hash"].as_str().unwrap(),&[]).await.is_err());
+}

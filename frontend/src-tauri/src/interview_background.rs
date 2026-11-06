@@ -10,6 +10,17 @@ use tokio::io::{AsyncWriteExt,AsyncBufReadExt,AsyncReadExt,BufReader};
 use tokio_util::sync::CancellationToken;
 const HARNESS:&str=include_str!("../../../interview/skills/interview-background/scripts/background.py");
 const SKILL:&str=include_str!("../../../interview/skills/interview-background/SKILL.md");
+const SKILL_FILES:&[(&str,&str)]=&[
+    ("SKILL.md",SKILL),("scripts/background.py",HARNESS),
+    ("VERSION",include_str!("../../../interview/skills/interview-background/VERSION")),
+    ("requirements.txt",include_str!("../../../interview/skills/interview-background/requirements.txt")),
+    ("references/installation.md",include_str!("../../../interview/skills/interview-background/references/installation.md")),
+    ("references/format.md",include_str!("../../../interview/skills/interview-background/references/format.md")),
+    ("references/bundle.schema.json",include_str!("../../../interview/skills/interview-background/references/bundle.schema.json")),
+    ("assets/example/source.txt",include_str!("../../../interview/skills/interview-background/assets/example/source.txt")),
+    ("assets/example/profile.json",include_str!("../../../interview/skills/interview-background/assets/example/profile.json")),
+    ("scripts/self_test.py",include_str!("../../../interview/skills/interview-background/scripts/self_test.py")),
+];
 const LIMIT:usize=16*1024*1024;
 #[derive(Default)]
 pub struct Work(Mutex<Inner>);
@@ -41,7 +52,7 @@ async fn job_db(path:&Path)->Result<sqlx::SqliteConnection,String>{
     let meta=tokio::fs::symlink_metadata(path).await.map_err(|_|"未找到整理断点")?;
     if !meta.is_file()||meta.len()>64*1024*1024{return Err("整理断点不是有效普通文件".into());}
     let options=sqlx::sqlite::SqliteConnectOptions::new().filename(path).read_only(true).busy_timeout(std::time::Duration::from_secs(2));
-    sqlx::SqliteConnection::connect_with(&options).await.map_err(|_|"无法读取整理断点")
+    sqlx::SqliteConnection::connect_with(&options).await.map_err(|_|"无法读取整理断点".to_string())
 }
 async fn read_job_request(app:&AppHandle,id:&str)->Result<Value,String>{
     let mut db=job_db(&job_path(app,id)?).await?;
@@ -250,15 +261,25 @@ pub async fn background_apply(window:Window,app:AppHandle,state:State<'_,Intervi
         request["verify_documents"]=json!(bundle.documents.iter().map(|d|json!({"id":d.id,"hash":d.hash,"name":d.name})).collect::<Vec<_>>());
         worker(&request,&state.background).await?;
     }
+    if let Some(settings)=&mut bundle.settings{settings.role=if profile.role.chars().count()<=120{profile.role.clone()}else{String::new()};}
     bundle.profile=profile;state.index(&app).await?.apply_background(&bundle,&version,share,metrics,merge_terms).await?;
     state.background.0.lock().unwrap().draft=None;Ok(())
+}
+#[tauri::command]
+pub async fn background_settings_preview(window:Window,app:AppHandle,state:State<'_,InterviewState>)->Result<Value,String>{
+    owner(&window)?;state.index(&app).await?.background_settings_preview().await
+}
+#[tauri::command]
+pub async fn background_settings_apply(window:Window,app:AppHandle,state:State<'_,InterviewState>,version:String,profile_hash:String,changes:Vec<interview_core::background_settings::Change>)->Result<(),String>{
+    let _guard=guard(&window,&app,&state).await?;
+    state.index(&app).await?.apply_background_settings(&version,&profile_hash,&changes).await?;Ok(())
 }
 fn export_into(parent:&Path)->Result<String,String>{
     let dir=parent.join("interview-background");
     std::fs::create_dir(&dir).map_err(|e|format!("不能创建技能文件夹（已有目录不会覆盖）：{e}"))?;
-    std::fs::create_dir(dir.join("scripts")).map_err(|e|e.to_string())?;
-    for (name,text) in [("SKILL.md",SKILL),("scripts/background.py",HARNESS)]{
+    for (name,text) in SKILL_FILES{
         use std::io::Write;
+        if let Some(parent)=Path::new(name).parent(){std::fs::create_dir_all(dir.join(parent)).map_err(|e|e.to_string())?;}
         let mut f=std::fs::OpenOptions::new().write(true).create_new(true).open(dir.join(name)).map_err(|e|e.to_string())?;
         f.write_all(text.as_bytes()).and_then(|_|f.sync_all()).map_err(|e|e.to_string())?;
     }
@@ -279,8 +300,8 @@ mod tests{
     #[test]
     fn exported_skill_is_self_contained_and_does_not_overwrite(){
         let dir=std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());std::fs::create_dir(&dir).unwrap();
-        let out=PathBuf::from(export_into(&dir).unwrap());assert_eq!(std::fs::read_to_string(out.join("SKILL.md")).unwrap(),SKILL);
-        assert_eq!(std::fs::read_to_string(out.join("scripts/background.py")).unwrap(),HARNESS);
+        let out=PathBuf::from(export_into(&dir).unwrap());
+        for (name,text) in SKILL_FILES{assert_eq!(std::fs::read_to_string(out.join(name)).unwrap(),*text);}
         assert!(export_into(&dir).is_err());
     }
 }

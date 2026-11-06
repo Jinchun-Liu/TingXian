@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import patch
 HERE=Path(__file__).resolve().parents[1]/"interview/skills/interview-background/scripts/background.py"
@@ -14,6 +15,25 @@ class Response:
     def __exit__(self,*a): pass
     def read(self,n): return self.body[:n]
 class Test(unittest.TestCase):
+    def test_portable_bundle_runs_outside_repository_and_rejects_invalid_input(self):
+        import shutil
+        root=Path(tempfile.mkdtemp());exported=root/"interview-background"
+        shutil.copytree(HERE.parents[1],exported,ignore=shutil.ignore_patterns("__pycache__"))
+        p=subprocess.run([sys.executable,"-B",str(exported/"scripts/self_test.py")],cwd=root,capture_output=True,text=True,encoding="utf-8")
+        self.assertEqual(p.returncode,0,p.stderr);result=json.loads(p.stdout);self.assertTrue(result["passed"]);self.assertFalse(result["model_called"])
+        bundle=json.loads((Path(result["work"])/"example.meetily.json").read_text(encoding="utf-8"))
+        m.validate_bundle(bundle)
+        for modify in [lambda b:b["documents"].append(b["documents"][0]),lambda b:b["profile"].update({"unknown":"field"}),lambda b:b["documents"][0].update({"name":"../source.txt"}),lambda b:b["settings"].update({"context":"bad\x01text"}),lambda b:b.update({"format":"meetily-background-v1"})]:
+            bad=json.loads(json.dumps(bundle));modify(bad)
+            with self.assertRaises(ValueError):m.validate_bundle(bad)
+    def test_settings_bundle_version_and_legacy_compatibility(self):
+        doc={"id":"a"*64,"name":"synthetic.txt","hash":"b"*64,"records":[{"kind":"practice","location":"行 1","quote":"模拟项目","note":"只证明练习"}]}
+        profile={"overview":"模拟项目并非生产经验","role":"示例岗位","aliases":"幂等,idempotency"}
+        legacy=m.pack([doc],profile);self.assertEqual(legacy["format"],"meetily-background-v1");self.assertNotIn("settings",legacy)
+        settings={"role":"示例岗位","organization":"目标示例组织","context":"只证明练习","terminology":"幂等","call_names":"小林"}
+        current=m.pack([doc],{**profile,"settings":settings});self.assertEqual(current["format"],"meetily-background-v2");self.assertEqual(current["profile"],profile);self.assertEqual(current["settings"],settings)
+        for forbidden in ["key","microphone","meeting_mode","allow_external"]:
+            with self.assertRaisesRegex(ValueError,"不支持的字段"):m.pack([doc],{**profile,"settings":{**settings,forbidden:"anything"}})
     def test_small_model_budget_repartitions_and_never_exceeds_effective_window(self):
         root=Path(tempfile.mkdtemp());(root/"small.txt").write_text("虚构练习材料\n"*600)
         cfg={"model":"small-test","key":"","endpoint":"http://localhost/chat/completions","timeout":1,"context_tokens":4096,"max_output_tokens":512,"safety_tokens":256}
