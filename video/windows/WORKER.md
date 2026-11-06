@@ -1,11 +1,11 @@
 # Worker owner lifetime (integration boundary)
 
-`WorkerOwnerGuard` is the native worker's one-shot owner/stop boundary. It is not
-yet called by Tauri or packaged as an eye worker; the SDK adapter and actual app
-commands remain to be implemented. Constructing it does not open a camera or
-create a device. Existing ordinary-user app behavior is unchanged.
+`WorkerOwnerGuard` is the native worker's one-shot owner/stop boundary. Tauri now
+launches the verified `tingxian-video-worker` for explicit no-media inspection.
+It arms this guard but does not call `CameraSession::start`. SDK/capture processing
+remains unimplemented. See the [app validation](../../docs/video-app-validation-2026-11-06.md).
 
-The future main-window supervisor must create an anonymous **manual-reset** event
+The main-window supervisor must create an anonymous **manual-reset** event
 for each explicit start, duplicate its own real process handle with only
 `SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION`, and pass that handle and an
 event handle with only `SYNCHRONIZE` through `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`.

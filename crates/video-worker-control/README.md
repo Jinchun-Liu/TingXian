@@ -15,7 +15,9 @@ event and bounded report pipe. This is process lifecycle isolation, not a sandbo
 against a malicious binary with the user's privileges.
 
 Reserve a `Run` synchronously before dispatch. Stop revokes its lease even if it
-has not run yet. Exit suspends new reservations before cancellation; cancellation
+has not run yet. Webview admission uses `begin_if_current` with a previously read
+generation so an old IPC arriving after Stop cannot reserve a new run.
+Exit suspends new reservations before cancellation; cancellation
 of exit only reopens admission, never restarts anything. Reports from cancelled
 runs are discarded. Crash, invalid/oversized report, timeout and forced cleanup
 have distinct results. A cleanup whose process exit could not be confirmed blocks

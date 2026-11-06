@@ -45,7 +45,7 @@ Windows 麦克风权限在「设置 → 隐私和安全性 → 麦克风」中�
 ```powershell
 git clone https://github.com/Jinchun-Liu/TingXian.git
 cd TingXian
-git switch feat/windows-prd-v2
+git switch feat/windows-eye-local-20261106
 corepack enable
 corepack prepare pnpm@9.15.9 --activate
 python scripts/prepare-windows-runtime.py
@@ -58,3 +58,9 @@ pnpm exec tauri dev
 发布构建流程见 `.github/workflows/windows-preview.yml`。所有下载版本与摘要见 `runtime-lock.json`，依赖许可见 `THIRD-PARTY.md`。CI 的离线资源/安装检查通过并不等于真实设备音频、截图或 60 分钟会议已通过。
 
 当前开发分支另随包编译本地视频检查 worker，摘要在编译主程序时嵌入。主窗显式检查时才运行；退出会停止并回收，缺少已批准眼部运行时返回不可用。它不启动摄像头、音频或 SDK，也不注册虚拟设备。`meetily.exe --video-worker-check` 用同一控制路径作无采集安装检查；检查成功不代表眼部处理可用。普通用户仍无需 CMake、Visual Studio 或 CUDA Toolkit。
+
+上面的独立眼部分支沿用 Mac 0.6.5 UI 基准；`feat/windows-prd-v2` 保留原 Windows 交付历史，不是本轮视觉功能源码。不要回退已有后续提交。
+
+主窗视频 IPC/退出回归使用 `scripts/test-windows-video-app.ps1 -EvidenceDirectory <新证据目录>`。
+先按上述步骤准备组件和依赖。脚本保留导入表与清单证据，仅给测试程序副本补齐 Common
+Controls v6 清单；不会修改生产程序清单、安装系统 DLL、打开设备或跳过失败断言。

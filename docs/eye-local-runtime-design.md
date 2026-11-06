@@ -56,6 +56,8 @@ NGC 资料和免费的 NVIDIA Developer Program 登记已完成，实际会员�
 
 ## 离线组件检查
 
+后续已接入主窗独占的无媒体检查 worker、退出握手和禁用媒体控件的视频面板，见[应用验收](video-app-validation-2026-11-06.md)。它只报告 prerequisite，不加载本节的 SDK；此前“Tauri 尚未接入”描述保留为对应历史阶段。
+
 新增 `scripts/verify-eye-runtime.py`，仅依赖 Python 标准库。开发阶段可以用本机 Python 3.12；未来若调用随包 Python，仍须独立设计入口，当前没有给普通用户新增环境要求。
 
 ```powershell
