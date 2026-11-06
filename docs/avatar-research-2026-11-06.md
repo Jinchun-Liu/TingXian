@@ -1,0 +1,121 @@
+# Windows 数字形象选型与实现边界（2026-11-06）
+
+本轮按用户新增指令推进个人数字形象、本人原声展示与全程代理，优先模拟面试和练习。当前暂不采集摄像头/麦克风、不播放声音、不调用付费服务或外发个人素材。数字人是独立可选模块，基础 Windows 安装和长会议的未验项仍然保留。
+
+## 结论
+
+不存在一个已核实能在本机同时满足“高保真、准确眼动/身体跟随、本人原声、低于 400 ms 新增延迟、可商用”的现成 SOTA 项目。论文榜单、推理 FPS、输出文件标注 25 fps、真正送到会议的 25 fps 是不同证据。
+
+采取两条本地候选和一条 API 对照：
+
+1. **动作可控优先：LivePortrait / FasterLivePortrait + 原声口型组件。** 用于有摄像头的眨眼、头姿跟随与视线调节；MuseTalk 1.5 可作为口型基线。串联后的形变和延迟必须测，不能假定两者直接叠加可用。
+2. **无摄像头生成候选：SoulX-FlashHead Lite。** 作为 2026 年轻量流式模型的画质/吞吐对照。默认分块已经超过 R10 延迟目标，因此先定位为练习/录制候选，不把“96 FPS”写成真人交流已通过。
+3. **API 对照优先核验腾讯云原声音频驱动，其次 Tavus Echo / LiveAvatar LITE。** 腾讯的官方接口明确描述实时麦克风分片，Tavus 官方有原声直通示例。海外服务要另外验证大陆网络、建连、计费与停流。API 不替代本地动作控制层。
+
+AVTR-1 是值得研究的交互前沿，但当前整套许可不适合直接并入商用底座。重型视频扩散模型保留为画质参照，不占用本机资源重复验证显然不匹配的配置。
+
+## 用户需求的明确解释
+
+“形象代替本人展示”让用户无需把真实摄像头画面直接展示给对方。**说什么、何时说仍由本人决定**；这个模式不经过 LLM 改写或 TTS，也不做默认声音克隆。全程代理继续属于 R11，单独启用。
+
+### 有摄像头：本地动作驱动
+
+- 摄像头只在用户启用本地跟踪后打开。对方接收数字形象画面，原始摄像头画面不进入输出链路。
+- 提取眨眼、头部朝向、面部表情、肩膀/上身动作。摄像头是动作传感器，不要求用户持续直视镜头。
+- 眼睛提供“跟随”和“自然注视”两种控制：前者保留观察到的动作；后者限制大幅视线偏移，保留真实眨眼，并叠加少量平滑的微小视线变化。参数调节先本地预览，避免一直正视、双眼漂移和左右不同步。
+- 普通 RGB 摄像头的面部/虹膜关键点不是精密眼动仪：眼镜反光、侧脸、遮挡和光线会影响结果。低置信度时平滑退回待机动作，不保持异常姿态，也不自动暴露原画面。
+- 身体分级：先头肩和轻微躯干位移；手臂、双手、全身骨骼单独验收。头部模型不能冒称完整身体重定向。
+
+MediaPipe 官方提供面部关键点、表情系数与变换矩阵，以及独立的人体姿态关键点；它们是跟踪信号来源，仍需映射到实际头像渲染器。[Face Landmarker](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker) · [Pose Landmarker](https://developers.google.com/edge/mediapipe/solutions/vision/pose_landmarker)
+
+### 无摄像头：合成自然动作
+
+- 不启动摄像头。使用待机、聆听、说话、暂停等状态控制微小头动、呼吸感、眨眼和注视点。
+- 动作应有时间连续性和停留时间，不逐帧随机；眨眼时双眼协调，微视线变化与头姿保持合理关系，避免固定周期和机械摆动。
+- 音频只驱动口型/说话节奏；没有真实动作观测时，界面明确为合成动作。不要把自动点头当作用户真实表达的同意。
+- 自然度需要以无声视频和正常音画分别评审；“动作参数有变化”不能作为自然度通过的证据。
+
+### 原声与口型同步
+
+```mermaid
+flowchart LR
+  A[本人原声 PCM] --> B[重采样与采样时钟]
+  B --> C[原声口型渲染]
+  B --> D[有上限的音频延迟缓冲]
+  E[可选本地摄像头跟踪] --> F[眨眼/头姿/视线控制]
+  G[无摄像头自然动作] --> F
+  F --> C
+  C --> H[按时间戳配对音画]
+  D --> H
+  H --> I[虚拟摄像头 + 虚拟音频输出]
+  I --> J[会议应用]
+```
+
+采用音频采样位置作为媒体时间基准，视频帧和跟踪信号对齐同一时间线。本人原声可以适度延迟发送，但延迟只能改善同步，不能消除互动等待。若模型先攒 960 ms 音频才推理，增加音频缓冲无法把它变成 400 ms 的链路。
+
+会议应用须选择配对后的虚拟音频，避免同时发送未延迟麦克风形成双声。自己监听对方的声音不跟随延迟。视频停顿时短时维持画面、缓冲设置上限；超限停止输出并提示恢复选择，不无界堆积、不丢掉一段本人发言后假装成功。切回真实摄像头必须是用户显式动作。
+
+API 返回的同步音画应作为一个整体接收，不再给已经同步的返回音频重复加一遍延迟。WebRTC 预览成功还需要虚拟设备桥接和会议对端验证；不等于飞书已经可用。
+
+## 本地项目：研究前沿与可部署性分开
+
+以下性能均为上游报告，除特别标注外没有在本机复测。扫描包含 2026 年发布/更新项目，不宣称覆盖所有论文，也不跨数据集拼接一个总榜。
+
+| 项目 | 已核实能力与近期信息 | Windows / 16GB / 本需求判断 |
+| --- | --- | --- |
+| [SoulX-FlashHead](https://github.com/Soul-AILab/SoulX-FlashHead) | 2026-02 发布；1.3B；Lite 官方报告单 RTX 4090 96 FPS，Pro 单 4090 10.8 FPS | Lite 入选本机候选；4090 成绩不能外推成 4070 Ti SUPER 实测。原生 Windows 依赖需要适配；未发现眼动/身体关键点直控接口 |
+| [AVTR-1](https://avtr-1.avaturn.live/) | 2026 技术报告；双音频驱动说话/聆听；153M 动作模型；官方报告 RTX 4060 Ti 每 5 帧约 162 ms | 有价值的交互参照；当前 README 要求 Linux/CUDA/TensorRT。模型、渲染器、服务端分别授权，不能整体按宽松开源集成 |
+| [LivePortrait](https://github.com/KlingAIResearch/LivePortrait) / [FasterLivePortrait](https://github.com/warmshao/FasterLivePortrait) | 前者表情/头姿与眼唇重定向；后者 ONNX/TensorRT、摄像头路径、Windows 说明，作者报告 3090 单帧全流程 30+ FPS | 有摄像头动作控制优先候选；不是完整全身模型，也不因眼睛开合可调就认定有精确注视方向控制。InsightFace、JoyVASA 等依赖逐项核查 |
+| [MuseTalk 1.5](https://github.com/TMElyralab/MuseTalk) + [LiveTalking](https://github.com/lipku/LiveTalking) | MuseTalk 2025-03 的 1.5 为口型基线，处理 256×256 面部区域；LiveTalking 提供会话、打断与输出编排 | 工程基线而非最新整体数字人 SOTA。视频底图的眼神/身体不会自动变成当前用户动作；还需原声流式入口与虚拟输出验证 |
+| [EchoMimicV3-Flash](https://github.com/antgroup/echomimic_v3) | 2026-01 更新，官方列出 8 步、12G 显存路径与最高 768×768 | 可作为录制画质对照。能装入显存不代表实时，不预设满足连续麦克风延迟 |
+| [Alibaba LiveAvatar](https://github.com/Alibaba-Quark/LiveAvatar) | 14B、长时流式；官方 45 FPS 来自多 H800；2026-01 FP8 路径面向 48GB 显卡 | 不进入本机 16GB 首轮。**与 HeyGen 商业 LiveAvatar 不是同一个产品** |
+| [LongCat-Video-Avatar 1.5](https://arxiv.org/abs/2605.26486) | 2026-05，强调半身/全身动作、长视频与身份一致性 | 画质参考；官方集成方 vLLM-Omni 的 H100 路径峰值约 41 GiB、目前离线推理，不能据此当作本机实时方案。[部署记录](https://github.com/vllm-project/vllm-omni/blob/main/recipes/meituan-longcat/LongCat-Video-Avatar-1.5.md) |
+| [StreamAvatar](https://streamavatar.github.io/) / [EchoAvatar](https://robinwitch.github.io/EchoAvatar-Page/) | 2026 前沿：分别涉及流式说话/聆听与音频驱动全身动作 | 保留追踪；本轮未核完可用权重、Windows 依赖与整套许可证，不列入已可部署名单 |
+
+### 三个决定性源码发现
+
+**FlashHead 的吞吐不等于低延迟。** 固定源码 `9bc03de` 的 `infer_params.yaml` 为 33 帧/25 fps；Lite 权重配置时间步长为 8，历史动作帧数为 `(2−1)×8+1=9`，每批新音频为 `(33−9)/25=0.96 s`。`gradio_app_streaming.py` 先读音频文件、合并 3 批再输出 MP4；不能直接改个摄像头入口就声称实时会议。原生依赖含 NCCL，模型模块顶层导入 xfuser；单卡设备分支存在，但仍须解决导入依赖。模型有 PyTorch SDPA 回退，不必直接认定一定要强装 FlashAttention。[源码](https://github.com/Soul-AILab/SoulX-FlashHead/tree/9bc03de06bb0de82cd6bc477804512ae06144bf2) · [Lite 配置](https://huggingface.co/Soul-AILab/SoulX-FlashHead-1_3B/blob/5fbd2e44ba08ab2deb28bd55cff2c15523e51ba5/Model_Lite/config.json)
+
+**FlashHead Lite 并非整包 Apache-2.0。** 模型卡分别列出 DiT/音频编码器的 Apache-2.0 与 Lite 使用的 LTX VAE 的 Open-RAIL-M；发布时保留分别对应的许可，不能只复制 GitHub 根目录 LICENSE。[模型卡](https://huggingface.co/Soul-AILab/SoulX-FlashHead-1_3B)
+
+**AVTR-1 不是整套免费商用开源。** 当前许可图明确渲染器和 Streamer 为 PolyForm Noncommercial；权重另有 Community License，另依赖 InsightFace 权重限制。故本轮只保留源码审阅，不复制其渲染/调度实现进入听弦。[许可图](https://github.com/avaturn-live/avtr-1/blob/eb1e5a89ed7bec3debe712b090efd676b3a420bd/LICENSE.md)
+
+## 商业 API 的可行性
+
+选择标准是“接收本人已经说出的原声音频并渲染”，不是“能让 AI 数字人回答”。后者可用于 R11，但不能替代 R10。
+
+| 供应商/模式 | 原声入口与控制证据 | 采用判断 |
+| --- | --- | --- |
+| [腾讯云智能数智人](https://cloud.tencent.com/document/product/1240/100398) | WebSocket `SEND_AUDIO`，16kHz/16bit/mono PCM；明确写出麦克风每 160ms 发送；同一段 ReqId、递增 Seq、空 final 包、Interrupt；支持形象预置动作 | 国内 R10 首个接口对照候选。动作指令不是实时眼动/骨骼透传，创建个人形象、费用与返回音画延迟需账号实测 |
+| [Tavus Echo](https://docs.tavus.io/sections/conversational-video-interface/quickstart/pipeline-modes) | 支持直接文本/音频驱动，绕过大部分对话管线；官方有[用户原声直通示例](https://github.com/Tavus-Engineering/tavus-audio-passthrough-demo) | 原声语义匹配；需验证两段 RTC/重采样成本、地域可达性、价格和实际停流。Echo 不等于默认全套感知能力 |
+| [HeyGen LiveAvatar LITE](https://docs.liveavatar.com/docs/lite-mode/events) | 24kHz/16bit/mono PCM，`agent.speak` / `speak_end` / `interrupt`，聆听状态控制；建议约 1s 音频片 | 可作 API 同步/画质对照。推荐分片已经对低延迟真人交流不利，必须单独验证更小分片，不能提前承诺 ≤800ms |
+| [Anam audio passthrough](https://anam.ai/docs/javascript-sdk/examples/custom-tts) | 支持提供 PCM、结束序列和打断，禁用其默认音频输入与内置 AI | 备选；文档示例主要针对外部 TTS，连续 1× 本人音频的缓冲/自然停顿表现仍待测，不能只看示例成功 |
+| [Simli](https://docs.simli.com/api-reference/audio-info) | 原始 16kHz PCM16 mono；有自定义形象和实时输出 SDK | 轻量 API 备选；模型/动作控制和自然度需实测。文档索引把部分动画控制列为 coming soon，不能当作已可用的身体跟随。[当前索引](https://docs.simli.com/llms.txt) |
+| [火山 Flowact-R1 实时数字人](https://docs.volcengine.com/docs/large-model-of-image-generation/real-time-interactive-digital-human-api-interface-documentation?lang=zh) | 16kHz PCM 流（片长≥40ms）与 Prompt 动作/表情指令；与离线 OmniHuman 产品区分 | 生成动作路线可研究；SDK 产品页当前为 480p/25fps，首帧约 2–3s，不能直接承诺 R10 门槛。动作提示不是逐帧重定向 |
+
+费用只记录本轮官方可核实项目：LiveAvatar LITE 为 **1 credit/会话分钟**（不是只按说话分钟），Essential $99/月、1,100+10 credits；Business $475/月、6,000+10 credits，超额分别 $0.095/$0.09 每 credit。60 分钟 LITE 消耗约 60 credits，实际单次会话时长限制要另查账号；不因有分钟额度就认为能连续一小时。[官方计费](https://docs.liveavatar.com/docs/faq/credits)
+
+火山该 SDK 产品页当前标价 **1 并发包月 42,000 元、包年 420,000 元**，要求先确认资源；这是具体产品规格，不泛化成火山所有数字人接口统一价格。暂不作为个人练习阶段首个付费尝试。[官方产品与计费页](https://docs.volcengine.com/docs/large-model-of-image-generation/real-time-interactive-digital-human-sdk-product-introduction?lang=zh)
+
+Tavus 公共价格页在本轮返回的内容含新旧重复方案，未采纳冲突数字；腾讯、Anam、Simli 的本次可用账号、个性形象成本和实际套餐尚未核验。统一成本比较应计算形象创建、会话占用时长、并发、RTC/带宽、超额、断线后计费和税费。[Tavus 价格页](https://www.tavus.io/pricing)
+
+本轮没有注册、开通付费、联系厂商或发送声音/肖像。真实 API 测试前集中确认账号、额度、合成测试外发及地区条件；不从旧配置恢复凭证。
+
+## 集成结构与下一步实验
+
+保留现有 Tauri/Rust/React，独立本地渲染服务通过能力表声明 `audio_input`、`blink_control`、`gaze_control`、`head_pose`、`upper_body`、`interrupt`、输出时间戳及真实支持的分辨率。未知能力不能默认标 true。展示窗口仍只读，不持有 Key、不自行采集或发起模型请求。
+
+R10 只接原声；R11 在同一媒体入口上接授权 TTS 输出，但必须区分 `self_actual` 与 `proxy_emitted`，不能把草稿或尚未输出的音频记入本人已说内容。输出适配器负责独立 session/generation、缓冲上限、设备恢复和本地接管，不依赖云端确认才停止本机播放。
+
+| 实验 | 假设 / 能改变的决定 | 停止条件 | 证据与受影响产物 |
+| --- | --- | --- | --- |
+| E01 GPU 小运算 | 驱动能真正承载当前 torch CUDA；决定能否开始本地模型实验 | 一次正确矩阵运算，或明确的加载/设备错误即止 | 实机运行环境；不能推导数字人 FPS |
+| E02 固定源码与许可审计 | 候选公开实现适合本机延迟与授权；决定是否下载权重、移植 | 发现决定性的延迟/许可/平台限制后不继续昂贵全配置实验 | 来源锁定、选型报告；FlashHead 默认延迟、AVTR-1 许可边界 |
+| E03 原声分片合成回归 | 不同输入边界仍保持全部样本、顺序、结束和取消隔离 | 协议契约与样本守恒通过；失败先修根因 | 可复用原声分片模块；不是 API 接入验收 |
+| E04 可控头像无声渲染 | 合成肖像 + 预设动作可输出稳定头姿/眨眼；决定保留何种渲染器 | 模型依赖不匹配、OOM 或时延明显不达标时记录并停该路径 | 先 10s 视频与原始逐帧计时；再决定是否做 30min |
+| E05 原声音画闭环 | 本人音频 1× 输入 + 有界延迟能自然交流 | 等用户允许采集；短片达不到同步/时延目标则不直接做 60min | 采样 PTS、实际输出帧、P50/P95 延迟、远端录制 |
+| E06 API 配对对照 | 同一合成输入的云渲染能带来有价值的画质/延迟收益 | 获外发与额度许可后，只跑有决策价值的候选；超预算/断线停止 | 计费、连接和播放时延；不自动切供应商 |
+
+验收自然度时检查眨眼时序、视线漂移、双眼一致、嘴眼冲突、肩颈稳定、遮挡恢复、长静默、中文/英文术语、快速打断。相同素材比较不同引擎；不能用不同素材和硬件的演示视频宣布一个唯一 SOTA。
+
+当前执行证据见 [本轮验收记录](avatar-validation-2026-11-06.md)，候选版本见 [来源锁定](../avatar/sources.lock.json)。
