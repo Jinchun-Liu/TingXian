@@ -1,4 +1,5 @@
 pub mod background;
+pub mod recovery;
 pub mod index;
 pub mod model;
 pub mod import_control;

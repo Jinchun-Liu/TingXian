@@ -49,7 +49,7 @@ impl InterviewState {
             Index::open(&dir.join("profile.sqlite")).await
         }).await
     }
-    async fn api_key(&self)->String { self.key.lock().await.clone().unwrap_or_else(||std::env::var("DEEPSEEK_API_KEY").unwrap_or_default()) }
+    pub(crate) async fn api_key(&self)->String { self.key.lock().await.clone().unwrap_or_else(||std::env::var("DEEPSEEK_API_KEY").unwrap_or_default()) }
     pub(crate) async fn provider_key(&self,profile:&interview_core::ProviderProfile)->String {
         if let Some((endpoint,key))=self.provider_keys.lock().await.get(&profile.id){
             if endpoint==&profile.endpoint{return key.clone();}

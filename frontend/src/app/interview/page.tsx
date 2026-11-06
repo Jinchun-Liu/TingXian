@@ -1,5 +1,8 @@
 'use client';
 
+import {useInterviewRecovery} from '@/lib/use-interview-recovery';
+import {parseRecoverySnapshot,RecoverySnapshot} from '@/lib/interview-recovery';
+import {RecoveryDrafts} from '@/components/interview/RecoveryDrafts';
 import {SavedSessionPreview} from '@/components/interview/SavedSessionPreview';
 import {useSessionCommands} from '@/lib/session-commands';
 import {PreviousMeetings} from '@/components/interview/PreviousMeetings';
@@ -412,6 +415,7 @@ export default function InterviewPage() {
     current.current = { question: '', answer: '' }; setPhase('会话已结束 · 已保存到本机，可恢复'); await refresh();
   });
   const sessionSnapshot = (): SessionSnapshot => parseSessionSnapshot({version:1,history:historyRef.current,transcripts,spoken_dialogue:spoken.current,current:current.current,calls:usageLedger.current.acceptedCalls(),usage,usage_ledger:usageLedger.current.snapshot()});
+  const draftRecovery = useInterviewRecovery(()=>({version:1,snapshot:parseSessionSnapshot({version:1,history:historyRef.current,transcripts,spoken_dialogue:spoken.current,current:current.current,calls:usageLedger.current.acceptedCalls(),usage,usage_ledger:usageLedger.current.snapshot()},true),composer:{question,confirmed_answer:confirmedAnswer}}));
   const saveSessionSnapshot = async () => {
     const saved = await invoke<SavedSession>('interview_session_save',{snapshot:sessionSnapshot(),confirmed:true});
     setSavedSessions(null);setSavedBefore(null);
@@ -428,13 +432,14 @@ export default function InterviewPage() {
     if(panel==='audio'){setAudioPanel(true);}
     if(panel==='history'){setInitialMeetingId(q.get('meeting')||undefined);void listSessions();}
   },[]);
-  const restoreSession = (id:number) => run(async()=>{
+  const restoreSession = (id:number|string) => run(async()=>{
     if (sessionOperation.current || recording.isRecording || inFlight.current) throw Error('请先结束当前采集和回答，再恢复保存记录');
     if ((historyRef.current.length || question || confirmedAnswer) && !allowReplaceSession) throw Error('请先保存当前内容，再明确允许替换当前显示');
     const previousHistory=historyRef.current;
     sessionOperation.current=true;acceptTranscripts.current=false;
     try {
-      const saved=recoverSessionSnapshot(await invoke<unknown>('interview_session_load',{id}),crypto.randomUUID());
+      const draft=typeof id==='string'?parseRecoverySnapshot(await invoke<RecoverySnapshot>('interview_recovery_load',{id})):null;
+      const saved=recoverSessionSnapshot(draft?.snapshot ?? await invoke<unknown>('interview_session_load',{id}),crypto.randomUUID(),!!draft);
       if (historyRef.current !== previousHistory) throw Error('当前内容发生变化，未替换；请重新选择恢复');
       setAllowReplaceSession(false);
       live.current.automatic=false;setAutomatic(false);setAudioAllowed(false);setCloudAllowed(false);setFrozen(false);
@@ -445,10 +450,10 @@ export default function InterviewPage() {
       setFeedGeneration(v=>v+1);
       current.current=saved.current;setCalls(saved.calls);setUsage(saved.usage);setLimit(Math.max(DEFAULT_REQUEST_LIMIT,saved.calls));
       usageLedger.current=new InterviewUsage(saved.usage_ledger??undefined,saved.calls);setUsageVersion(v=>v+1);
-      setQuestion('');setAnswer('');setSources([]);setConflicts([]);setConfirmedAnswer('');setEditingSelfId(null);setTiming('');
+      setQuestion(draft?.composer.question||'');setAnswer('');setSources([]);setConflicts([]);setConfirmedAnswer(draft?.composer.confirmed_answer||'');setEditingSelfId(null);setTiming('');
       selfEditBase.current=null;
       setSavedSessions(null);setSavedBefore(null);setCompactControls(false);
-      setPhase('已恢复保存会话 · 采集和自动回答均未开启');setNotice('已载入保存时的双方发言、AI建议和来源。旧来源与事实版本仅供回顾；不会自动补发未完成问题。继续前请重新确认转写和外发许可。');
+      setPhase(draft?'已恢复草稿 · 采集和自动回答均未开启':'已恢复保存会话 · 采集和自动回答均未开启');setNotice('已载入保存时的双方发言、AI建议和来源。旧来源与事实版本仅供回顾；不会自动补发未完成问题。继续前请重新确认转写和外发许可。');
     } finally {sessionOperation.current=false;}
   });
   const exportSession = () => run(async () => {
@@ -477,6 +482,7 @@ export default function InterviewPage() {
     live.current.automatic = false; setAutomatic(false);
     indexedDBService.suspendRecordingWrites();
     setPhase('正在停止采集并将历史移入废纸篓');
+    await draftRecovery.writer.pause();
     let archivePath = '';
     try {
       await cancel();
@@ -485,7 +491,7 @@ export default function InterviewPage() {
       microphoneGate.current.close(); audioHealth.current.close(); syncHealth();
       const recovery = await indexedDBService.snapshotInterviewHistory();
       const report = await invoke<{archive_path:string; recording_folders:number; database_meetings:number; saved_sessions?:number}>('interview_history_clear', {
-        snapshot: { current_session: { history: historyRef.current, transcripts, spoken_dialogue: spoken.current, current: current.current, calls:usageLedger.current.acceptedCalls(), usage, usage_ledger:usageLedger.current.snapshot() }, recovery }
+        snapshot: { current_session: { composer:{question,confirmed_answer:confirmedAnswer}, history: historyRef.current, transcripts, spoken_dialogue: spoken.current, current: current.current, calls:usageLedger.current.acceptedCalls(), usage, usage_ledger:usageLedger.current.snapshot() }, recovery }
       });
       archivePath = report.archive_path;
       await indexedDBService.removeArchivedInterviewHistory(recovery);
@@ -499,13 +505,14 @@ export default function InterviewPage() {
       usageLedger.current=new InterviewUsage();setUsageVersion(v=>v+1);
       setTiming(''); setUsage('未知'); setGenerating(false); setFrozen(false); setLevel(0); setMicLevel(0);
       setFeedGeneration(v=>v+1);
+      await draftRecovery.writer.resetAfterClear();
       setPhase('历史已清空 · 可重新开始');
       setNotice(`历史已移入废纸篓：${report.recording_folders} 个录音记录目录、${report.database_meetings} 条已保存会议、${report.saved_sessions || 0} 份会话快照，以及本次对话和恢复缓存。个人资料库已保留。现在可以开始新会话。`);
       await refresh();
     } catch (e) {
       setPhase('清理未完成 · 已停止自动回答');
       throw archivePath ? new Error(`${String(e)}；完整备份已保留在废纸篓：${archivePath}`) : e;
-    } finally { clearingHistory.current = false; }
+    } finally { clearingHistory.current = false; draftRecovery.writer.resume(); }
   });
   const clearResidue = () => run(async()=>{
     if(clearingHistory.current || sessionOperation.current || recording.isRecording || inFlight.current || historyRef.current.length || question || confirmedAnswer || status?.session_active)throw Error('请先结束当前会话，保留当前窗口内容');
@@ -627,6 +634,8 @@ export default function InterviewPage() {
     </div>
     <ConnectionCheck disabled={operationBusy||recording.isRecording||generating||!!status?.session_active} hasKey={!!status?.key_configured} revision={connectionRevision} onCheckingChange={setConnectionChecking} />
       </div></details>
+    {draftRecovery.drafts.length>0 && <Button variant="outline" size="sm" onClick={()=>void listSessions()}>恢复草稿（{draftRecovery.drafts.length}）</Button>}
+    {draftRecovery.error && <div role="alert" className="text-xs text-amber-800"><p>恢复草稿未保存：{draftRecovery.error}</p><Button size="sm" variant="outline" onClick={()=>void draftRecovery.writer.retry().catch(error)}>重试保存草稿</Button></div>}
     <ResidueNotice blocked={busy || recording.isRecording || generating || history.length>0 || !!question || !!confirmedAnswer || !!status?.session_active} revision={residueRevision} onClear={clearResidue} />
       <nav aria-label="工作台导航" className="tx-basic-nav"><Button className="w-full" variant="outline" aria-expanded={settings} onClick={() => {setAudioPanel(false);setSavedSessions(null);setSettings(!settings);}}><Settings2 className="mr-2 h-4 w-4" />资料与设置</Button>{!recording.isRecording && !generating && !busy && <Link href="/interview-workspace" className="underline">高级对话工作区</Link>}<button type="button" onClick={()=>sendCommand('history')}>会议记录</button><button type="button" onClick={()=>sendCommand('audio')}>音频设置</button></nav>
     </aside>
@@ -674,7 +683,7 @@ export default function InterviewPage() {
       <RequestSettings locked={busy || !!status?.session_active || recording.isRecording || generating} onSaved={config=>{setStatus(s=>s?{...s,model:config.model}:s);setConnectionRevision(r=>r+1);}} />
       <div className="flex gap-2"><Input type="password" aria-label="临时 API Key" autoComplete="off" value={key} onChange={e => setKey(e.target.value)} placeholder="替换本进程 API Key（不回显、不写入前端存储）" /><Button disabled={busy || status?.session_active} onClick={() => run(async () => { await invoke('interview_config', { aliases, key: key || null }); setKey(''); setConnectionRevision(r=>r+1); await refresh(); })}>保存配置</Button><button type="button" onClick={()=>sendCommand('audio')}>音频设置</button></div>
     </section>}
-    {savedSessions !== null && <section className="shrink-0 max-h-[35vh] overflow-y-auto border rounded-lg p-4 text-sm space-y-2"><header className="tx-section-head"><h2>会议记录</h2><Button variant="ghost" size="sm" onClick={()=>setSavedSessions(null)}>返回对话</Button></header>{(history.length>0 || question || confirmedAnswer) && <label className="block"><input type="checkbox" disabled={busy || recording.isRecording || generating} checked={allowReplaceSession} onChange={e=>setAllowReplaceSession(e.target.checked)} /> 我已保存需要的内容，允许替换当前显示（未保存内容会丢失）</label>}{!savedSessions.length && <p>暂无已保存会话</p>}{savedSessions.map(s=><div key={s.id} className="tx-history-row"><span>{new Date(s.saved_at).toLocaleString('zh-CN')} · {s.turns} 条发言 · {s.calls} 次调用</span><Button size="sm" variant="outline" disabled={busy || recording.isRecording || generating || (!!(history.length || question || confirmedAnswer) && !allowReplaceSession)} onClick={()=>restoreSession(s.id)}>恢复这份会话</Button><SavedSessionPreview id={s.id}/></div>)}{savedBefore!==null && <Button variant="outline" disabled={busy} onClick={()=>listSessions(true)}>更早的保存记录</Button>}<PreviousMeetings initialId={initialMeetingId}/></section>}
+    {savedSessions !== null && <section className="shrink-0 max-h-[35vh] overflow-y-auto border rounded-lg p-4 text-sm space-y-2"><header className="tx-section-head"><h2>会议记录</h2><Button variant="ghost" size="sm" onClick={()=>setSavedSessions(null)}>返回对话</Button></header>{(history.length>0 || question || confirmedAnswer) && <label className="block"><input type="checkbox" disabled={busy || recording.isRecording || generating} checked={allowReplaceSession} onChange={e=>setAllowReplaceSession(e.target.checked)} /> 我已保存需要的内容，允许替换当前显示（未保存内容会丢失）</label>}{!savedSessions.length && <p>暂无已保存会话</p>}{savedSessions.map(s=><div key={s.id} className="tx-history-row"><span>{new Date(s.saved_at).toLocaleString('zh-CN')} · {s.turns} 条发言 · {s.calls} 次调用</span><Button size="sm" variant="outline" disabled={busy || recording.isRecording || generating || (!!(history.length || question || confirmedAnswer) && !allowReplaceSession)} onClick={()=>restoreSession(s.id)}>恢复这份会话</Button><SavedSessionPreview id={s.id}/></div>)}{savedBefore!==null && <Button variant="outline" disabled={busy} onClick={()=>listSessions(true)}>更早的保存记录</Button>}<RecoveryDrafts drafts={draftRecovery.drafts} disabled={busy || recording.isRecording || generating || (!!(history.length || question || confirmedAnswer) && !allowReplaceSession)} onRestore={id=>void restoreSession(id)}/><PreviousMeetings initialId={initialMeetingId}/></section>}
     <section aria-label="转写与对话" className="flex min-h-0 flex-1 flex-col rounded-xl border bg-white overflow-hidden">
       <div className="shrink-0 border-b px-4 py-3"><h2 className="font-semibold">对话记录</h2><p className="text-xs text-slate-500">持续转写到结束 · {history.length} 条记录 · 待处理 {queued} 段</p></div>
       <ConversationFeed key={feedGeneration} latest={latestAnswer && {id:latestAnswer.id, text:latestAnswer.suggestion}}

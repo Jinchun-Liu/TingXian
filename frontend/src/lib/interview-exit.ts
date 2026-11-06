@@ -15,6 +15,8 @@ export class InterviewExit {
   private view=IDLE;
   private listeners=new Set<()=>void>();
   private latestRequest=0;
+  private checkpoints=new Set<()=>Promise<void>>();
+  registerCheckpoint=(flush:()=>Promise<void>)=>{this.checkpoints.add(flush);return()=>{this.checkpoints.delete(flush);};};
   private originalSuspended=false;
   constructor(private bridge:Bridge){}
   getSnapshot=()=>this.view;
@@ -43,6 +45,9 @@ export class InterviewExit {
     let archivePath:string|null=null;
     try {
       await this.bridge.invoke('interview_exit_prepare',{requestId:id});
+      if(this.view.requestId!==id)return;
+      this.update({...this.view,phase:'正在保存恢复草稿'});
+      for(const flush of this.checkpoints)await flush();
       if(this.view.requestId!==id)return;
       const recovery:InterviewRecoverySnapshot=await this.bridge.cache.snapshotInterviewHistory();
       if(this.view.requestId!==id)return;

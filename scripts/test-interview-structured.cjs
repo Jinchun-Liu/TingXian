@@ -1,3 +1,4 @@
+const recoveryNative=require('./test-support/recovery-native.cjs')();
 // Real interview page: explicit JSON/YAML scopes, typed preview and stale reply isolation.
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
 const requireFrontend=require('node:module').createRequire(path.resolve(__dirname,'../frontend/package.json'));
@@ -14,6 +15,7 @@ const preview={root:'/synthetic',path:'facts.json',file_hash:'hash-v1',fields:[
 ]};
 const invoke=async(name,args)=>{
  calls.push({name,args});
+  if(name.startsWith('interview_recovery_'))return recoveryNative(name,args);
  if(name==='interview_status')return {root,suggested_root:'',aliases:'',facts:'',key_configured:true,index_version:'1',session_active:false};
  if(name==='profile_import_status')return null;
  if(name==='profile_scan')return [{path:'facts.json',bytes:150,eligible:true,reason:'需预览并选择字段或整份文件'}];

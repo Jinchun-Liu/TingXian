@@ -112,6 +112,22 @@ async function checkStorageGeneration(){
   const retry=setup();retry.fail('remove');await retry.flow.request(request(1));
   assert.equal(retry.cache().transcripts.length,1);retry.fail('');await retry.flow.retry();
   assert.equal(retry.calls.filter(c=>c==='interview_exit_finish').length,1);assert.equal(retry.cache().transcripts.length,0);
+  const checkpoint=setup();let releaseCheckpoint,failCheckpoint=true;
+  const unregister=checkpoint.flow.registerCheckpoint(async()=>{
+    checkpoint.calls.push('checkpoint');
+    if(failCheckpoint)throw Error('synthetic draft disk full');
+    await new Promise(resolve=>releaseCheckpoint=resolve);
+  });
+  await checkpoint.flow.request(request(6));
+  assert.ok(checkpoint.flow.getSnapshot().error.includes('draft disk full'));
+  assert.deepEqual(checkpoint.calls,['suspend','interview_exit_prepare','checkpoint']);
+  assert.equal(checkpoint.cache().transcripts.length,1,'failed draft save must not discard cache');
+  failCheckpoint=false;const saving=checkpoint.flow.retry();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.ok(!checkpoint.calls.includes('interview_exit_finish'),'quit overtook the final checkpoint');
+  releaseCheckpoint();await saving;
+  assert.ok(checkpoint.calls.indexOf('checkpoint')<checkpoint.calls.indexOf('interview_exit_archive'));
+  assert.equal(checkpoint.calls.at(-1),'interview_exit_finish');unregister();
   const cancelled=setup(true);cancelled.fail('snapshot');await cancelled.flow.request(request(1));await cancelled.flow.cancel();
   assert.equal(cancelled.suspended(),true,'cancel must not undo a preexisting write suspension');
   const recovered=setup();await recovered.flow.request({...request(5),phase:'failed'});

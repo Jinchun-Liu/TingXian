@@ -14,6 +14,7 @@ pub struct ClearReport {
     pub recording_folders: usize,
     pub database_meetings: usize,
     pub saved_sessions: usize,
+    pub recovery_drafts: usize,
     pub staged_archives: usize,
 }
 
@@ -200,7 +201,7 @@ where F:FnOnce(&Path)->Result<PathBuf,String> {
     let root = recordings.canonicalize().map_err(|e| e.to_string())?;
     let owned=owned_folders(&root)?;
     let recording_folders=owned.recordings.len();let staged_archives=owned.archives.len();
-    if include_saved {crate::interview_sessions::init(pool).await?;}
+    if include_saved {crate::interview_sessions::init(pool).await?;interview_core::recovery::init(pool).await?;}
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
     let meetings=sqlx::query("SELECT id,title,folder_path FROM meetings").fetch_all(&mut *tx).await.map_err(|e|e.to_string())?;
     let selected=select_meetings(meetings,&owned.recordings)?;
@@ -218,6 +219,9 @@ where F:FnOnce(&Path)->Result<PathBuf,String> {
     let saved=if include_saved {rows_to_json(sqlx::query("SELECT * FROM interview_sessions ORDER BY id").fetch_all(&mut *tx).await.map_err(|e|e.to_string())?)?}else{vec![]};
     let saved_sessions=saved.len();
     database.insert("interview_sessions".into(),json!(saved));
+    let drafts=if include_saved {rows_to_json(sqlx::query("SELECT * FROM tingxian_recovery_drafts ORDER BY id").fetch_all(&mut *tx).await.map_err(|e|e.to_string())?)?}else{vec![]};
+    let recovery_drafts=drafts.len();
+    database.insert("tingxian_recovery_drafts".into(),json!(drafts));
     // Stage on the recordings volume so moving audio never needs copy+delete.
     let staging = root.join(format!("Meetily-历史清理-{}-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"), uuid::Uuid::new_v4()));
     fs::create_dir(&staging).map_err(|e| e.to_string())?;
@@ -263,7 +267,10 @@ where F:FnOnce(&Path)->Result<PathBuf,String> {
                     .bind(id).execute(&mut *tx).await?;
             }
         }
-        if include_saved {sqlx::query("DELETE FROM interview_sessions").execute(&mut *tx).await?;}
+        if include_saved {
+            sqlx::query("DELETE FROM interview_sessions").execute(&mut *tx).await?;
+            interview_core::recovery::clear_archived(&mut tx).await.map_err(sqlx::Error::Protocol)?;
+        }
         Ok::<(),sqlx::Error>(())
     }.await;
     if let Err(error) = removal {
@@ -275,7 +282,7 @@ where F:FnOnce(&Path)->Result<PathBuf,String> {
         let restore = restore_folders(&trashed, &moved);
         return Err(format!("数据库提交失败：{error}；录音恢复结果：{restore:?}；完整备份在 {}", trashed.display()));
     }
-    Ok(ClearReport { archive_path: trashed.to_string_lossy().into_owned(), recording_folders, database_meetings: selected.len(), saved_sessions, staged_archives })
+    Ok(ClearReport { archive_path: trashed.to_string_lossy().into_owned(), recording_folders, database_meetings: selected.len(), saved_sessions, recovery_drafts, staged_archives })
 }
 
 #[cfg(test)]
@@ -284,6 +291,28 @@ mod residue_tests {
     async fn pool()->SqlitePool {
         let pool=SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::query("CREATE TABLE meetings(id TEXT,title TEXT,folder_path TEXT)").execute(&pool).await.unwrap();pool
+    }
+    #[tokio::test]
+    async fn recovery_drafts_are_preserved_on_exit_or_trash_failure_and_archived_on_clear() {
+        use interview_core::recovery;
+        let pool=pool().await;
+        let root=std::env::temp_dir().join(format!("tingxian-recovery-archive-{}",uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();let recordings=root.join("recordings");
+        let draft=json!({"version":1,"snapshot":{"version":1,"history":[],"calls":0},"composer":{"question":"unfinished draft","confirmed_answer":""}});
+        let epoch=recovery::list(&pool).await.unwrap().epoch;
+        recovery::write(&pool,"draft",epoch,1,draft.clone(),"").await.unwrap();
+        let exit=clear_temporary_history_with(&pool,&recordings,json!({}),|source|{let dest=root.join("synthetic-exit-trash");fs::rename(source,&dest).map_err(|e|e.to_string())?;Ok(dest)}).await.unwrap();
+        assert_eq!(exit.recovery_drafts,0);assert_eq!(recovery::load(&pool,"draft").await.unwrap(),draft);
+        let failed=clear_history_with(&pool,&recordings,json!({}),|_|Err("synthetic Trash refusal".into())).await.unwrap_err();
+        assert!(failed.contains("synthetic Trash refusal"));assert_eq!(recovery::list(&pool).await.unwrap().epoch,epoch);
+        assert_eq!(recovery::load(&pool,"draft").await.unwrap(),draft);
+        let cleared=clear_history_with(&pool,&recordings,json!({}),|source|{let dest=root.join("synthetic-clear-trash");fs::rename(source,&dest).map_err(|e|e.to_string())?;Ok(dest)}).await.unwrap();
+        assert_eq!(cleared.recovery_drafts,1);
+        let archive:Value=serde_json::from_slice(&fs::read(Path::new(&cleared.archive_path).join("history.json")).unwrap()).unwrap();
+        let row=&archive["database_rows"]["tingxian_recovery_drafts"][0];
+        assert_eq!(serde_json::from_str::<Value>(row["payload"].as_str().unwrap()).unwrap(),draft);
+        let listed=recovery::list(&pool).await.unwrap();assert!(listed.drafts.is_empty());assert_eq!(listed.epoch,epoch+1);
+        assert!(recovery::write(&pool,"draft",epoch,2,draft,"").await.is_err(),"late checkpoint revived cleared history");
     }
     #[tokio::test]
     async fn metadata_only_inspection_counts_owned_and_unfinished_records_without_initializing_saved_sessions() {

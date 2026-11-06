@@ -24,7 +24,10 @@ pub async fn init(pool:&SqlitePool)->Result<(),String> {
 }
 fn valid_text(v:&Value,key:&str)->bool {v.get(key).and_then(Value::as_str).is_some()}
 fn validate(snapshot:&Snapshot)->Result<(),String> {
-    if snapshot.version!=1 || snapshot.history.is_empty() || snapshot.history.len()>10000 || snapshot.transcripts.len()>120 || snapshot.spoken_dialogue.len()>120 {return Err("会话版本或记录数量无效；未保存或替换当前记录".into());}
+    validate_snapshot(snapshot,false)
+}
+pub(crate) fn validate_snapshot(snapshot:&Snapshot,allow_empty:bool)->Result<(),String> {
+    if snapshot.version!=1 || (!allow_empty && snapshot.history.is_empty()) || snapshot.history.len()>10000 || snapshot.transcripts.len()>120 || snapshot.spoken_dialogue.len()>120 {return Err("会话版本或记录数量无效；未保存或替换当前记录".into());}
     let mut ids=std::collections::HashSet::new();
     for t in &snapshot.history {
         if !["remote","self","manual"].contains(&t["role"].as_str().unwrap_or("")) || !["listening","queued","generating","done","error","cancelled","recorded"].contains(&t["status"].as_str().unwrap_or(""))
@@ -63,7 +66,7 @@ fn validate_usage(value:&Value,calls:u32)->Result<(),String> {
     if accepted!=calls as u64{return Err("会话调用数与用量记录不一致，当前记录保留".into());}
     Ok(())
 }
-fn scrub(value:&mut Value,depth:usize)->Result<(),String> {
+pub(crate) fn scrub(value:&mut Value,depth:usize)->Result<(),String> {
     if depth>32 {return Err("会话结构过深".into());}
     match value {
         Value::Array(items)=>for v in items {scrub(v,depth+1)?;},

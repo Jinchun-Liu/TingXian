@@ -1,3 +1,4 @@
+const recoveryNative=require('./test-support/recovery-native.cjs')();
 // Exercises the real page's controls with a strict native command contract.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -27,6 +28,7 @@ const healthy=()=>({session_id:++nativeSession,recording:true,active:true,paused
 let native = { recording: false, enabled: false, epoch: 0 }, failClear = false, failIndexClear = false, indexDocuments = 2;
 const invoke = async (name, args) => {
   calls.push({ name, args });
+  if(name.startsWith('interview_recovery_'))return recoveryNative(name,args);
   if(name==='interview_preferences_save'){scene=args.preferences.scenario;return {...args.preferences};}
   if(name==='interview_preferences_get')return {scenario:scene,role:'',organization:'',context:'',terminology:'',answer_language:'auto',transcription_language:'auto'};
   if(name==='pause_recording'){paused=true;return;}
@@ -85,7 +87,7 @@ const invoke = async (name, args) => {
   if (name === 'interview_history_clear') {
     assert.equal(native.recording, false, 'clear before stopping capture');
     if (failClear) throw Error('synthetic Trash failure');
-    const saved_sessions=savedRows.length;savedRows=[];
+    const saved_sessions=savedRows.length;savedRows=[];recoveryNative.clear();
     return {archive_path:'/synthetic/Trash/archive',recording_folders:1,database_meetings:1,saved_sessions};
   }
   if (['answer_cancel','session_clear'].includes(name)) return;
@@ -508,6 +510,27 @@ function text(node) { return typeof node === 'string' ? node : (node?.children||
   await finish();
   await choose('参会模式','pair');await scoped(9503,'下一题，不点名');await latestTick();assert.equal(answers().length,previous+2);
   await finish();await click('停止采集');await act(async()=>tree.unmount());
+  // Reopen an interrupted draft: partial output and editor text survive, but no
+  // capture, model call or accepted-usage replay occurs until a new user action.
+  recoveryNative.clear();
+  const interrupted=structuredClone(explicitlySaved.snapshot);
+  interrupted.history[0].status='generating';interrupted.history[0].suggestion='断线前已经生成的答案';
+  await recoveryNative('interview_recovery_write',{id:'interrupted-window',epoch:(await recoveryNative('interview_recovery_list')).epoch,revision:1,draft:{version:1,snapshot:interrupted,composer:{question:'尚未发送的追问',confirmed_answer:'本人尚未提交的输入'}}});
+  const workBeforeRecovery=calls.filter(c=>['answer_start','interview_audio_start','interview_session_save'].includes(c.name)).length;
+  await act(async()=>{tree=create(React.createElement(load('app/interview/page.tsx').default));});
+  assert.ok(!text(tree.toJSON()).includes('断线前已经生成的答案'),'opening loaded a draft without selection');
+  await click('恢复草稿（1）');await click('恢复草稿');
+  assert.ok(text(tree.toJSON()).includes('断线前已经生成的答案'));assert.ok(!text(tree.toJSON()).includes('正在生成'));
+  assert.equal(tree.root.findByProps({id:'question'}).props.value,'尚未发送的追问');
+  assert.ok(tree.root.findAllByType('textarea').some(n=>n.props.value==='本人尚未提交的输入'));
+  assert.equal(calls.filter(c=>['answer_start','interview_audio_start','interview_session_save'].includes(c.name)).length,workBeforeRecovery);
+  for(const label of ['已获允许使用转写','允许向 DeepSeek'])assert.equal(tree.root.findAllByType('label').find(n=>text(n).includes(label)).findByType('input').props.checked,false);
+  await click('恢复草稿（1）');assert.equal(button('恢复草稿').props.disabled,true,'recovery replaced live input without review');
+  await click('返回对话');await click('清空历史，重新开始');assert.equal(recoveryNative.drafts.size,0);
+  await act(async()=>{timers.filter(t=>t.delay===1000).at(-1).callback();});
+  assert.equal(recoveryNative.drafts.size,0,'old content revived after clear');
+  await act(async()=>tree.unmount());
+  console.log('PASS: actual page explicitly recovers interrupted output, editor and usage, with capture/AI off; replacement and clear fences hold');
   console.log('PASS: actual page records group context, alerts before answering, dispatches only addressed speech, and switches back to pairs');
   console.log('PASS: all general scenes capture without Key/consent, resume stays local, and learning/meeting actions are explicit with labelled AI history');
   console.log('PASS: default/clear limit 80, restore counts, warning at 75, advance +20, in-flight completion, manual/auto block, continued capture/local self editing, retained queue and explicit resume');

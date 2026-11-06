@@ -477,6 +477,7 @@ mod interview_jobs;
 mod interview_screenshot;
 mod interview_windows;
 pub mod interview_sessions;
+pub mod interview_recovery;
 pub mod interview_connection;
 pub mod interview_index;
 pub mod tingxian_runtime;
@@ -655,6 +656,9 @@ pub fn run() {
             interview::interview_session_export,
             interview::interview_session_list,
             interview::interview_session_load,
+            interview_recovery::interview_recovery_list,
+            interview_recovery::interview_recovery_write,
+            interview_recovery::interview_recovery_load,
             interview::tingxian_session_preview,
             interview::interview_history_clear,
             interview::interview_residue_status,

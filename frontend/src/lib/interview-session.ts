@@ -30,9 +30,9 @@ function transcriptValid(v:any):boolean {
 }
 /** Validate the full payload before changing the live window. No best-effort
  * partial recovery that could silently mix or drop dialogue. */
-export function parseSessionSnapshot(raw:unknown):SessionSnapshot {
+export function parseSessionSnapshot(raw:unknown,allowEmpty=false):SessionSnapshot {
   const v:any=raw;
-  if(!object(v) || v.version!==1 || !Array.isArray(v.history) || !v.history.length || v.history.length>10000
+  if(!object(v) || v.version!==1 || !Array.isArray(v.history) || (!allowEmpty && !v.history.length) || v.history.length>10000
     || !strings(v.current,['question','answer']) || !Number.isSafeInteger(v.calls) || v.calls<0 || typeof v.usage!=='string'
     || ![v.transcripts,v.spoken_dialogue].every(a=>Array.isArray(a) && a.length<=120 && a.every(transcriptValid)))throw Error('保存的会话格式无效，当前记录保留');
   const ids=new Set<string>();
@@ -46,9 +46,9 @@ export function parseSessionSnapshot(raw:unknown):SessionSnapshot {
   if(v.usage_ledger!=null)parseUsageSnapshot(v.usage_ledger,v.calls);
   return JSON.parse(JSON.stringify(v));
 }
-export function recoverSessionSnapshot(raw:unknown,prefix:string):SessionSnapshot {
-  const s=parseSessionSnapshot(raw);
+export function recoverSessionSnapshot(raw:unknown,prefix:string,allowEmpty=false):SessionSnapshot {
+  const s=parseSessionSnapshot(raw,allowEmpty);
   s.history=s.history.map(t=>({...t,restored_from:prefix,id:`restored-${prefix}-${t.id}`,status:t.status==='generating'?'cancelled':['queued','listening'].includes(t.status)?'recorded':t.status}));
   if(s.usage_ledger)s.usage_ledger.requests=s.usage_ledger.requests.map(r=>({...r,question_id:`restored-${prefix}-${r.question_id}`,state:r.state==='pending'?'cancelled':r.state}));
-  return parseSessionSnapshot(s);
+  return parseSessionSnapshot(s,allowEmpty);
 }
