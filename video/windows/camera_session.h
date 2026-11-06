@@ -19,6 +19,8 @@ struct CameraBackend {
     virtual HRESULT start() noexcept = 0;
     virtual HRESULT stop() noexcept = 0;
     virtual HRESULT shutdown() noexcept = 0;
+    // Stable non-sensitive stage label retained through cleanup for diagnostics.
+    virtual const char* startup_stage() const noexcept { return "unspecified"; }
     // Only on the owning MTA, after start, serialized with stop/shutdown. The
     // shared preview belongs to this virtual camera; never select a physical one.
     virtual HRESULT preview_source(IMFMediaSource** source) noexcept {

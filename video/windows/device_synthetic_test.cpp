@@ -5,6 +5,7 @@
 #include <mfapi.h>
 #include <mferror.h>
 #include <mfreadwrite.h>
+#include <appmodel.h>
 #include <wrl.h>
 #include <chrono>
 #include <condition_variable>
@@ -149,7 +150,9 @@ HRESULT run_cycle(unsigned cycle) {
         VideoPipeEndpoint endpoint;
         require(producer.publisher.open(&endpoint), "producer_open");
         producer.start();
-        require(session.start(endpoint), "session_start");
+        const HRESULT started = session.start(endpoint);
+        std::cout << "{\"backend_startup_stage\":\"" << backend->startup_stage() << "\"}" << std::endl;
+        require(started, "session_start");
         UINT32 length = 0;
         require(backend->symbolic_link(&link.value, &length), "own_symbolic_link");
         require(link.value && length ? S_OK : E_UNEXPECTED, "nonempty_own_link");
@@ -232,6 +235,10 @@ int wmain(int argc, wchar_t** argv) {
         return 2;
     }
     std::cout << "{\"mode\":\"actual_virtual_device_synthetic_pixels\",\"physical_camera_opened\":false,\"audio_opened\":false}" << std::endl;
+    UINT32 package_length = 0;
+    const LONG package_result = GetCurrentPackageFullName(&package_length, nullptr);
+    std::cout << "{\"package_identity_present\":" << (package_result == ERROR_INSUFFICIENT_BUFFER ? "true" : "false")
+        << ",\"package_query_status\":" << package_result << "}" << std::endl;
     ComApartment apartment;
     if (FAILED(apartment.result)) return 1;
     MediaFoundation mf;

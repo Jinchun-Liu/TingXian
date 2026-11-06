@@ -65,35 +65,47 @@ class WindowsCameraBackend final : public CameraBackend {
     bool mf_started_ = false;
     bool start_attempted_ = false;
     bool started_ = false;
+    const char* startup_stage_ = "idle";
     Handle reservation_;
 public:
     ~WindowsCameraBackend() override { shutdown(); }
+    const char* startup_stage() const noexcept override { return startup_stage_; }
     HRESULT prepare(const VideoPipeEndpoint& endpoint) noexcept override {
+        startup_stage_ = "validate_state";
         if (camera_ || mf_started_) return HRESULT_FROM_WIN32(ERROR_BUSY);
         if (!valid_video_endpoint(endpoint)) return E_INVALIDARG;
         // Caller owns the dedicated MTA. Never initialize/uninitialize COM on
         // arbitrary UI threads or create a privacy-consent deadlock there.
         APTTYPE type; APTTYPEQUALIFIER qualifier;
+        startup_stage_ = "com_apartment";
         HRESULT hr = CoGetApartmentType(&type, &qualifier);
         if (FAILED(hr)) return hr;
         if (type != APTTYPE_MTA) return RPC_E_WRONG_THREAD;
         CameraProbe probe;
+        startup_stage_ = "source_registration";
         hr = registration(probe); if (FAILED(hr)) return hr;
+        startup_stage_ = "reserve_output";
         hr = reserve_video_output(&reservation_.value); if (FAILED(hr)) return hr;
+        startup_stage_ = "load_api";
         hr = api_.load(); if (FAILED(hr)) return hr;
+        startup_stage_ = "mf_startup";
         hr = MFStartup(MF_VERSION, MFSTARTUP_FULL); if (FAILED(hr)) return hr;
         mf_started_ = true;
         BOOL supported = FALSE;
+        startup_stage_ = "query_support";
         hr = api_.supported(MFVirtualCameraType_SoftwareCameraSource, &supported);
         if (FAILED(hr)) return hr;
         if (!supported) return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
+        startup_stage_ = "create_virtual_camera";
         hr = api_.create(MFVirtualCameraType_SoftwareCameraSource, MFVirtualCameraLifetime_Session,
             MFVirtualCameraAccess_CurrentUser, L"听弦视频", SourceId, nullptr, 0, &camera_);
         if (FAILED(hr)) return hr;
         // No physical-camera wrapping. Configuration is scoped to explicit output.
+        startup_stage_ = "set_endpoint";
         return camera_->SetBlob(PipeEndpointAttribute, reinterpret_cast<const UINT8*>(&endpoint), sizeof(endpoint));
     }
     HRESULT start() noexcept override {
+        startup_stage_ = "start_virtual_camera";
         if (!camera_) return E_UNEXPECTED;
         start_attempted_ = true;
         const HRESULT hr = camera_->Start(nullptr);
