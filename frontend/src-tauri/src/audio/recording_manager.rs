@@ -65,7 +65,9 @@ fn wake_audio_connection_sync(speaker_device_name: &str) -> Result<()> {
 
     let host = cpal::default_host();
 
-    let output_device = host.output_devices()?
+    // CPAL's output_devices() probes formats on every device, including
+    // unrelated virtual drivers. Resolve the name before querying formats.
+    let output_device = host.devices()?
         .find(|d| d.name().ok().as_deref() == Some(speaker_device_name))
         .ok_or_else(|| anyhow::anyhow!("Output device '{}' not found", speaker_device_name))?;
 
@@ -117,9 +119,21 @@ fn wake_audio_connection_sync(speaker_device_name: &str) -> Result<()> {
 #[cfg(target_os = "macos")]
 pub(super) async fn wake_audio_connection(speaker_device_name: &str) -> Result<()> {
     let name = speaker_device_name.to_string();
-    tokio::task::spawn_blocking(move || {
+    bounded_audio_wake(move || {
         wake_audio_connection_sync(&name)
-    }).await.map_err(|e| anyhow::anyhow!("Join error: {}", e))?
+    }).await
+}
+
+#[cfg(target_os = "macos")]
+async fn bounded_audio_wake<F>(operation: F) -> Result<()>
+where F: FnOnce() -> Result<()> + Send + 'static {
+    static WAKE: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
+    super::devices::discovery::bounded_device_operation(
+        WAKE.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(1))).clone(),
+        Duration::from_secs(3),
+        "音频设备唤醒超时",
+        operation,
+    ).await
 }
 
 /// Public async wake for use by the disconnect-fallback hot-swap path in
@@ -135,13 +149,13 @@ pub(super) async fn wake_audio_connection(speaker_device_name: &str) -> Result<(
 #[cfg(target_os = "macos")]
 pub async fn wake_audio_connection_for_swap(speaker_device_name: &str) -> Result<()> {
     let name = speaker_device_name.to_string();
-    tokio::task::spawn_blocking(move || {
+    bounded_audio_wake(move || {
         info!("[AUDIO_WAKE] Hot-swap wake via speaker: '{}'", name);
         let host = cpal::default_host();
         // Try the specified device first, fall back to default output. During
         // a BT disconnect the original output device name may no longer
         // enumerate, so the fallback is what actually runs in practice.
-        let (output_device, config) = host.output_devices()?
+        let (output_device, config) = host.devices()?
             .find(|d| d.name().ok().as_deref() == Some(&*name))
             .and_then(|d| d.default_output_config().ok().map(|c| (d, c)))
             .or_else(|| {
@@ -180,7 +194,7 @@ pub async fn wake_audio_connection_for_swap(speaker_device_name: &str) -> Result
         drop(stream);
         info!("[AUDIO_WAKE] Hot-swap wake completed");
         Ok(())
-    }).await.map_err(|e| anyhow::anyhow!("Join error: {}", e))?
+    }).await
 }
 
 /// Simplified recording manager that coordinates all audio components

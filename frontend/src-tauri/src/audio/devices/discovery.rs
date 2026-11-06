@@ -30,17 +30,32 @@ async fn bounded_discovery<F>(
 where
     F: FnOnce() -> Result<Vec<AudioDevice>> + Send + 'static,
 {
+    bounded_device_operation(gate, deadline, "读取音频设备超时，请稍后刷新；已保存的设备选择保留", scan).await
+}
+
+/// Keep a driver operation's slot until the native call actually finishes,
+/// even when its caller times out or stops waiting.
+pub(crate) async fn bounded_device_operation<T, F>(
+    gate: std::sync::Arc<tokio::sync::Semaphore>,
+    deadline: std::time::Duration,
+    timeout_message: &'static str,
+    operation: F,
+) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
     tokio::time::timeout(deadline, async move {
         let permit = gate.acquire_owned().await?;
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            scan()
+            operation()
         })
         .await
-        .map_err(|e| anyhow::anyhow!("设备读取任务失败：{e}"))?
+        .map_err(|e| anyhow::anyhow!("音频设备任务失败：{e}"))?
     })
     .await
-    .map_err(|_| anyhow::anyhow!("读取音频设备超时，请稍后刷新；已保存的设备选择保留"))?
+    .map_err(|_| anyhow::anyhow!(timeout_message))?
 }
 
 fn list_audio_devices_sync() -> Result<Vec<AudioDevice>> {
@@ -198,7 +213,12 @@ pub async fn verify_microphone_access() -> anyhow::Result<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
-    tokio::task::spawn_blocking(|| {
+    static VERIFY: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
+    bounded_device_operation(
+        VERIFY.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(1))).clone(),
+        std::time::Duration::from_secs(8),
+        "麦克风预检超时，请检查设备与权限；也可关闭“记录我的声音”后仅采集系统音频",
+        || {
         let host = cpal::default_host();
         let Some(device) = host.default_input_device() else {
             // Let device resolution handle the existing system-audio-only fallback.
@@ -243,7 +263,5 @@ pub async fn verify_microphone_access() -> anyhow::Result<()> {
             "Microphone permission not granted. Please allow microphone access in \
              System Settings > Privacy & Security > Microphone, then try again."
         ))
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("Microphone verification task failed: {}", e))?
+    }).await
 }

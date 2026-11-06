@@ -196,6 +196,11 @@ fn resolve_mic_or_default<R: Runtime>(
     if let Some(name) = requested_name {
         match parse_audio_device(name) {
             Ok(device) => {
+                #[cfg(target_os = "macos")]
+                let exists = super::devices::platform::configure_macos_audio()
+                    .map(|items| items.iter().any(|d| d.name == device.name && d.device_type == super::devices::DeviceType::Input))
+                    .unwrap_or(false);
+                #[cfg(not(target_os = "macos"))]
                 let exists = cpal::default_host()
                     .input_devices()
                     .map(|mut it| it.any(|d| d.name().map(|n| n == device.name).unwrap_or(false)))
@@ -281,7 +286,9 @@ fn resolve_system_or_default(requested_name: Option<&str>) -> Option<Arc<super::
 #[cfg(target_os = "macos")]
 async fn prepare_audio_for_recording(
     system_device: Option<&super::AudioDevice>,
+    microphone_requested: bool,
 ) -> Result<(), String> {
+    run_microphone_preflight(microphone_requested, || async {
     use cpal::traits::{DeviceTrait, HostTrait};
 
     let wake_name = system_device
@@ -302,6 +309,43 @@ async fn prepare_audio_for_recording(
         return Err(format!("Microphone access required: {}", e));
     }
     Ok(())
+    }).await
+}
+
+#[cfg(target_os = "macos")]
+async fn run_microphone_preflight<F, Fut>(requested: bool, check: F) -> Result<(), String>
+where F: FnOnce() -> Fut, Fut: std::future::Future<Output = Result<(), String>> {
+    // System-only capture must not wake a CPAL stream, access the microphone,
+    // or request its permission as a side effect of pressing Start.
+    if !requested { return Ok(()); }
+    check().await
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod interview_audio_preflight_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn system_only_never_constructs_a_microphone_or_wake_probe() {
+        let result = run_microphone_preflight(false, || -> std::future::Ready<Result<(), String>> {
+            panic!("microphone-off must skip the whole native preflight")
+        }).await;
+        assert!(result.is_ok());
+        // Exercise the production entry point with no output selection. It
+        // must return before even querying a default device from the host.
+        assert!(prepare_audio_for_recording(None, false).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn requested_microphone_preserves_probe_failure() {
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let result = run_microphone_preflight(true, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(Err("synthetic microphone denied".to_string()))
+        }).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(result.unwrap_err(), "synthetic microphone denied");
+    }
 }
 
 
@@ -421,7 +465,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     let system_device = resolve_system_or_default(preferred_system_name.as_deref());
 
     #[cfg(target_os = "macos")]
-    prepare_audio_for_recording(system_device.as_deref()).await?;
+    prepare_audio_for_recording(system_device.as_deref(), preferred_mic_name.as_deref() != Some("__interview_disabled__")).await?;
 
     #[cfg(target_os = "macos")]
     let microphone_device = resolve_mic_or_default(&app, preferred_mic_name.as_deref());
@@ -591,7 +635,7 @@ pub(crate) async fn start_recording_with_asr<R:Runtime>(app:AppHandle<R>,mic_dev
     let system_device = resolve_system_or_default(system_device_name.as_deref());
 
     #[cfg(target_os = "macos")]
-    prepare_audio_for_recording(system_device.as_deref()).await?;
+    prepare_audio_for_recording(system_device.as_deref(), mic_device_name.as_deref() != Some("__interview_disabled__")).await?;
 
     #[cfg(target_os = "macos")]
     let mic_device = resolve_mic_or_default(&app, mic_device_name.as_deref());

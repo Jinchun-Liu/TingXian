@@ -133,7 +133,11 @@ pub async fn get_device_and_config(
 
         match audio_device.device_type {
             DeviceType::Input => {
-                for device in host.input_devices()? {
+                #[cfg(target_os = "macos")]
+                let candidates = host.devices()?;
+                #[cfg(not(target_os = "macos"))]
+                let candidates = host.input_devices()?;
+                for device in candidates {
                     if let Ok(name) = device.name() {
                         if name == audio_device.name {
                             let default_config = device
@@ -149,7 +153,7 @@ pub async fn get_device_and_config(
                 {
                     // Use default host for all macOS output devices
                     // Core Audio backend uses direct cidre API for system capture, not cpal
-                    for device in host.output_devices()? {
+                    for device in host.devices()? {
                         if let Ok(name) = device.name() {
                             if name == audio_device.name {
                                 let default_config = device
