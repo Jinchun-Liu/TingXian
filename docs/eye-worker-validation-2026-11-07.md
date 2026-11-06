@@ -72,6 +72,12 @@ Rust 工具链按官方方法独立安装到本轮 D 盘工件目录，使用项
 Windows 常量所属模块导入错误失败，按实际 0.59.0 绑定修正；原失败日志保留。
 证据在源码外 `artifacts/2026-11-07/eye-host-002/`，不改变当前 SDK/安装版未测门槛。
 
+该补强提交 `21650c2` 的[原生 CI 42272432039](https://github.com/Jinchun-Liu/TingXian/actions/runs/42272432039)
+已终态成功，22 项控制器、137 条 Provider 断言和 6 组原生 CTest 通过。Artifact
+`13531470100` 为 2,275,212 bytes，已下载核对 SHA-256
+`c7cc0e61c50d82150e6a3b07cb4d5b63cb31ce53fa90fba7f5476151207820e7`。
+本轮未重建或安装基础应用；当前已核验 CPU 包仍对应 `1506ceb`。
+
 ### `1506ceb` 的已完成 CI
 
 源码 `1506ceb412985db5e3b596cb9dd7e444aaa9329c` 的原生 CI `42264311277` 终态成功：
