@@ -32,7 +32,7 @@ async fn serve(replies:Vec<Reply>)->Server {
         }
     });Server{url,requests,task}
 }
-fn config()->crate::RequestConfig {crate::RequestConfig{model:"synthetic-model".into(),connect_timeout_secs:1,first_answer_warning_secs:1,total_timeout_secs:5}}
+fn config()->crate::RequestConfig {crate::RequestConfig{model:"synthetic-model".into(),connect_timeout_secs:1,first_answer_warning_secs:1,total_timeout_secs:5,..Default::default()}}
 async fn run(server:&Server,cancel:CancellationToken)->(Result<()>,Vec<StreamEvent>) {
     let key=format!("sk-{}","synthetic01234567".repeat(2));let mut events=Vec::new();
     let client=reqwest::Client::builder().no_proxy().connect_timeout(Duration::from_secs(1)).redirect(reqwest::redirect::Policy::none()).build().unwrap();
@@ -43,6 +43,15 @@ async fn run(server:&Server,cancel:CancellationToken)->(Result<()>,Vec<StreamEve
 fn attempts(events:&[StreamEvent])->usize {events.iter().filter(|e|matches!(e,StreamEvent::RequestSent{..})).count()}
 fn warnings(events:&[StreamEvent])->usize {events.iter().filter(|e|matches!(e,StreamEvent::Warning{..})).count()}
 fn completed(events:&[StreamEvent])->bool {events.iter().any(|e|matches!(e,StreamEvent::Done{..}))}
+
+#[tokio::test]
+async fn model_budget_blocks_mandatory_overflow_before_any_network_attempt(){
+    let server=serve(vec![ok(vec![(0,done())])]).await;
+    let mut cfg=config();cfg.budget=crate::context_budget::ContextBudget{context_tokens:4096,max_output_tokens:512,safety_tokens:256};
+    let mut events=vec![];
+    let result=run_stream(reqwest::Client::builder().no_proxy().build().unwrap(),&server.url,"synthetic",json!([{"role":"user","content":"保留限制".repeat(2000)}]),CancellationToken::new(),&cfg,|e|events.push(e)).await;
+    assert!(result.unwrap_err().contains("未发送"));assert_eq!(attempts(&events),0);assert!(server.requests.lock().unwrap().is_empty());
+}
 
 #[tokio::test]
 async fn multipart_answer_streams_as_one_request_without_losing_numbered_points() {

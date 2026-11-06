@@ -4,6 +4,7 @@ import {useEffect,useState} from 'react';
 import {invoke} from '@tauri-apps/api/core';
 import {Button} from '@/components/ui/button';
 import type {RequestConfig} from './RequestSettings';
+import {BudgetFields,defaultBudget,budgetValid} from './RequestSettings';
 type Profile={id:string;name:string;enabled:boolean;endpoint:string;protocol:'deepseek'|'openai'|'qwen';request:RequestConfig};
 type Config={answers:Profile[];vision:Profile;background:Profile};
 type View={config:Config;key_configured:Record<string,boolean>;capacity:number};
@@ -33,6 +34,7 @@ export function ProviderSettings({locked,onSaved,onBusyChange,openVision=false,o
         <label className="block">模型 ID<input aria-label={`${p.id} 模型 ID`} className="w-full rounded border p-2" disabled={disabled} value={p.request.model} maxLength={128} onChange={e=>patch(p.id,{request:{...p.request,model:e.target.value}})} /></label>
         <label className="block">API Key<input aria-label={`${p.id} API Key`} className="w-full rounded border p-2" type="password" autoComplete="off" disabled={disabled} value={keys[p.id]||''} placeholder="留空保留当前进程凭证；地址改变需重新填写" onChange={e=>setKeys(k=>({...k,[p.id]:e.target.value}))} /></label>
         <details><summary>超时设置</summary><div className="grid sm:grid-cols-3 gap-2">{([['connect_timeout_secs','连接超时',1,30],['first_answer_warning_secs','等待提示',1,119],['total_timeout_secs','总截止',5,120]] as const).map(([field,label,min,max])=><label key={field}>{label}（秒）<input type="number" className="w-full rounded border p-2" min={min} max={max} disabled={disabled} value={p.request[field]} onChange={e=>patch(p.id,{request:{...p.request,[field]:Number(e.target.value)}})} /></label>)}</div></details>
+        <BudgetFields prefix={p.id} value={p.request.budget||defaultBudget} disabled={disabled} onChange={budget=>patch(p.id,{request:{...p.request,budget}})}/>
         <Button size="sm" variant="outline" disabled={disabled} onClick={()=>void work(async()=>{
           const r=await invoke<{success:boolean;message:string;elapsed_ms:number}>('interview_provider_test',{profileId:p.id});
           setMessage(`${p.name}：${r.message}（${r.elapsed_ms} ms）。测试使用已保存配置。`);
@@ -40,6 +42,7 @@ export function ProviderSettings({locked,onSaved,onBusyChange,openVision=false,o
       </div>
     </details>)}
     <Button disabled={disabled} onClick={()=>void work(async()=>{
+      if([...view.config.answers,view.config.vision,...(view.config.background?[view.config.background]:[])].some(p=>!budgetValid(p.request.budget||defaultBudget)))throw Error('请检查模型预算：输出上限和安全余量须小于模型窗口及 256K 应用上限。');
       await invoke('interview_providers_save',{config:view.config,keys:Object.fromEntries(Object.entries(keys).filter(([,v])=>v.trim()))});
       setKeys({});await load();await onSaved();setMessage('接口配置已保存，未发送模型请求。');
     })}>保存多接口配置</Button>

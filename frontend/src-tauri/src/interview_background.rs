@@ -155,7 +155,7 @@ async fn generate(app:&AppHandle,state:&InterviewState,selection:&str,include_li
     let job=if measure{None}else{Some(resume.as_ref().map(|(id,_)|id.clone()).unwrap_or_else(||uuid::Uuid::new_v4().to_string()))};
     let mut req=if let Some((_,req))=resume{req}else{json!({})};
     if !req["api"].is_null()&&(req["api"]["model"]!=p.request.model||req["api"]["endpoint"]!=p.endpoint){return Err("当前背景模型与断点不一致，请切回原模型或新建整理任务".into());}
-    req["api"]=json!({"model":p.request.model,"endpoint":p.endpoint,"key":key,"timeout":p.request.total_timeout_secs});
+    req["api"]=json!({"model":p.request.model,"endpoint":p.endpoint,"key":key,"timeout":p.request.total_timeout_secs,"context_tokens":p.request.budget.context_tokens,"max_output_tokens":p.request.budget.max_output_tokens,"safety_tokens":p.request.budget.safety_tokens});
     req["previous"]=json!(previous);req["include_library"]=json!(include_library);
     if let Some(id)=&job{
         if selection!="resume"&&jobs_view(app,&state.background).await?.len()>=20{return Err("已保留20份整理任务，请先导出并整理已有任务".into());}

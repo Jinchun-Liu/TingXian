@@ -11,6 +11,7 @@ pub mod structured;
 pub mod credentials;
 pub mod request_config;
 pub use request_config::RequestConfig;
+pub mod context_budget;
 pub mod providers;
 pub use providers::*;
 pub mod vision;

@@ -139,11 +139,12 @@ where F:FnMut(StreamEvent)+Send {
 async fn run_stream_with_protocol<F>(client:reqwest::Client,endpoint:&str,key:&str,messages:Value,cancel:CancellationToken,config:&crate::RequestConfig,protocol:&crate::ProviderProtocol,notify:F)->Result<()>
 where F:FnMut(StreamEvent)+Send {
     config.validate()?;
-    let mut payload=request_payload(key,messages,&config.model)?;
+    let (mut payload,image_budget_unknown)=request_payload(key,messages,config)?;
     if *protocol!=crate::ProviderProtocol::Deepseek {payload.as_object_mut().unwrap().remove("thinking");}
     if *protocol==crate::ProviderProtocol::Qwen {payload["enable_thinking"]=json!(false);}
     let notify=std::sync::Mutex::new(notify);
     let emit=|event|{(notify.lock().unwrap())(event);};
+    if image_budget_unknown{emit(StreamEvent::Warning{message:"图片 token 用量由供应商决定，当前仅核对文字、输出和余量预算；图片窗口是否适配尚未确认。".into()});}
     let useful=std::sync::atomic::AtomicBool::new(false);
     let start=Instant::now();let mut first=None;let mut warned=false;
     let work=async {
@@ -235,15 +236,12 @@ fn has_response_body(text:&str)->bool {
     plain.chars().any(char::is_alphanumeric)
 }
 
-fn request_payload(key:&str,mut messages:Value,model:&str)->Result<Value> {
+fn request_payload(key:&str,mut messages:Value,config:&crate::RequestConfig)->Result<(Value,bool)> {
     // Last guard even for callers that supply their own messages. The real key
     // remains only in the HTTP Authorization header, never the model context.
     crate::redact_json_credentials(&mut messages,Some(key))?;
-    if messages.as_array().is_some_and(|v|v.iter().all(|m|m["content"].is_string())){
-        let bound=messages.to_string().len() as u64+128+u64::from(MAX_ANSWER_TOKENS);
-        if bound>crate::background::BASELINE{return Err("文字请求超过 256K 上下文基线，未发送".into())}
-    }
-    Ok(json!({"model":model,"thinking":{"type":"disabled"},"stream":true,"stream_options":{"include_usage":true},"max_tokens":MAX_ANSWER_TOKENS,"messages":messages}))
+    let image_budget_unknown=crate::context_budget::fit_text(&mut messages,&config.budget,u64::from(MAX_ANSWER_TOKENS))?;
+    Ok((json!({"model":config.model,"thinking":{"type":"disabled"},"stream":true,"stream_options":{"include_usage":true},"max_tokens":config.budget.output(u64::from(MAX_ANSWER_TOKENS)),"messages":messages}),image_budget_unknown))
 }
 
 #[cfg(test)]
@@ -286,7 +284,7 @@ mod tests {
         let messages=messages_with_dialogue(&question,&fake,&history,&[evidence],&dialogue).unwrap();
         assert!(!messages.to_string().contains(&fake));assert!(messages.to_string().contains("null和0"));
         let actual="synthetic-configured-token";
-        let direct=request_payload(actual,json!([{"role":"user","content":format!("已配置的值{actual}")}]),"deepseek-flash").unwrap();
+        let (direct,_)=request_payload(actual,json!([{"role":"user","content":format!("已配置的值{actual}")}]),&Default::default()).unwrap();
         assert!(!direct.to_string().contains(actual));assert_eq!(direct["thinking"]["type"],"disabled");
     }
     #[test]

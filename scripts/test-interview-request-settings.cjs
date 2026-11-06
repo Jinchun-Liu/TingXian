@@ -27,6 +27,9 @@ const text=node=>typeof node==='string'?node:(node?.children||[]).map(text).join
  await edit('连接超时（秒）','2');await edit('未收到建议的提示时间（秒）','10');await click('保存回答请求设置');assert.equal(saveCount(),0);
  await edit('未收到建议的提示时间（秒）','4');failSave=true;await click('保存回答请求设置');assert.ok(text(tree.toJSON()).includes('synthetic save failure'));assert.equal(input('未收到建议的提示时间（秒）').props.value,'4');
  failSave=false;await click('保存回答请求设置');assert.equal(stored.first_answer_warning_secs,4);assert.equal(typeof stored.first_answer_warning_secs,'number');assert.ok(text(tree.toJSON()).includes('下次回答'));
+ await edit('回答 模型窗口','16384');await edit('回答 模型输出上限','1024');await edit('回答 安全余量','512');await click('保存回答请求设置');assert.deepEqual(stored.budget,{context_tokens:16384,max_output_tokens:1024,safety_tokens:512});
+ await edit('未收到建议的提示时间（秒）','5');await click('保存回答请求设置');assert.equal(stored.budget.context_tokens,16384,'editing timeout reset the model budget');
+ const budgetSaves=saveCount();await edit('回答 模型输出上限','16384');await click('保存回答请求设置');assert.equal(saveCount(),budgetSaves);assert.ok(text(tree.toJSON()).includes('检查模型预算'));await edit('回答 模型输出上限','1024');
  locked=true;await act(async()=>render());assert.ok(input('回答模型 ID').props.disabled);assert.ok(button('恢复默认请求设置').props.disabled);
  locked=false;await act(async()=>render());const count=saveCount();await click('恢复默认请求设置');assert.equal(saveCount(),count);assert.equal(input('单次总截止（秒）').props.value,'20');await click('保存回答请求设置');assert.equal(stored.model,'deepseek-flash');
  failRead=true;await click('重新读取请求设置');assert.ok(text(tree.toJSON()).includes('synthetic read failure'));assert.ok(button('保存回答请求设置').props.disabled);

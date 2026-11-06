@@ -14,6 +14,25 @@ class Response:
     def __exit__(self,*a): pass
     def read(self,n): return self.body[:n]
 class Test(unittest.TestCase):
+    def test_small_model_budget_repartitions_and_never_exceeds_effective_window(self):
+        root=Path(tempfile.mkdtemp());(root/"small.txt").write_text("虚构练习材料\n"*600)
+        cfg={"model":"small-test","key":"","endpoint":"http://localhost/chat/completions","timeout":1,"context_tokens":4096,"max_output_tokens":512,"safety_tokens":256}
+        observed=[]
+        def transport(request,timeout):
+            body=json.loads(request.data);system=body["messages"][0]["content"];raw=body["messages"][1]["content"];data=json.loads(raw)
+            bound=len(system.encode())+len(raw.encode())+128+body["max_tokens"]+256
+            self.assertLessEqual(bound,4096);self.assertEqual(body["max_tokens"],512);observed.append(bound)
+            if system==m.MAP:
+                row=data["segments"][0];reply={"records":[{"location":row["location"],"quote":row["text"],"note":"虚构练习","kind":"practice"}]}
+            else: reply={"overview":"虚构练习材料","role":"","aliases":""}
+            return Response(m.dumps({"choices":[{"finish_reason":"stop","message":{"content":m.dumps(reply)}}]}).encode())
+        with patch.object(m.urllib.request.OpenerDirector,"open",side_effect=transport):
+            result=m.process({"folder":str(root),"api":cfg},lambda _:None)
+            self.assertGreater(len(observed),3);self.assertIsNone(result["metrics"]["peak_prompt_tokens"])
+        with patch.object(m.urllib.request.OpenerDirector,"open",side_effect=AssertionError("oversize request reached network")):
+            with self.assertRaisesRegex(ValueError,"未发送"): m.complete(cfg,"规则","不裁掉的限制"*3000,{})
+        self.assertEqual(m.model_limits({**cfg,"context_tokens":1048576})[0],262144)
+
     def test_durable_resume_source_change_model_fence_and_unknown_usage(self):
         root=Path(tempfile.mkdtemp());sources=root/"sources";sources.mkdir()
         text="虚构项目仅用于练习，不代表真实生产经历。\n"*1400

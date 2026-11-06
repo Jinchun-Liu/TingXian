@@ -7,10 +7,12 @@ pub struct RequestConfig {
     pub connect_timeout_secs: u64,
     pub first_answer_warning_secs: u64,
     pub total_timeout_secs: u64,
+    #[serde(default)]
+    pub budget:crate::context_budget::ContextBudget,
 }
 impl Default for RequestConfig {
     fn default() -> Self {
-        Self {model:"deepseek-flash".into(),connect_timeout_secs:5,first_answer_warning_secs:8,total_timeout_secs:20}
+        Self {model:"deepseek-flash".into(),connect_timeout_secs:5,first_answer_warning_secs:8,total_timeout_secs:20,budget:Default::default()}
     }
 }
 impl RequestConfig {
@@ -22,7 +24,7 @@ impl RequestConfig {
             || self.connect_timeout_secs>self.total_timeout_secs || self.first_answer_warning_secs==0 || self.first_answer_warning_secs>=self.total_timeout_secs {
             return Err("连接超时须为1–30秒且不超过总截止；总截止须为5–120秒；等待提示须大于0且早于总截止".into());
         }
-        Ok(())
+        self.budget.validate()
     }
 }
 impl crate::Index {
@@ -45,7 +47,9 @@ mod tests {
         let root=tempfile::Builder::new().prefix("interview-request-config-").tempdir().unwrap().keep();
         let db=root.join("profile.sqlite");let index=crate::Index::open(&db).await.unwrap();
         assert_eq!(index.request_config().await.unwrap(),RequestConfig::default());
-        let custom=RequestConfig{model:"synthetic-model".into(),connect_timeout_secs:2,first_answer_warning_secs:3,total_timeout_secs:10};
+        index.set("request_config",r#"{"model":"legacy","connect_timeout_secs":5,"first_answer_warning_secs":8,"total_timeout_secs":20}"#).await.unwrap();
+        assert_eq!(index.request_config().await.unwrap().budget,crate::context_budget::ContextBudget::default());
+        let custom=RequestConfig{model:"synthetic-model".into(),connect_timeout_secs:2,first_answer_warning_secs:3,total_timeout_secs:10,..Default::default()};
         index.set_request_config(&custom).await.unwrap();
         for bad in [RequestConfig{model:"https://example.invalid".into(),..custom.clone()},RequestConfig{model:format!("sk-{}","synthetic".repeat(4)),..custom.clone()},RequestConfig{first_answer_warning_secs:10,..custom.clone()},RequestConfig{connect_timeout_secs:11,..custom.clone()},RequestConfig{total_timeout_secs:0,..custom.clone()}] {
             assert!(index.set_request_config(&bad).await.is_err());assert_eq!(index.request_config().await.unwrap(),custom);
