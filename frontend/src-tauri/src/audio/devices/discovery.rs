@@ -2,43 +2,127 @@ use anyhow::Result;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use log::error;
 
-use super::configuration::{AudioDevice, DeviceType};
+use super::configuration::AudioDevice;
+#[cfg(not(target_os = "macos"))]
+use super::configuration::DeviceType;
 use super::platform;
 
 /// List all available audio devices on the system
 pub async fn list_audio_devices() -> Result<Vec<AudioDevice>> {
-    let host = cpal::default_host();
+    static SCAN: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
+    bounded_discovery(
+        SCAN.get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(1)))
+            .clone(),
+        std::time::Duration::from_secs(3),
+        list_audio_devices_sync,
+    )
+    .await
+}
 
-    // Platform-specific device enumeration
-    let mut devices = {
-        #[cfg(target_os = "windows")]
-        {
-            platform::configure_windows_audio(&host)?
-        }
+// Driver calls can block indefinitely. Keep them off the async executor and
+// retain the permit in the blocking worker even if its caller stops waiting.
+// A stuck driver therefore cannot accumulate workers on every refresh/poll.
+async fn bounded_discovery<F>(
+    gate: std::sync::Arc<tokio::sync::Semaphore>,
+    deadline: std::time::Duration,
+    scan: F,
+) -> Result<Vec<AudioDevice>>
+where
+    F: FnOnce() -> Result<Vec<AudioDevice>> + Send + 'static,
+{
+    tokio::time::timeout(deadline, async move {
+        let permit = gate.acquire_owned().await?;
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            scan()
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("设备读取任务失败：{e}"))?
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("读取音频设备超时，请稍后刷新；已保存的设备选择保留"))?
+}
 
-        #[cfg(target_os = "linux")]
-        {
-            platform::configure_linux_audio(&host)?
-        }
+fn list_audio_devices_sync() -> Result<Vec<AudioDevice>> {
+    #[cfg(target_os = "macos")]
+    {
+        platform::configure_macos_audio()
+    }
 
-        #[cfg(target_os = "macos")]
-        {
-            platform::configure_macos_audio(&host)?
-        }
-    };
+    #[cfg(not(target_os = "macos"))]
+    {
+        let host = cpal::default_host();
 
-    // Add any additional devices from the default host
-    if let Ok(other_devices) = host.devices() {
-        for device in other_devices {
-            if let Ok(name) = device.name() {
-                if !devices.iter().any(|d| d.name == name) {
-                    devices.push(AudioDevice::new(name, DeviceType::Output));
+        // Platform-specific device enumeration
+        let mut devices = {
+            #[cfg(target_os = "windows")]
+            {
+                platform::configure_windows_audio(&host)?
+            }
+            #[cfg(target_os = "linux")]
+            {
+                platform::configure_linux_audio(&host)?
+            }
+        };
+
+        // Add any additional devices from the default host
+        if let Ok(other_devices) = host.devices() {
+            for device in other_devices {
+                if let Ok(name) = device.name() {
+                    if !devices.iter().any(|d| d.name == name) {
+                        devices.push(AudioDevice::new(name, DeviceType::Output));
+                    }
                 }
             }
         }
-    }
 
-    Ok(devices)
+        Ok(devices)
+    }
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+    use std::{
+        sync::{atomic::{AtomicUsize, Ordering}, Arc},
+        time::Duration,
+    };
+
+    #[tokio::test]
+    async fn stalled_driver_times_out_without_stalling_runtime_or_spawning_more_workers() {
+        let gate = Arc::new(tokio::sync::Semaphore::new(1));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (release, wait) = std::sync::mpsc::channel();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let count = calls.clone();
+        let first_gate = gate.clone();
+        let first = tokio::spawn(async move {
+            bounded_discovery(first_gate, Duration::from_secs(1), move || {
+                count.fetch_add(1, Ordering::SeqCst);
+                let _ = started.send(());
+                let _ = wait.recv_timeout(Duration::from_secs(5));
+                Ok(vec![])
+            })
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), ready)
+            .await
+            .expect("the fake driver must have started")
+            .unwrap();
+        let first = first.await.unwrap();
+        assert!(first.unwrap_err().to_string().contains("超时"));
+        let count = calls.clone();
+        let second = bounded_discovery(gate.clone(), Duration::from_millis(30), move || {
+            count.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![])
+        })
+        .await;
+        assert!(second.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        release.send(()).unwrap();
+        let next = bounded_discovery(gate, Duration::from_secs(1), || Ok(vec![])).await;
+        assert!(next.is_ok(), "a completed driver call must release the scan slot");
+    }
 }
 
 /// Trigger audio permission request on platforms that require it

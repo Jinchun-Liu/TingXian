@@ -1,0 +1,70 @@
+name: macOS native checks
+on:
+  push:
+    branches: [feat/macos-reliability-v2]
+    paths:
+      - '.github/workflows/macos-native-checks.yml'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - 'crates/**'
+      - 'frontend/**'
+  pull_request:
+    paths:
+      - '.github/workflows/macos-native-checks.yml'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - 'crates/**'
+      - 'frontend/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: macos-native-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  native-regressions:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_BUILD_JOBS: '3'
+      CIDRE_USE_CLT: '1'
+      MACOSX_DEPLOYMENT_TARGET: '14.4'
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install cmake==3.31.6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-native-tests-no-debug
+      - name: Build frontend assets for native context
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+      - name: Shared core regressions
+        run: cargo test --locked -p interview-core
+      # These tests use synthetic drivers and isolated fixtures. They do not
+      # request capture permissions or prove real-device audio works.
+      - name: Device discovery timeout and cancellation
+        run: |
+          cargo test --locked -p meetily --lib audio::devices::discovery::discovery_tests -- --nocapture
+          cargo test --locked -p meetily --lib audio::device_monitor::tests -- --nocapture
+      - name: Session recovery and interview regressions
+        run: cargo test --locked -p meetily --lib interview -- --nocapture

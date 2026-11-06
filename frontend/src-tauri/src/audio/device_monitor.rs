@@ -299,7 +299,10 @@ impl AudioDeviceMonitor {
             }
 
             // Get current device list
-            let current_devices = match list_audio_devices().await {
+            let Some(discovery) = discovery_until_stopped(&stop_signal, list_audio_devices()).await else {
+                break;
+            };
+            let current_devices = match discovery {
                 Ok(devices) => devices,
                 Err(e) => {
                     error!("Failed to list audio devices: {}", e);
@@ -398,6 +401,20 @@ impl AudioDeviceMonitor {
     }
 }
 
+async fn discovery_until_stopped<F>(
+    stop: &tokio::sync::Notify,
+    discovery: F,
+) -> Option<Result<Vec<AudioDevice>>>
+where
+    F: std::future::Future<Output = Result<Vec<AudioDevice>>>,
+{
+    tokio::select! {
+        biased;
+        _ = stop.notified() => None,
+        result = discovery => Some(result),
+    }
+}
+
 impl Default for AudioDeviceMonitor {
     fn default() -> Self {
         Self::new().0
@@ -414,6 +431,21 @@ impl Drop for AudioDeviceMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn stop_interrupts_pending_device_discovery() {
+        let stop = Arc::new(tokio::sync::Notify::new());
+        let notify = stop.clone();
+        let task = tokio::spawn(async move {
+            discovery_until_stopped(&notify, std::future::pending()).await
+        });
+        stop.notify_one();
+        let result = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("Stop must not wait for a driver enumeration")
+            .unwrap();
+        assert!(result.is_none(), "no late device events after Stop");
+    }
 
     #[test]
     fn test_bluetooth_detection() {
