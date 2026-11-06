@@ -129,7 +129,8 @@ HRESULT authenticate_client(HANDLE pipe) {
     return SUCCEEDED(hr) && peer == owner ? S_OK : E_ACCESSDENIED;
 }
 
-bool endpoint_valid(const VideoPipeEndpoint& endpoint) {
+}
+bool valid_video_endpoint(const VideoPipeEndpoint& endpoint) noexcept {
     constexpr size_t prefix_size = _countof(PipePrefix) - 1;
     const size_t length = wcsnlen_s(endpoint.name, _countof(endpoint.name));
     if (endpoint.version != 1 || !endpoint.producer_pid || length != prefix_size + 32
@@ -141,6 +142,7 @@ bool endpoint_valid(const VideoPipeEndpoint& endpoint) {
     BYTE any = 0; for (BYTE byte : endpoint.capability) any |= byte;
     return any != 0;
 }
+namespace {
 bool basic_header(const Header& header) { return header.magic == Magic && header.version == 1 && header.reserved == 0; }
 bool control_header(const Header& header, UINT16 kind, UINT32 bytes = 0) {
     return basic_header(header) && header.kind == kind && header.bytes == bytes
@@ -238,7 +240,7 @@ HRESULT PipeReceiver::connect(const VideoPipeEndpoint& endpoint) {
         error_ = hr; state_ = TransportState::fault; mailbox_->stop(); return hr;
     };
     if (!stop_) return fail(E_OUTOFMEMORY);
-    if (!endpoint_valid(endpoint)) return fail(E_INVALIDARG);
+    if (!valid_video_endpoint(endpoint)) return fail(E_INVALIDARG);
     ResetEvent(stop_);
     pipe_ = CreateFileW(endpoint.name, FILE_READ_DATA | FILE_WRITE_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
         0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);

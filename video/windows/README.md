@@ -66,6 +66,12 @@ installer or a stable product release. It contains no registration routine.
 
 ## Remaining delivery gates
 
+The separate [session controller](SESSION.md) now implements explicit device
+creation/cleanup and a read-only prerequisite diagnostic. Its Windows API backend
+is compiled, while cancellation and failure recovery use an injected OS boundary
+in tests. No device has been registered by these tests and no installer or app
+control has been connected yet.
+
 Actual LocalService/FrameServer IPC validation; local eye worker and main controller;
 installation/COM registration and session-scoped `MFCreateVirtualCamera` lifetime;
 main-window-only controls; output watchdog on actual producer disconnect; real

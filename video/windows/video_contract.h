@@ -24,7 +24,7 @@ struct FrameMetrics {
 };
 
 // In-process adapter boundary. Not a registered marshalled COM interface or IPC.
-// A future authenticated transport in the media-source process will call this.
+// The authenticated transport in the media-source process uses the same mailbox.
 // These calls do not open a physical camera or process eyes.
 MIDL_INTERFACE("f4ac483c-1bee-4e1f-961a-4f8a03fd1580") IFrameReceiver : public IUnknown {
     virtual HRESULT STDMETHODCALLTYPE BeginVideo(UINT64* generation) = 0;

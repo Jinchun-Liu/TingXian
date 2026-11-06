@@ -20,6 +20,7 @@ struct VideoPipeEndpoint {
     BYTE capability[32]{};
 };
 enum class TransportState : UINT32 { disconnected, connected, streaming, stopped, fault };
+bool valid_video_endpoint(const VideoPipeEndpoint& endpoint) noexcept;
 struct TransportStatus {
     TransportState state = TransportState::disconnected;
     HRESULT last_error = S_OK;
