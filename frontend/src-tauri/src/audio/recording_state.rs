@@ -106,6 +106,8 @@ pub struct RecordingState {
     is_recording: AtomicBool,
     is_paused: AtomicBool,
     refine_utterances: AtomicBool,
+    cloud_streaming: AtomicBool,
+    cloud_epoch: std::sync::atomic::AtomicU64,
     microphone_gate: Mutex<Arc<super::microphone_gate::MicrophoneGate>>,
 
     // Audio devices
@@ -135,6 +137,9 @@ pub struct RecordingState {
 }
 
 impl RecordingState {
+    pub fn enable_cloud_streaming(&self){self.cloud_streaming.store(true,Ordering::SeqCst);self.health.streaming.store(true,Ordering::SeqCst);}
+    pub fn cloud_streaming(&self)->bool{self.cloud_streaming.load(Ordering::SeqCst)}
+    pub fn cloud_epoch(&self)->u64{self.cloud_epoch.load(Ordering::SeqCst)}
     pub fn set_utterance_refinement(&self, enabled: bool) { self.refine_utterances.store(enabled, Ordering::SeqCst); }
     pub fn refine_utterances(&self) -> bool { self.refine_utterances.load(Ordering::SeqCst) }
     pub fn microphone_gate(&self) -> Arc<super::microphone_gate::MicrophoneGate> {
@@ -154,6 +159,8 @@ impl RecordingState {
             is_recording: AtomicBool::new(false),
             is_paused: AtomicBool::new(false),
             refine_utterances: AtomicBool::new(false),
+            cloud_streaming: AtomicBool::new(false),
+            cloud_epoch: std::sync::atomic::AtomicU64::new(1),
             microphone_gate: Mutex::new(super::microphone_gate::MicrophoneGate::new()),
             microphone_device: Mutex::new(None),
             system_device: Mutex::new(None),
@@ -205,6 +212,7 @@ impl RecordingState {
         }
 
         self.is_paused.store(true, Ordering::SeqCst);
+        self.cloud_epoch.fetch_add(1,Ordering::SeqCst);
         *self.pause_start.lock().unwrap() = Some(Instant::now());
         log::info!("Recording paused");
         Ok(())
@@ -422,6 +430,8 @@ impl Default for RecordingState {
             is_recording: AtomicBool::new(false),
             is_paused: AtomicBool::new(false),
             refine_utterances: AtomicBool::new(false),
+            cloud_streaming: AtomicBool::new(false),
+            cloud_epoch: std::sync::atomic::AtomicU64::new(1),
             microphone_gate: Mutex::new(super::microphone_gate::MicrophoneGate::new()),
             microphone_device: Mutex::new(None),
             system_device: Mutex::new(None),

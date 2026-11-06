@@ -482,6 +482,7 @@ pub mod interview_connection;
 pub mod interview_index;
 pub mod tingxian_runtime;
 mod tingxian_audio;
+mod interview_cloud_asr;
 pub mod interview_background;
 
 pub fn run() {
@@ -673,6 +674,8 @@ pub fn run() {
             tingxian_audio::tingxian_asr_models,
             tingxian_audio::tingxian_select_model,
             tingxian_audio::tingxian_select_devices,
+            interview_cloud_asr::interview_cloud_asr_get,
+            interview_cloud_asr::interview_cloud_asr_save,
             interview::interview_audio_start,
             interview::interview_audio_level,
             interview::interview_microphone_set,

@@ -49,6 +49,7 @@ pub enum AdmissionError {
 }
 
 pub fn channel(state: &Arc<RecordingState>) -> (AsrSender, AsrReceiver) {
+    if state.cloud_streaming(){return channel_with_limits(state,512,2*1024*1024);}
     channel_with_limits(state, MAX_PENDING_JOBS, MAX_PENDING_PCM_BYTES)
 }
 fn channel_with_limits(state: &Arc<RecordingState>, jobs: usize, bytes: usize) -> (AsrSender, AsrReceiver) {

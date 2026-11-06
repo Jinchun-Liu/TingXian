@@ -1,5 +1,6 @@
 'use client';
 
+import {LiveTranscription} from '@/components/interview/LiveTranscription';
 import {useInterviewRecovery} from '@/lib/use-interview-recovery';
 import {parseRecoverySnapshot,RecoverySnapshot} from '@/lib/interview-recovery';
 import {RecoveryDrafts} from '@/components/interview/RecoveryDrafts';
@@ -46,7 +47,7 @@ import { Play, Pause, Square, Search, Snowflake, FolderOpen, Settings2, FileText
 
 type File = { path: string; bytes: number; eligible: boolean; reason: string };
 type Choice = { path: string; kind: string; allow_external: boolean; structured?: StructuredSelection | null };
-type Status = { preferences?: InterviewContext; key_configured: boolean; model?: string; root: string; suggested_root: string; index_version: string; index_documents: number; index_chunks: number; documents: DocumentRecord[]; architecture: string; memory_bytes: number; system_version: string; aliases: string; facts: string; fact_card?: FactCard; whisper_model: string | null; session_active: boolean };
+type Status = { cloud_asr_mode?:'local'|'aliyun'; preferences?: InterviewContext; key_configured: boolean; model?: string; root: string; suggested_root: string; index_version: string; index_documents: number; index_chunks: number; documents: DocumentRecord[]; architecture: string; memory_bytes: number; system_version: string; aliases: string; facts: string; fact_card?: FactCard; whisper_model: string | null; session_active: boolean };
 
 type ImportEvent = { import_id: string; phase: string; completed: number; total: number; path: string | null; report: unknown; message: string | null };
 type ImportView = ImportEvent & { ready: boolean; cancelPending: boolean };
@@ -61,6 +62,7 @@ export default function InterviewPage() {
   const { resetAfterHistoryClear } = useTranscripts();
   const [status, setStatus] = useState<Status | null>(null);
   const [question, setQuestion] = useState('');
+  const [asrCloudAllowed,setAsrCloudAllowed]=useState(false);
   const [answer, setAnswer] = useState('');
   const [sources, setSources] = useState<Source[]>([]);
   const [conflicts, setConflicts] = useState<SourceConflict[]>([]);
@@ -330,9 +332,13 @@ export default function InterviewPage() {
     void add<TranscriptInput>('transcript-update', incoming => {
       if (clearingHistory.current || !acceptTranscripts.current || !audioHealth.current.accepts(incoming.native_session_id)) return;
       const event = { ...incoming, capture_session: captureSession.current };
-      if (event.is_partial) return;
       if (!microphoneGate.current.accepts(event)) return;
-      setTranscripts(previous => [...previous.filter(t => t.sequence_id !== event.sequence_id || t.capture_session !== event.capture_session), event].slice(-60));
+      if (event.is_partial) {
+        setTranscripts(previous=>previous.some(t=>sameCapturedUtterance(t,event)&&(!t.is_partial||t.interrupted))
+          ? previous : [...previous.filter(t=>!sameCapturedUtterance(t,event)),event].slice(-60));
+        return;
+      }
+      setTranscripts(previous => [...previous.filter(t => (t.sequence_id !== event.sequence_id || t.capture_session !== event.capture_session) && !(t.is_partial && sameCapturedUtterance(t,event))), event].slice(-60));
       spoken.current = mergeSpokenTranscript(spoken.current, event);
       if (event.source === 'Microphone') {
         meeting.interrupt();
@@ -348,6 +354,7 @@ export default function InterviewPage() {
     }).catch(error);
     void add<UtteranceEnd>('interview-utterance-end', event => {
       if (clearingHistory.current || !acceptTranscripts.current || !audioHealth.current.accepts(event.native_session_id)) return;
+      setTranscripts(previous=>previous.map(t=>t.is_partial && t.source===event.source && t.utterance_id===event.utterance_id && t.native_session_id===event.native_session_id?{...t,interrupted:true}:t));
       const l = live.current;
       const result = utterances.current.finish(event, l.automatic && !l.frozen && l.cloudAllowed && !audioHealth.current.paused, meeting.decide);
       if (result.turn) {
@@ -442,7 +449,7 @@ export default function InterviewPage() {
       const saved=recoverSessionSnapshot(draft?.snapshot ?? await invoke<unknown>('interview_session_load',{id}),crypto.randomUUID(),!!draft);
       if (historyRef.current !== previousHistory) throw Error('当前内容发生变化，未替换；请重新选择恢复');
       setAllowReplaceSession(false);
-      live.current.automatic=false;setAutomatic(false);setAudioAllowed(false);setCloudAllowed(false);setFrozen(false);
+      live.current.automatic=false;setAutomatic(false);setAudioAllowed(false);setAsrCloudAllowed(false);setCloudAllowed(false);setFrozen(false);
       active.current=null;inFlight.current=false;meeting.reset(); utterances.current.reset();latencies.current.clear();setQueued(0);setGenerating(false);
       microphoneGate.current.close();audioHealth.current.close();syncHealth();
       captureSession.current=Math.max(0,...saved.spoken_dialogue.map(t=>t.capture_session || 0),...saved.history.map(t=>t.capture_session || 0))+1;
@@ -563,6 +570,7 @@ export default function InterviewPage() {
       if(recording.isRecording)return;
       if(!audioAllowed){setNotice('请先勾选「已获允许使用转写」，再开始采集。');return;}
       if(!status){setNotice('正在读取本机设置，请稍后重试。');return;}
+      if(status.cloud_asr_mode==='aliyun'&&!asrCloudAllowed){setNotice('请勾选本次云转写授权，或在音频设置切回本地。');return;}
       await run(async()=>{
           audioHealth.current.prepareStart(); syncHealth();
           meeting.reset(); utterances.current.reset(); setQueued(0); setFrozen(false); setAutomatic(autoOnStart); resumeAutomatic.current=false;
@@ -572,7 +580,7 @@ export default function InterviewPage() {
           microphoneChanging.current = true;
           microphoneVersion.current++;
           try {
-            applyMicrophoneState(await invoke<MicrophoneState>('interview_audio_start', { recordMicrophone }));
+            applyMicrophoneState(await invoke<MicrophoneState>('interview_audio_start', { recordMicrophone,cloudAsrAllowed:asrCloudAllowed }));
             setPhase(autoOnStart?(addressedOnly(meeting.current.current.mode)?'监听中 · 等待点名':'监听中 · 对方说完后回答'):'持续转写中 · AI 按需请求');
           } catch (e) { setAutomatic(false); live.current.automatic = false; audioHealth.current.close(); syncHealth(); throw e; }
           finally { microphoneChanging.current = false; }
@@ -599,7 +607,7 @@ export default function InterviewPage() {
       {calls < limit ? `本轮还可请求 ${limit-calls} 次建议回答，可提前点击“继续 20 次”增加额度。` : '已达到本轮请求上限；正在生成的回答会继续完成，采集仍可继续。点击“继续 20 次”后可重新开启自动回答。'}
     </p>}
     <section aria-label="采集与回答操作" className="space-y-3">
-      <div className="space-y-2 text-xs [&_label]:block"><label><input type="checkbox" checked={audioAllowed} onChange={e => setAudioAllowed(e.target.checked)} /> 已获允许使用转写</label><label><input type="checkbox" checked={cloudAllowed} onChange={e => { setCloudAllowed(e.target.checked); if (!e.target.checked) { setAutomatic(false); void cancel().catch(error); } }} /> 允许向 DeepSeek 发送发言、近期对话、场景、事实卡与选定证据</label></div>
+      <div className="space-y-2 text-xs [&_label]:block"><label><input type="checkbox" checked={audioAllowed} onChange={e => setAudioAllowed(e.target.checked)} /> 已获允许使用转写</label>{status?.cloud_asr_mode==='aliyun'&&<label><input type="checkbox" disabled={busy || recording.isRecording} checked={asrCloudAllowed} onChange={e=>setAsrCloudAllowed(e.target.checked)}/> 允许将本次声音和术语发送至百炼实时转写</label>}<label><input type="checkbox" checked={cloudAllowed} onChange={e => { setCloudAllowed(e.target.checked); if (!e.target.checked) { setAutomatic(false); void cancel().catch(error); } }} /> 允许向 DeepSeek 发送发言、近期对话、场景、事实卡与选定证据</label></div>
       <div className="text-sm space-y-1"><label><input type="checkbox" checked={recordMicrophone} disabled={busy || recording.isStopping} onChange={e => void toggleMicrophone(e.target.checked)} /> 记录我的声音（本软件麦克风）</label></div>
       <div className="flex flex-wrap gap-4 text-xs"><label><input type="checkbox" disabled={!cloudAllowed || !status?.key_configured || !recording.isActive || healthView.paused} checked={automatic} onChange={e => { const enable = e.target.checked && !audioHealth.current.paused; live.current.automatic = enable; setAutomatic(enable); }} /> 对方说完后自动回答；我的发言只作为上下文</label></div>
       <div className="grid gap-2">
@@ -646,7 +654,7 @@ export default function InterviewPage() {
       <div><p>{importJob.cancelPending ? '正在取消导入，保留原资料库…' : importPhaseNames[importJob.phase] || importJob.phase} · {importJob.completed} / {importJob.total}</p>{importJob.path && <p className="text-xs text-slate-500 break-all">{importJob.path}</p>}</div>
       <Button variant="outline" disabled={!importJob.ready || importJob.cancelPending || importJob.phase === 'committing'} onClick={cancelImport}>取消导入</Button>
     </section>}
-    {audioPanel && <section className="shrink-0 max-h-[48vh] overflow-y-auto rounded-xl border bg-white p-4 space-y-4"><header className="tx-section-head"><h2>音频设置</h2><Button variant="ghost" onClick={()=>setAudioPanel(false)}>返回对话</Button></header><AudioSettings locked={busy || recording.isRecording} microphone={recordMicrophone} onMicrophone={enabled=>void toggleMicrophone(enabled)}/></section>}
+    {audioPanel && <section className="shrink-0 max-h-[48vh] overflow-y-auto rounded-xl border bg-white p-4 space-y-4"><header className="tx-section-head"><h2>音频设置</h2><Button variant="ghost" onClick={()=>setAudioPanel(false)}>返回对话</Button></header><AudioSettings locked={busy || recording.isRecording} microphone={recordMicrophone} onMicrophone={enabled=>void toggleMicrophone(enabled)} onConfigurationChanged={()=>{setAsrCloudAllowed(false);void refresh();}}/></section>}
     {settings && <section className="shrink-0 max-h-[45vh] overflow-y-auto rounded-xl border bg-white p-4 space-y-4">
       <div className="flex justify-between gap-3"><h2 className="font-semibold">资料与场景设置</h2><Button variant="outline" size="sm" onClick={()=>setSettings(false)}>收起资料与设置</Button></div>
       <InterviewPreferences locked={busy || !!status?.session_active || recording.isRecording || generating} onSaved={preferences=>setStatus(value=>value?{...value,preferences}:value)} />
@@ -705,7 +713,7 @@ export default function InterviewPage() {
       </ConversationFeed>
       <div className="shrink-0 border-t p-3 space-y-2 max-h-[35vh] overflow-y-auto">
       {(scenario==='meeting' || scenario==='learning') && <div className="space-y-1"><Button size="sm" variant="outline" disabled={busy || generating || !cloudAllowed || !status?.key_configured || !history.length || !!editingSelfId} onClick={()=>void submit(scenario==='meeting'?recentDiscussionRequest:learningExplanationRequest)}>{scenario==='meeting'?'整理最近讨论':'解释最近内容'}</Button><p className="text-xs text-slate-500">按需调用 AI；仅使用有限的近期上下文，不代表完整会议纪要或完整课程。也可在下方直接输入问题。</p></div>}
-      <QuestionComposer value={question} editingSelf={!!editingSelfId} busy={busy} cloudAllowed={cloudAllowed} onChange={setQuestion} onSubmit={()=>void submit(question)} onLocalSearch={localSearch} onCancelEdit={()=>{selfEditBase.current=null;setEditingSelfId(null);setQuestion('');setNotice('已取消修改，原记录保留。');}} />
+      <LiveTranscription items={transcripts}/><QuestionComposer value={question} editingSelf={!!editingSelfId} busy={busy} cloudAllowed={cloudAllowed} onChange={setQuestion} onSubmit={()=>void submit(question)} onLocalSearch={localSearch} onCancelEdit={()=>{selfEditBase.current=null;setEditingSelfId(null);setQuestion('');setNotice('已取消修改，原记录保留。');}} />
         {phase.startsWith('仅本地') && <div className="text-xs space-y-2"><ConflictNotice conflicts={conflicts} onReview={()=>setSettings(true)} />{sources.map(source => <details key={source.source_id}><summary>{source.path} · {source.location} · {sourceStatusLabel(source.metadata)}</summary><p className="whitespace-pre-wrap">{source.text}</p></details>)}</div>}
       </div>
     </section>

@@ -10,6 +10,7 @@ export interface AudioHealthSnapshot {
   elapsed_ms?: number;
   asr_pending_bytes?: number;
   asr_peak_bytes?: number;
+  asr_streaming?: boolean;
 }
 export interface AudioHealthView { paused: boolean; message: string; canResume: boolean; advisory: string }
 const messages: Record<string, string> = {
@@ -17,6 +18,7 @@ const messages: Record<string, string> = {
   microphone_disconnected: '麦克风设备已断开，双方上下文可能不完整',
   asr_init_failed: '转写模型未能启动，请停止采集后重新开始',
   asr_worker_failed: '转写任务已异常退出，请停止采集后重新开始',
+  cloud_asr_failed: '云转写已中断，请停止后重试或在音频设置切回本地模型',
   asr_failed: '这段语音转写失败', inactive: '音频采集已异常停止，请停止采集后重新开始',
   asr_overflow: '转写积压达到容量上限，已停止接收新语音，文字可能不完整。请点击停止采集，等待处理完成后重新开始',
   system_missing: '系统音频没有启动，请停止采集后重新开始',
@@ -63,7 +65,7 @@ export class InterviewAudioHealth {
     // A delayed event cannot claim an unbound page while start is in flight.
     if (!this.accepts(event.session_id) || event.sequence <= this.sequence) return false;
     this.sequence = event.sequence; this.reason = event.code; this.faultAt = this.now();
-    if (['asr_init_failed', 'asr_worker_failed', 'asr_overflow'].includes(event.code)) this.restartRequired = true;
+    if (['asr_init_failed', 'asr_worker_failed', 'asr_overflow','cloud_asr_failed'].includes(event.code)) this.restartRequired = true;
     return true;
   }
   observe(snapshot?: AudioHealthSnapshot | null) {
@@ -76,7 +78,7 @@ export class InterviewAudioHealth {
       if (!snapshot.active) { if (this.reason !== 'asr_overflow') this.reason = 'inactive'; this.restartRequired = true; }
       else if (!snapshot.system_started) { this.reason = 'system_missing'; this.restartRequired = true; }
       else if (!snapshot.paused && !this.reason) {
-        if (snapshot.asr_pending >= 4) { this.reason = 'backlog'; this.faultAt = this.now(); }
+        if (snapshot.asr_streaming ? (snapshot.asr_pending_bytes ?? 0) >= 384000 : snapshot.asr_pending >= 4) { this.reason = 'backlog'; this.faultAt = this.now(); }
         else if (snapshot.asr_pending > 0 && (snapshot.asr_no_progress_ms ?? 0) >= 30000) { this.reason = 'stalled'; this.faultAt = this.now(); }
       }
     }

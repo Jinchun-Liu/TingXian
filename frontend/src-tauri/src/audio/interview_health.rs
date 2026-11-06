@@ -14,20 +14,20 @@ pub struct AudioHealthSnapshot {
     pub system_started:bool,pub microphone_enabled:bool,pub active_for_ms:u64,
     pub system_frame_age_ms:Option<u64>,pub microphone_frame_age_ms:Option<u64>,
     pub system_signal_age_ms:Option<u64>,pub asr_pending:u64,pub asr_no_progress_ms:Option<u64>,
-    pub asr_pending_bytes:u64,pub asr_peak_bytes:u64,
+    pub asr_pending_bytes:u64,pub asr_peak_bytes:u64,pub asr_streaming:bool,
     pub fault:Option<AudioFault>,pub restart_required:bool,pub restart_reason:Option<String>,pub elapsed_ms:u64,
 }
 #[derive(Default)]
 struct Work {pending:u64,last_progress_ms:u64,bytes:u64,peak_bytes:u64}
 pub struct AudioHealth {
-    pub session_id:u64,origin:Instant,active_since:AtomicU64,
+    pub session_id:u64,pub streaming:AtomicBool,origin:Instant,active_since:AtomicU64,
     system_frame:AtomicU64,microphone_frame:AtomicU64,system_signal:AtomicU64,
     work:Mutex<Work>,fault:Mutex<Option<AudioFault>>,restart_required:AtomicBool,restart_reason:Mutex<Option<String>>,
 }
 pub struct WorkTicket {health:Arc<AudioHealth>,bytes:u64}
 impl Drop for WorkTicket {fn drop(&mut self){self.health.completed(self.bytes);}}
 impl AudioHealth {
-    pub fn new()->Arc<Self> {Arc::new(Self {session_id:NEXT_SESSION.fetch_add(1,Ordering::Relaxed),origin:Instant::now(),active_since:AtomicU64::new(0),system_frame:AtomicU64::new(0),microphone_frame:AtomicU64::new(0),system_signal:AtomicU64::new(0),work:Mutex::new(Work::default()),fault:Mutex::new(None),restart_required:AtomicBool::new(false),restart_reason:Mutex::new(None)})}
+    pub fn new()->Arc<Self> {Arc::new(Self {session_id:NEXT_SESSION.fetch_add(1,Ordering::Relaxed),streaming:AtomicBool::new(false),origin:Instant::now(),active_since:AtomicU64::new(0),system_frame:AtomicU64::new(0),microphone_frame:AtomicU64::new(0),system_signal:AtomicU64::new(0),work:Mutex::new(Work::default()),fault:Mutex::new(None),restart_required:AtomicBool::new(false),restart_reason:Mutex::new(None)})}
     fn now(&self)->u64 {self.origin.elapsed().as_millis() as u64+1}
     pub fn resumed(&self) {self.active_since.store(self.now(),Ordering::Relaxed);}
     pub fn observe(&self,system:bool,data:&[f32]) {
@@ -45,7 +45,7 @@ impl AudioHealth {
     }
     fn completed(&self,bytes:u64) {let mut work=self.work.lock().unwrap();work.pending=work.pending.saturating_sub(1);work.bytes=work.bytes.saturating_sub(bytes);work.last_progress_ms=self.now();}
     pub fn record_fault(&self,code:&str)->AudioFault {
-        if matches!(code,"asr_init_failed"|"asr_worker_failed") {
+        if matches!(code,"asr_init_failed"|"asr_worker_failed"|"cloud_asr_failed") {
             self.restart_reason.lock().unwrap().get_or_insert_with(||code.to_string());
             self.restart_required.store(true,Ordering::Relaxed);
         }
@@ -54,7 +54,7 @@ impl AudioHealth {
     pub fn snapshot(&self,recording:bool,active:bool,paused:bool,system_started:bool,microphone_enabled:bool)->AudioHealthSnapshot {
         let now=self.now();let age=|counter:&AtomicU64|{let value=counter.load(Ordering::Relaxed);(value!=0).then(||now.saturating_sub(value))};
         let work=self.work.lock().unwrap();
-        AudioHealthSnapshot {session_id:self.session_id,recording,active,paused,system_started,microphone_enabled,active_for_ms:now.saturating_sub(self.active_since.load(Ordering::Relaxed)),system_frame_age_ms:age(&self.system_frame),microphone_frame_age_ms:age(&self.microphone_frame),system_signal_age_ms:age(&self.system_signal),asr_pending:work.pending,asr_no_progress_ms:(work.pending>0).then(||now.saturating_sub(work.last_progress_ms)),asr_pending_bytes:work.bytes,asr_peak_bytes:work.peak_bytes,fault:self.fault.lock().unwrap().clone(),restart_required:self.restart_required.load(Ordering::Relaxed),restart_reason:self.restart_reason.lock().unwrap().clone(),elapsed_ms:now}
+        AudioHealthSnapshot {session_id:self.session_id,recording,active,paused,system_started,microphone_enabled,active_for_ms:now.saturating_sub(self.active_since.load(Ordering::Relaxed)),system_frame_age_ms:age(&self.system_frame),microphone_frame_age_ms:age(&self.microphone_frame),system_signal_age_ms:age(&self.system_signal),asr_pending:work.pending,asr_no_progress_ms:(work.pending>0).then(||now.saturating_sub(work.last_progress_ms)),asr_pending_bytes:work.bytes,asr_peak_bytes:work.peak_bytes,asr_streaming:self.streaming.load(Ordering::Relaxed),fault:self.fault.lock().unwrap().clone(),restart_required:self.restart_required.load(Ordering::Relaxed),restart_reason:self.restart_reason.lock().unwrap().clone(),elapsed_ms:now}
     }
 }
 pub fn report<R:Runtime>(app:&tauri::AppHandle<R>,health:&AudioHealth,code:&str) {

@@ -390,6 +390,7 @@ impl AudioCapture {
 
     /// Process audio data directly from callback
     pub fn process_audio_data(&self, data: &[f32]) {
+        let cloud_epoch=self.state.cloud_epoch();
         if !super::microphone_gate::allowed(&self.microphone_gate) { return; }
         if self.state.is_recording() {self.state.health.observe(matches!(self.device_type,DeviceType::System),data);}
         if matches!(self.device_type, DeviceType::System) {
@@ -626,7 +627,7 @@ impl AudioCapture {
             timestamp,
             chunk_id,
             device_type: self.device_type.clone(),
-            speech_boundary: None,
+            speech_boundary: self.state.cloud_streaming().then(||super::vad::SpeechBoundary{utterance_id:cloud_epoch,is_final:false,last_voice_ms:None,timing:None}),
             microphone_gate: self.microphone_gate.clone(),
             replaces_utterance: false,
         };
@@ -867,6 +868,9 @@ impl AudioPipeline {
                     // Preserve capture-channel identity for ASR. Mixing first
                     // would make the candidate's answer indistinguishable from
                     // the remote participant. WAV recording remains independent.
+                    if self.state.cloud_streaming() {
+                        if let Err(error)=self.transcription_sender.send(chunk.clone()){warn!("Cloud audio admission failed: {}",error);}
+                    } else {
                     let offset = match chunk.device_type {
                         DeviceType::System => *self.system_offset.get_or_insert((chunk.timestamp - chunk.data.len() as f64 / chunk.sample_rate as f64).max(0.0)),
                         DeviceType::Microphone => *self.microphone_offset.get_or_insert((chunk.timestamp - chunk.data.len() as f64 / chunk.sample_rate as f64).max(0.0)),
@@ -878,6 +882,7 @@ impl AudioPipeline {
                     match segments {
                         Ok(segments) => self.send_speech_segments(segments, chunk.device_type.clone(), offset),
                         Err(error) => warn!("Channel VAD error: {}", error),
+                    }
                     }
 
                     // STEP 1: Add raw audio to ring buffer for mixing
@@ -970,6 +975,7 @@ impl AudioPipeline {
     }
 
     fn flush_remaining_audio(&mut self) -> Result<()> {
+        if self.state.cloud_streaming(){return Ok(());}
         let system = self.vad_processor.flush()?;
         self.send_speech_segments(system, DeviceType::System, self.system_offset.unwrap_or(0.0));
         if super::microphone_gate::allowed(&self.microphone_gate) {

@@ -7,6 +7,12 @@ on:
 permissions:
   contents: read
 jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --locked -p interview-core
   frontend-and-release:
     runs-on: ubuntu-latest
     steps:

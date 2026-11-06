@@ -4,6 +4,7 @@ import {invoke} from '@tauri-apps/api/core';
 import {listen} from '@tauri-apps/api/event';
 import {Button} from '@/components/ui/button';
 import {ChoiceMenu, ChoiceOption} from '@/components/ui/choice-menu';
+import {CloudAsrSettings} from '@/components/interview/CloudAsrSettings';
 
 type Device = {name:string; device_type:'Input'|'Output'};
 type Devices = {preferred_mic_device:string|null;preferred_system_device:string|null};
@@ -11,7 +12,7 @@ type Model = {name:string;size_mb:number;status:'Available'|'Missing'|{Downloadi
 type Catalog = {selected:string;models:Model[]};
 const isDownloading=(s:Model['status']):s is {Downloading:{progress:number}}=>typeof s==='object' && 'Downloading' in s;
 const statusOf=(s:Model['status'])=>s==='Available'?'已就绪':s==='Missing'?'未下载':('Downloading' in s?'下载中':'需重新下载');
-export function AudioSettings({locked,microphone,onMicrophone}:{locked:boolean;microphone:boolean;onMicrophone:(value:boolean)=>void}){
+export function AudioSettings({locked,microphone,onMicrophone,onConfigurationChanged}:{locked:boolean;microphone:boolean;onMicrophone:(value:boolean)=>void;onConfigurationChanged?:()=>void}){
   const [devices,setDevices]=useState<Device[]>([]),[prefs,setPrefs]=useState<Devices|null>(null);
   const [catalog,setCatalog]=useState<Catalog|null>(null),[selected,setSelected]=useState('');
   const [pending,setPending]=useState(false),[message,setMessage]=useState('');
@@ -110,6 +111,7 @@ export function AudioSettings({locked,microphone,onMicrophone}:{locked:boolean;m
     finally{if(mounted.current)await refreshModels();}
   }
   return <section aria-label="音频设备与转写模型" className="tx-audio">
+    <CloudAsrSettings locked={locked||pending} onSaved={onConfigurationChanged}/>
     <section><header className="tx-section-head"><h3>采集设备</h3><button className="tx-text-action" disabled={pending} onClick={()=>{setMessage('');void refresh();}}>刷新设备与模型</button></header>
       {field('Output','对方声音 · 系统输出')}{field('Input','我的声音 · 麦克风')}
       <div className="tx-audio-options"><label><input type="checkbox" checked={microphone} disabled={disabled} onChange={e=>onMicrophone(e.target.checked)}/>记录我的声音</label>

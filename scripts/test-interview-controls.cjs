@@ -12,6 +12,7 @@ const conflict={id:'C-synthetic',topic:'本科 · 毕业日期',category:'date_d
 let failStop=false, cancelOnStop=false;
 let savedRows=[], savedId=0, failSave=false, corruptLoad=false;
 let scene='interview',configuredKey=true,paused=false;
+let asrMode='local';
 let requestConfig={model:'deepseek-flash',connect_timeout_secs:5,first_answer_warning_secs:8,total_timeout_secs:20};
 const untestedConnection=()=>({check_id:null,status:'untested',model:null,started_at:null,finished_at:null,elapsed_ms:null,attempts:0,total_tokens:null,message:'尚未测试连接'});
 let connection=untestedConnection(),holdConnection=false,releaseConnection=null;
@@ -52,7 +53,7 @@ const invoke = async (name, args) => {
   if (name === 'rag_search') {assert.ok(args.question);return {evidence:[],conflicts:[conflict]};}
   if (name === 'interview_config') {assert.equal(Object.hasOwn(args,'facts'),false,'ordinary config must not submit or confirm a fact draft');return;}
   if(name==='api_get_meetings')return [];
-  if (name === 'interview_status') return { preferences:{scenario:scene}, root:'', suggested_root:'', model:requestConfig.model, aliases:'kept aliases', facts:'kept confirmed fact', key_configured:configuredKey, index_version:indexDocuments ? '1' : '2', index_documents:indexDocuments, index_chunks:indexDocuments ? 3 : 0, session_active:false };
+  if (name === 'interview_status') return { cloud_asr_mode:asrMode,preferences:{scenario:scene}, root:'', suggested_root:'', model:requestConfig.model, aliases:'kept aliases', facts:'kept confirmed fact', key_configured:configuredKey, index_version:indexDocuments ? '1' : '2', index_documents:indexDocuments, index_chunks:indexDocuments ? 3 : 0, session_active:false };
   if (name === 'interview_audio_start') {
     assert.equal(typeof args?.recordMicrophone, 'boolean');
     assert.equal(native.recording, false, 'start while native capture still active');
@@ -531,6 +532,30 @@ function text(node) { return typeof node === 'string' ? node : (node?.children||
   assert.equal(recoveryNative.drafts.size,0,'old content revived after clear');
   await act(async()=>tree.unmount());
   console.log('PASS: actual page explicitly recovers interrupted output, editor and usage, with capture/AI off; replacement and clear fences hold');
+  asrMode='aliyun';scene='interview';configuredKey=true;
+  await act(async()=>{tree=create(React.createElement(load('app/interview/page.tsx').default));});
+  await check('已获允许使用转写',true);await check('允许向 DeepSeek',true);
+  const starts=calls.filter(c=>c.name==='interview_audio_start').length;
+  await click('开始持续聆听与回答');assert.equal(calls.filter(c=>c.name==='interview_audio_start').length,starts,'text consent silently authorized audio upload');
+  await check('允许将本次声音和术语',true);await click('开始持续聆听与回答');assert.equal(calls.filter(c=>c.name==='interview_audio_start').at(-1).args.cloudAsrAllowed,true);
+  const beforeCloud=answers().length;
+  const partial={...remote,native_session_id:healthSnapshot.session_id,sequence_id:9901,utterance_id:9901,text:'契约测试与 null',is_partial:true,replaces_utterance:true};
+  await emit(partial);await latestTick();assert.equal(answers().length,beforeCloud);assert.equal(text(tree.root.findByProps({'aria-label':'实时字幕'})),'契约测试与 null');
+  await emit({...partial,sequence_id:9902,text:'契约测试与 null、零的区别'});assert.equal(tree.root.findAllByProps({'aria-label':'实时字幕'}).length,1);
+  await emit({...partial,sequence_id:9903,text:'契约测试如何区分 null 和零？',is_partial:false});
+  await act(async()=>listeners.get('interview-utterance-end')({payload:{source:'System',native_session_id:healthSnapshot.session_id,utterance_id:9901,success:true}}));
+  await latestTick();assert.equal(answers().length,beforeCloud+1);assert.equal(tree.root.findAllByProps({'aria-label':'实时字幕'}).length,0);await finish();
+  await emit({...partial,sequence_id:9904,text:'迟到的临时字幕不应覆盖整句'});
+  assert.equal(tree.root.findAllByProps({'aria-label':'实时字幕'}).length,0);assert.ok(!text(tree.toJSON()).includes('迟到的临时字幕不应覆盖整句'));
+  await emit({...own(9910,native.epoch,'我会验证业务语义'),native_session_id:healthSnapshot.session_id,is_partial:true});await latestTick();assert.equal(answers().length,beforeCloud+1);
+  await emit({...own(9911,native.epoch,'我会验证业务语义'),native_session_id:healthSnapshot.session_id});await latestTick();assert.equal(answers().length,beforeCloud+1);
+  await emit({...partial,sequence_id:9920,utterance_id:9920,text:'中断前尚未完成的字幕'});
+  await act(async()=>listeners.get('interview-utterance-end')({payload:{source:'System',native_session_id:healthSnapshot.session_id,utterance_id:9920,success:false}}));
+  await latestTick();assert.equal(answers().length,beforeCloud+1);assert.equal(tree.root.findAllByProps({'aria-label':'实时字幕'}).length,0);assert.ok(text(tree.toJSON()).includes('中断前尚未完成的字幕'),'network failure erased received partial text');
+  await emit({...partial,sequence_id:9921,utterance_id:9920,text:'失败任务迟到字幕'});
+  assert.equal(tree.root.findAllByProps({'aria-label':'实时字幕'}).length,0);assert.ok(text(tree.toJSON()).includes('中断前尚未完成的字幕'));
+  await click('停止采集');await act(async()=>tree.unmount());
+  console.log('PASS: cloud audio has separate consent; partials update subtitles only, final dispatches once, own speech never answers, interrupted text remains without dispatch');
   console.log('PASS: actual page records group context, alerts before answering, dispatches only addressed speech, and switches back to pairs');
   console.log('PASS: all general scenes capture without Key/consent, resume stays local, and learning/meeting actions are explicit with labelled AI history');
   console.log('PASS: default/clear limit 80, restore counts, warning at 75, advance +20, in-flight completion, manual/auto block, continued capture/local self editing, retained queue and explicit resume');

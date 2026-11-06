@@ -1,5 +1,6 @@
 pub mod background;
 pub mod recovery;
+pub mod cloud_asr;
 pub mod index;
 pub mod model;
 pub mod import_control;

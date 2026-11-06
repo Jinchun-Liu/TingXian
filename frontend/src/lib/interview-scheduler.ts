@@ -7,6 +7,7 @@ export interface TranscriptInput {
   replaces_utterance?: boolean;
   capture_session?: number;
   native_session_id?: number | null;
+  interrupted?: boolean;
 }
 
 export function sameCapturedUtterance(a: Pick<TranscriptInput, 'source' | 'utterance_id' | 'microphone_epoch' | 'capture_session'>, b: TranscriptInput) {

@@ -38,6 +38,7 @@ pub struct InterviewState {
     network: Arc<RwLock<()>>,
     pub(crate) session: AtomicBool,
     pub(crate) background:crate::interview_background::Work,
+    pub(crate) cloud_asr:crate::interview_cloud_asr::Credentials,
     key: Mutex<Option<String>>,
     connection: crate::interview_connection::ConnectionState,
 }
@@ -114,6 +115,7 @@ pub async fn interview_status(app:tauri::AppHandle,state:State<'_,InterviewState
         "preferences":index.preferences().await?,"model":request_config.model,"root":index.setting("root").await?,"suggested_root":dirs::home_dir().map(|p|p.join("Documents").to_string_lossy().into_owned()),"index_version":index.setting("version").await?,
         "session_active":state.session.load(Ordering::SeqCst),"index_documents":documents,"index_chunks":chunks,"documents":index.documents().await?,"aliases":if aliases.is_empty(){DEFAULT_ALIASES}else{&aliases},
         "facts":index.setting("facts").await?,"fact_card":index.fact_card().await?,"whisper_model":crate::whisper_engine::commands::whisper_get_current_model().await.unwrap_or(None),
+        "cloud_asr_mode":index.cloud_asr_config().await?.mode,
         "audio_validation":"未验收；上游混合音频事件不提供可靠说话人身份"}))
 }
 #[tauri::command]
@@ -694,20 +696,24 @@ pub async fn interview_history_clear(app:tauri::AppHandle,state:State<'_,Intervi
 }
 
 #[tauri::command]
-pub async fn interview_audio_start(app:tauri::AppHandle,state:State<'_,InterviewState>,record_microphone:bool)->Result<crate::audio::recording_commands::MicrophoneStatus,String> {
+pub async fn interview_audio_start(app:tauri::AppHandle,state:State<'_,InterviewState>,record_microphone:bool,cloud_asr_allowed:Option<bool>)->Result<crate::audio::recording_commands::MicrophoneStatus,String> {
     crate::interview_exit::ensure_not_exiting(&app)?;
     let _guard=state.lifecycle.lock().await;
     crate::interview_exit::ensure_not_exiting(&app)?;
-    let model = crate::tingxian_audio::selected_model(&app).await?;
-    crate::tingxian_audio::save_model(&app, &model).await?;
+    if crate::audio::recording_commands::is_recording().await{return Err("采集已经开始".into());}
+    let cloud=crate::interview_cloud_asr::CloudStart::prepare(&app,&state,cloud_asr_allowed.unwrap_or(false),record_microphone).await?;
     let preferences=state.index(&app).await?.preferences().await?;
-    if model.contains(".en") && preferences.transcription_language!="en" {return Err("英文专用模型仅支持英文转写".into());}
+    if cloud.is_none(){
+        let model=crate::tingxian_audio::selected_model(&app).await?;
+        crate::tingxian_audio::save_model(&app,&model).await?;
+        if model.contains(".en") && preferences.transcription_language!="en" {return Err("英文专用模型仅支持英文转写".into());}
+    }
     let mut prefs=crate::audio::recording_preferences::load_recording_preferences(&app).await.map_err(|e|e.to_string())?;
     prefs.auto_save=false;
     crate::audio::recording_preferences::save_recording_preferences(&app,&prefs).await.map_err(|e|e.to_string())?;
     crate::set_language_preference(preferences.transcription_language).await?;
     let mic = if record_microphone { prefs.preferred_mic_device } else { Some("__interview_disabled__".into()) };
-    crate::audio::recording_commands::start_recording_with_devices_and_meeting(app.clone(),mic,prefs.preferred_system_device,Some("Interview practice".into())).await?;
+    crate::audio::recording_commands::start_recording_with_asr(app.clone(),mic,prefs.preferred_system_device,Some("Interview practice".into()),cloud).await?;
     let status=crate::audio::recording_commands::microphone_status();
     // The generic recorder permits microphone-only capture after a system
     // stream error. An interview cannot claim to hear the remote participant.

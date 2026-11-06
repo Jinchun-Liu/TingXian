@@ -534,6 +534,9 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     system_device_name: Option<String>,
     meeting_name: Option<String>,
 ) -> Result<(), String> {
+    start_recording_with_asr(app,mic_device_name,system_device_name,meeting_name,None).await
+}
+pub(crate) async fn start_recording_with_asr<R:Runtime>(app:AppHandle<R>,mic_device_name:Option<String>,system_device_name:Option<String>,meeting_name:Option<String>,cloud:Option<crate::interview_cloud_asr::CloudStart>)->Result<(),String> {
     info!(
         "Starting recording with specific devices: mic={:?}, system={:?}, meeting={:?}",
         mic_device_name, system_device_name, meeting_name
@@ -559,6 +562,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
 
     // Validate that transcription models are available before starting recording
     info!("🔍 Validating transcription model availability before starting recording...");
+    if cloud.is_none() {
     if let Err(validation_error) = transcription::validate_transcription_model_ready(&app).await {
         error!("Model validation failed: {}", validation_error);
 
@@ -572,6 +576,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         }));
 
         return Err(validation_error);
+    }
     }
     info!("✅ Transcription model validation passed");
 
@@ -596,6 +601,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
 
     // Create new recording manager
     let mut manager = RecordingManager::new();
+    if cloud.is_some(){manager.get_state().enable_cloud_streaming();}
 
     // Load recording preferences to check auto_save setting
     let auto_save = match super::recording_preferences::load_recording_preferences(&app).await {
@@ -679,7 +685,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     }
 
     // Start optimized parallel transcription task and store handle
-    let task_handle = transcription::start_transcription_task(app.clone(), transcription_receiver, session.health.clone(), session.transcription_control.clone());
+    let task_handle = if let Some(cloud)=cloud {crate::interview_cloud_asr::start(app.clone(),transcription_receiver,session.clone(),cloud)}else{transcription::start_transcription_task(app.clone(), transcription_receiver, session.health.clone(), session.transcription_control.clone())};
     {
         let mut global_task = TRANSCRIPTION_TASK.lock().unwrap();
         *global_task = Some(ActiveTranscription {session_id:session.health.session_id,handle:task_handle,control:session.transcription_control.clone()});

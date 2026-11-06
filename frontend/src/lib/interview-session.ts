@@ -48,6 +48,7 @@ export function parseSessionSnapshot(raw:unknown,allowEmpty=false):SessionSnapsh
 }
 export function recoverSessionSnapshot(raw:unknown,prefix:string,allowEmpty=false):SessionSnapshot {
   const s=parseSessionSnapshot(raw,allowEmpty);
+  s.transcripts=s.transcripts.map(t=>t.is_partial?{...t,interrupted:true}:t);
   s.history=s.history.map(t=>({...t,restored_from:prefix,id:`restored-${prefix}-${t.id}`,status:t.status==='generating'?'cancelled':['queued','listening'].includes(t.status)?'recorded':t.status}));
   if(s.usage_ledger)s.usage_ledger.requests=s.usage_ledger.requests.map(r=>({...r,question_id:`restored-${prefix}-${r.question_id}`,state:r.state==='pending'?'cancelled':r.state}));
   return parseSessionSnapshot(s,allowEmpty);

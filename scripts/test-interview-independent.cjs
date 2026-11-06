@@ -7,6 +7,7 @@ const active=new Map(),calls=[],routes=[];let releaseDownload, nativeDownload=nu
 const invoke=async(cmd,args)=>{
   calls.push(cmd);
   switch(cmd){
+    case 'interview_cloud_asr_get':return {config:{mode:'local',workspace_id:'',silence_ms:1300},key_configured:false};
     case 'get_audio_devices':return devices;
     case 'get_recording_preferences':return {...prefs};
     case 'tingxian_storage_ready':if(failBoot)throw Error('合成只读失败');return;
@@ -31,6 +32,7 @@ function component(rel){
     if(n==='next/navigation')return {useRouter:()=>router};
     if(n==='@/components/ui/button')return {Button:'button'};
     if(n==='@/components/ui/choice-menu')return {ChoiceMenu:'choice',ChoiceOption:'option'};
+    if(n==='@/components/interview/CloudAsrSettings')return component('components/interview/CloudAsrSettings.tsx');
     return req(n);
   },m,m.exports);return m.exports;
 }
