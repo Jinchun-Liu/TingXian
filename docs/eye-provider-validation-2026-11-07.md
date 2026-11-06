@@ -31,8 +31,17 @@ Windows 11、VS 2019 MSVC 19.29、CMake 4.4.5，SDK-free Release 测试通过 **
 - 准备/推理/清理过程中停止，旧启动票据和迟到成功结果隔离。
 - 三轮显式重启、清理失败后不可重新开始，有限并发交错检查。
 
-新增 Windows/Linux 独立 CI，仅构建上述合成检查；本段不把新建 workflow 当作已经
-运行通过。CI 状态在取得实际运行结果后另记。
+源码 `f60ef6b4b1520f6827482b36c81e3722bb79b557` 的
+[独立 CI 42257698930](https://github.com/Jinchun-Liu/TingXian/actions/runs/42257698930)
+已完成并成功。Windows 2022 和 Ubuntu 24.04 各通过 137 条断言、零失败；两份结果
+ZIP 已下载到 D 盘并与 GitHub artifact SHA-256 一致：
+
+| 平台 | artifact | SHA-256 |
+| --- | --- | --- |
+| Windows | 13521904913 | `2463369aba4fe9e920a5bc629488f3cb428e232ed2cf76c796b99a7f089a8d54` |
+| Ubuntu | 13522319664 | `2a290da1fe57e4ff3eb650371a6e91952a2dc3e328418c37ad196ea99f9833a2` |
+
+它只编译运行自身合成边界，未下载/执行 NVIDIA，也没有构建或安装新的应用包。
 
 ## 证据与未完成项
 
