@@ -14,6 +14,61 @@ class Response:
     def __exit__(self,*a): pass
     def read(self,n): return self.body[:n]
 class Test(unittest.TestCase):
+    def test_durable_resume_source_change_model_fence_and_unknown_usage(self):
+        root=Path(tempfile.mkdtemp());sources=root/"sources";sources.mkdir()
+        text="虚构项目仅用于练习，不代表真实生产经历。\n"*1400
+        source=sources/"a.txt";source.write_text(text)
+        (sources/"duplicate.txt").write_text(text)
+        checkpoint=root/"job.sqlite"
+        req={"folder":str(sources),"checkpoint":str(checkpoint),"api":{"key":"synthetic-only-key","model":"test-model","endpoint":"http://localhost/chat/completions","timeout":1}}
+        mapped=[];fail=True
+        def transport(request,timeout):
+            nonlocal fail
+            body=json.loads(request.data);system=body["messages"][0]["content"];data=json.loads(body["messages"][1]["content"])
+            if system==m.MAP:
+                mapped.append(data["segments"][0]["location"])
+                if fail and len(mapped)==2: raise m.urllib.error.URLError("synthetic disconnect")
+                row=data["segments"][0]
+                reply={"records":[{"location":row["location"],"quote":row["text"],"note":"练习资料","kind":"practice"}]}
+            else: reply={"overview":"虚构练习项目","role":"","aliases":""}
+            return Response(m.dumps({"usage":{"prompt_tokens":100},"choices":[{"finish_reason":"stop","message":{"content":m.dumps(reply)}}]}).encode())
+        with patch.object(m.urllib.request.OpenerDirector,"open",side_effect=transport):
+            with self.assertRaises(m.urllib.error.URLError): m.process(req,lambda _:None)
+            state=m.checkpoint_status(checkpoint)
+            self.assertEqual(state["status"],"interrupted");self.assertEqual(state["files"][0]["done"],1)
+            self.assertNotIn("synthetic-only-key",checkpoint.read_bytes().decode(errors="ignore"))
+            self.assertNotIn("key",state["request"]["api"])
+            fail=False;out=m.process(req,lambda _:None)
+            self.assertEqual(mapped.count("行 1"),1,"completed map was sent again")
+            self.assertEqual(len(out["bundle"]["documents"]),1,"duplicate content counted twice")
+            self.assertEqual(out["metrics"]["unknown_calls"],1)
+            statuses={r["status"] for r in m.checkpoint_status(checkpoint)["files"]}
+            self.assertEqual(statuses,{"completed","skipped"})
+            before=len(mapped);self.assertEqual(m.process(req,lambda _:None),out);self.assertEqual(len(mapped),before)
+            source.write_text("虚构来源已改动")
+            changed=m.process(req,lambda _:None)
+            self.assertEqual(len(changed["bundle"]["documents"]),2)
+            self.assertNotEqual(changed["bundle"]["documents"][0]["hash"],out["bundle"]["documents"][0]["hash"])
+            with self.assertRaisesRegex(ValueError,"模型、预算"):
+                m.process({**req,"api":{**req["api"],"model":"different"}},lambda _:None)
+        with m.Checkpoint(checkpoint,req):
+            with self.assertRaisesRegex(ValueError,"仍在运行"): m.Checkpoint(checkpoint,req)
+        with patch.object(m.urllib.request.OpenerDirector,"open",side_effect=AssertionError("verification sent data")):
+            self.assertTrue(m.process({**req,"verify_documents":changed["bundle"]["documents"]},lambda _:None)["verified"])
+            source.write_text("核对后再次变化")
+            with self.assertRaisesRegex(ValueError,"来源已变化"):
+                m.process({**req,"verify_documents":changed["bundle"]["documents"]},lambda _:None)
+
+    def test_agent_resume_plan_checks_each_partial_against_current_source(self):
+        root=Path(tempfile.mkdtemp());path=root/"sample.txt";path.write_text("虚构练习材料\n"*2000)
+        key=next(iter(m.inventory(root)));h,parts=m.source(path,path.name)
+        first=parts[0][0];card={"hash":h,"parts":[{"records":[{"kind":"practice","quote":first["text"],"location":first["location"],"note":"练习"}]},None]}
+        result=m.agent_plan(root,{key:card})[0];self.assertEqual(result["reusable_parts"],[1]);self.assertIn(2,result["pending_parts"])
+        card["parts"][0]["records"][0]["quote"]="不存在的原文"
+        self.assertIn("error",m.agent_plan(root,{key:card})[0])
+        path.write_text("修改后的资料")
+        result=m.agent_plan(root,{key:card})[0];self.assertTrue(result["changed"]);self.assertEqual(result["reusable_parts"],[])
+
     def test_budget_and_docx(self):
         from docx import Document
         root=Path(tempfile.mkdtemp()); path=root/"resume.docx";doc=Document();doc.add_paragraph("虚构背景")

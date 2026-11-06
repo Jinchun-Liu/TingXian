@@ -1,4 +1,4 @@
-//! Interview assistance only: no tools, no audio upload, explicit local snapshots, no automatic chat retention.
+//! Interview assistance: explicit external sharing and recoverable local snapshots.
 use interview_core::{Index, Selection, Turn, DEFAULT_ALIASES};
 use serde_json::{json, Value};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};

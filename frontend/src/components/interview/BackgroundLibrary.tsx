@@ -4,15 +4,18 @@ import {invoke} from '@tauri-apps/api/core';
 import {Button} from '@/components/ui/button';
 type Profile={overview:string;role:string;aliases:string};
 type Metrics={peak_prompt_tokens:number|null;sum_prompt_tokens?:number;calls:number};
-type Draft={id:string;profile:Profile;documents:{id:string;name:string;count:number}[];failures:[string,string][];metrics:Metrics|null};
+type Draft={id:string;job?:string;profile:Profile;documents:{id:string;name:string;count:number}[];failures:[string,string][];metrics:Metrics|null};
 type Report={documents:number;chunks:number;baseline:number;full_budget:number;rag_budget:number;fits_full:boolean;version:string;state:null|{profile:Profile;share:boolean;metrics:Metrics|null};measurement:null|{version:string;model:string;chunks:number;metrics:Metrics}};
-type View={library:Report;model:string;ready:boolean;work:{busy:boolean;progress:string;draft:Draft|null}};
+type Job={id:string;model?:string;status:string;total:number;completed:number;failed:number;skipped:number;unknown_calls:number};
+type JobFile={name:string;status:string;reason:string;done:number;total:number};
+type View={library:Report;model:string;ready:boolean;jobs?:Job[];work:{busy:boolean;progress:string;draft:Draft|null}};
 type Selection={id:string;label:string;count:number;folder:boolean};
 const num=(n:number)=>n.toLocaleString('zh-CN');
 export function BackgroundLibrary({locked,onBusy,onApplied,onModels,revision,active}:{locked:boolean;onBusy:(v:boolean)=>void;onApplied:()=>Promise<void>;onModels:()=>void;revision?:string;active:boolean}){
   const [v,setV]=useState<View|null>(null),[selected,select]=useState<Selection|null>(null),[msg,setMsg]=useState(''),[progress,setProgress]=useState(''),[working,setWorking]=useState(false);
   const [edit,setEdit]=useState<Profile|null>(null),[base,setBase]=useState(''),[share,setShare]=useState(false),[terms,setTerms]=useState(true),[include,setInclude]=useState(true);
   const [preview,setPreview]=useState<{id:string;offset:number;more:boolean;rows:{location:string;quote:string;note:string}[]}|null>(null);
+  const [jobFiles,setJobFiles]=useState<{id:string;files:JobFile[]}|null>(null);
   const running=useRef(false), draftKey=useRef('');
   const sync=async()=>{const x=await invoke<View>('background_status');setV(x);
     const d=x.work.draft;if(d&&d.id!==draftKey.current){setPreview(null);draftKey.current=d.id;setBase(x.library.version);setEdit(d.profile);setShare(false);setTerms(true);}
@@ -27,17 +30,17 @@ export function BackgroundLibrary({locked,onBusy,onApplied,onModels,revision,act
     }).catch(e=>setMsg(String(e)));},800);
     return ()=>clearInterval(timer);
   },[v?.work.busy,working]);
-  const op=async(fn:()=>Promise<void>)=>{if(running.current||locked)return;running.current=true;setWorking(true);onBusy(true);setMsg('');
+  const op=async(fn:()=>Promise<void>)=>{if(running.current||locked||v?.work.busy)return;running.current=true;setWorking(true);onBusy(true);setMsg('');
     try{await fn();}catch(e){setMsg(String(e));}finally{running.current=false;setWorking(false);onBusy(false);}};
   const pick=(mode:'folder'|'files'|'bundle')=>op(async()=>{
     const s=await invoke<Selection|null>('background_choose',{mode});if(!s)return;
     if(mode==='bundle'){select(null);await sync();}else select(s);
   });
-  const generate=(measure=false)=>op(async()=>{
+  const generate=(measure=false,job?:string)=>op(async()=>{
     setProgress(measure?'正在计量…':'正在读取资料…');
     const timer=setInterval(()=>{void invoke<{progress:string}>('background_progress').then(w=>{if(running.current&&w.progress)setProgress(w.progress);}).catch(()=>{});},800);
-    try{await invoke('background_generate',{selection:measure?'measure':selected?.id,includeLibrary:include});if(!measure)select(null);await sync();}
-    finally{clearInterval(timer);setProgress('');}
+    try{await invoke(job?'background_resume':'background_generate',job?{job}:{selection:measure?'measure':selected?.id,includeLibrary:include});if(!measure)select(null);}
+    finally{clearInterval(timer);setProgress('');await sync();}
   });
   const draft=v?.work.draft;
   const inspect=async(id:string,offset:number)=>{try{
@@ -47,7 +50,7 @@ export function BackgroundLibrary({locked,onBusy,onApplied,onModels,revision,act
     await invoke(draft?'background_apply':'background_edit',draft?{id:draft.id,profile:edit,share,mergeTerms:terms}:{version:base,profile:edit,share,mergeTerms:terms});
     draftKey.current='';setEdit(null);await sync();await onApplied();setMsg('背景与检索索引已保存。');
   });
-  const off=locked||working;
+  const off=locked||working||!!v?.work.busy;
   return <section aria-label="背景资料整理" className="space-y-3 rounded-lg border p-4 text-sm">
     <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-medium">已导入资料</h3><div className="flex flex-wrap gap-2">
       <Button size="sm" disabled={off} onClick={()=>pick('folder')}>整理文件夹</Button>
@@ -60,6 +63,17 @@ export function BackgroundLibrary({locked,onBusy,onApplied,onModels,revision,act
       {v?.ready?<Button size="sm" disabled={off} onClick={()=>generate()}>发送并整理</Button>:<Button size="sm" variant="outline" onClick={onModels}>配置背景整理模型</Button>}
     </div>}
     {progress&&<div role="status">{progress} <Button size="sm" variant="outline" onClick={()=>void invoke('background_cancel').catch(e=>setMsg(String(e)))}>取消</Button></div>}
+    {!!v?.jobs?.length&&<details><summary>整理任务 · {v.jobs.length}</summary>
+      <p className="py-2 text-xs text-slate-500">继续时重核来源；仅未完成或已变化的内容需要再次发送至背景模型。</p>
+      <ul className="divide-y">{v.jobs.map(job=><li key={job.id} className="py-3 space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-2"><span>{job.model||'任务不可读'} · {job.completed}/{job.total} 份完成{job.failed>0?` · ${job.failed} 份失败`:''}{job.skipped>0?` · ${job.skipped} 份跳过`:''}</span>
+          <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={off||job.status==='unreadable'} onClick={()=>void invoke<JobFile[]>('background_job_details',{job:job.id}).then(files=>setJobFiles({id:job.id,files})).catch(e=>setMsg(String(e)))}>查看进度</Button>
+            <Button size="sm" disabled={off||!v.ready||job.status==='unreadable'} onClick={()=>generate(false,job.id)}>继续并核对</Button>
+            <Button size="sm" variant="outline" disabled={off} onClick={()=>op(async()=>{await invoke('background_job_trash',{job:job.id});if(draft?.job===job.id){setEdit(null);draftKey.current='';}setJobFiles(null);await sync();})}>移入废纸篓</Button></div></div>
+        {job.unknown_calls>0&&<p className="text-xs">{job.unknown_calls} 次中断请求用量未知，继续可能产生新的调用。</p>}
+        {jobFiles?.id===job.id&&<ul className="max-h-52 overflow-auto text-xs space-y-1">{jobFiles.files.map(f=><li key={f.name}>{f.name} · {({queued:'等待',processing:'未完成',completed:'完成',failed:'失败',skipped:'跳过'} as Record<string,string>)[f.status]||f.status}{f.total>0?` · ${f.done}/${f.total} 段`:''}{f.reason?` · ${f.reason}`:''}</li>)}</ul>}
+      </li>)}</ul>
+    </details>}
     {edit&&<div className="space-y-2 rounded border p-3">
       <h4>{draft?'核对整理结果':'编辑已保存背景'}</h4>
       {draft&&<details><summary>{draft.documents.length} 份资料 · {draft.failures.length} 份未处理</summary>

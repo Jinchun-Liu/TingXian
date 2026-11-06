@@ -3,7 +3,8 @@ use crate::interview::InterviewState;
 use interview_core::background::{Bundle,Profile};
 use serde_json::{json,Value};
 use std::{path::{Path,PathBuf}, sync::{Mutex,atomic::Ordering}};
-use tauri::{AppHandle,State,Window};
+use tauri::{AppHandle,State,Window,Manager};
+use sqlx::{Connection,Row};
 use tauri_plugin_dialog::DialogExt;
 use tokio::io::{AsyncWriteExt,AsyncBufReadExt,AsyncReadExt,BufReader};
 use tokio_util::sync::CancellationToken;
@@ -13,14 +14,14 @@ const LIMIT:usize=16*1024*1024;
 #[derive(Default)]
 pub struct Work(Mutex<Inner>);
 #[derive(Default)]
-struct Inner{selection:Option<(String,Vec<PathBuf>,bool)>,running:Option<CancellationToken>,progress:String,draft:Option<Draft>}
-struct Draft{id:String,version:String,bundle:Bundle,metrics:Value,failures:Value}
+struct Inner{selection:Option<(String,Vec<PathBuf>,bool)>,running:Option<CancellationToken>,job:Option<String>,progress:String,draft:Option<Draft>}
+struct Draft{id:String,version:String,bundle:Bundle,metrics:Value,failures:Value,job:Option<String>}
 impl Work{
     pub fn cancel(&self){if let Some(t)=&self.0.lock().unwrap().running{t.cancel()}}
     fn view(&self)->Value{
         let s=self.0.lock().unwrap();
         json!({"busy":s.running.is_some(),"progress":s.progress,"draft":s.draft.as_ref().map(|d|json!({
-            "id":d.id,"profile":d.bundle.profile,"documents":d.bundle.documents.iter().map(|f|json!({"id":f.id,"name":f.name,"count":f.records.len()})).collect::<Vec<_>>(),
+            "id":d.id,"job":d.job,"profile":d.bundle.profile,"documents":d.bundle.documents.iter().map(|f|json!({"id":f.id,"name":f.name,"count":f.records.len()})).collect::<Vec<_>>(),
             "metrics":d.metrics,"failures":d.failures}))})
     }
 }
@@ -31,10 +32,52 @@ async fn guard<'a>(window:&Window,app:&AppHandle,state:&'a InterviewState)->Resu
     if state.session.load(Ordering::SeqCst)||crate::audio::recording_commands::is_recording().await{return Err("请结束面试会话后整理资料".into())}
     Ok(guard)
 }
+fn jobs_dir(app:&AppHandle)->Result<PathBuf,String>{Ok(app.path().app_data_dir().map_err(|e|e.to_string())?.join("interview/background-jobs"))}
+fn job_path(app:&AppHandle,id:&str)->Result<PathBuf,String>{
+    uuid::Uuid::parse_str(id).map_err(|_|"整理任务 ID 无效")?;
+    Ok(jobs_dir(app)?.join(id).join("job.sqlite"))
+}
+async fn job_db(path:&Path)->Result<sqlx::SqliteConnection,String>{
+    let meta=tokio::fs::symlink_metadata(path).await.map_err(|_|"未找到整理断点")?;
+    if !meta.is_file()||meta.len()>64*1024*1024{return Err("整理断点不是有效普通文件".into());}
+    let options=sqlx::sqlite::SqliteConnectOptions::new().filename(path).read_only(true).busy_timeout(std::time::Duration::from_secs(2));
+    sqlx::SqliteConnection::connect_with(&options).await.map_err(|_|"无法读取整理断点")
+}
+async fn read_job_request(app:&AppHandle,id:&str)->Result<Value,String>{
+    let mut db=job_db(&job_path(app,id)?).await?;
+    let raw:String=sqlx::query_scalar("SELECT value FROM meta WHERE key='request' AND length(CAST(value AS BLOB))<=20000000")
+        .fetch_one(&mut db).await.map_err(|_|"整理任务清单无效")?;
+    let req:Value=serde_json::from_str(&raw).map_err(|_|"整理任务清单损坏")?;
+    if !req["api"]["key"].is_null(){return Err("整理清单不应保存凭证".into());}
+    Ok(req)
+}
+async fn jobs_view(app:&AppHandle,work:&Work)->Result<Vec<Value>,String>{
+    let root=jobs_dir(app)?;
+    let mut entries=match tokio::fs::read_dir(&root).await{Ok(v)=>v,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(vec![]),Err(_)=>return Err("无法读取整理任务目录".into())};
+    let active={let w=work.0.lock().unwrap();if w.running.is_some(){w.job.clone()}else{None}};
+    let mut out=vec![];
+    while let Some(entry)=entries.next_entry().await.map_err(|_|"无法读取整理任务目录")?{
+        let dir=entry.path();
+        if !entry.file_type().await.map_err(|_|"无法读取整理任务目录")?.is_dir(){continue;}
+        let Some(id)=dir.file_name().and_then(|s|s.to_str()).filter(|id|uuid::Uuid::parse_str(id).is_ok())else{continue};
+        let path=dir.join("job.sqlite");
+        if out.len()>=20{return Err("整理任务超过20份，请先导出并整理已有任务".into());}
+        let item=async{
+            let mut db=job_db(&path).await?;
+            let status:Option<String>=sqlx::query_scalar("SELECT value FROM meta WHERE key='status'").fetch_optional(&mut db).await.map_err(|_|"断点状态无效")?;
+            let model:Option<String>=sqlx::query_scalar("SELECT json_extract(value,'$.api.model') FROM meta WHERE key='request'").fetch_optional(&mut db).await.map_err(|_|"断点模型无效")?;
+            let row=sqlx::query("SELECT count(*) AS total,coalesce(sum(status='completed'),0) AS completed,coalesce(sum(status='failed'),0) AS failed,coalesce(sum(status='skipped'),0) AS skipped FROM files WHERE active=1").fetch_one(&mut db).await.map_err(|_|"断点文件清单无效")?;
+            let unknown:i64=sqlx::query_scalar("SELECT count(*) FROM attempts WHERE status IN ('pending','unknown')").fetch_one(&mut db).await.map_err(|_|"断点用量无效")?;
+            Ok::<Value,String>(json!({"id":id,"model":model,"status":if active.as_deref()==Some(id){"running"}else if status.as_deref()==Some("complete"){"complete"}else{"interrupted"},"total":row.get::<i64,_>("total"),"completed":row.get::<i64,_>("completed"),"failed":row.get::<i64,_>("failed"),"skipped":row.get::<i64,_>("skipped"),"unknown_calls":unknown}))
+        }.await;
+        out.push(item.unwrap_or_else(|_|json!({"id":id,"status":"unreadable","total":0,"completed":0,"failed":0,"skipped":0,"unknown_calls":0})));
+    }
+    Ok(out)
+}
 #[tauri::command]
 pub async fn background_status(window:Window,app:AppHandle,state:State<'_,InterviewState>)->Result<Value,String>{
     owner(&window)?;let index=state.index(&app).await?;let cfg=index.provider_config().await?.background;
-    Ok(json!({"library":index.background_view().await?,"work":state.background.view(),"model":cfg.request.model,
+    Ok(json!({"library":index.background_view().await?,"work":state.background.view(),"jobs":jobs_view(&app,&state.background).await?,"model":cfg.request.model,
         "ready":cfg.enabled&&(cfg.accepts_empty_key()||!state.provider_key(&cfg).await.is_empty())}))
 }
 #[tauri::command]
@@ -59,7 +102,7 @@ pub async fn background_choose(window:Window,app:AppHandle,state:State<'_,Interv
         if bytes.len()>LIMIT{return Err("资料包过大".into())}
         let bundle:Bundle=serde_json::from_slice(&bytes).map_err(|_|"不是有效的 听弦背景资料包")?;bundle.validate()?;
         let version=state.index(&app).await?.setting("version").await?;
-        state.background.0.lock().unwrap().draft=Some(Draft{id,version,bundle,metrics:Value::Null,failures:json!([])});
+        state.background.0.lock().unwrap().draft=Some(Draft{id,version,bundle,metrics:Value::Null,failures:json!([]),job:None});
         return Ok(json!({"draft":true}))
     }
     let label=paths.iter().take(3).filter_map(|p|p.file_name()).map(|p|p.to_string_lossy()).collect::<Vec<_>>().join("、");
@@ -74,18 +117,56 @@ pub fn background_cancel(window:Window,state:State<'_,InterviewState>)->Result<(
 #[tauri::command]
 pub async fn background_generate(window:Window,app:AppHandle,state:State<'_,InterviewState>,selection:String,include_library:bool)->Result<(),String>{
     let _guard=guard(&window,&app,&state).await?;
+    generate(&app,&state,&selection,include_library,None).await
+}
+#[tauri::command]
+pub async fn background_resume(window:Window,app:AppHandle,state:State<'_,InterviewState>,job:String)->Result<(),String>{
+    let _guard=guard(&window,&app,&state).await?;
+    let req=read_job_request(&app,&job).await?;
+    generate(&app,&state,"resume",req["include_library"].as_bool().unwrap_or(false),Some((job,req))).await
+}
+#[tauri::command]
+pub async fn background_job_details(window:Window,app:AppHandle,job:String)->Result<Vec<Value>,String>{
+    owner(&window)?;
+    let mut db=job_db(&job_path(&app,&job)?).await?;
+    let rows=sqlx::query("SELECT name,status,reason,done,total FROM files WHERE active=1 ORDER BY name LIMIT 2000").fetch_all(&mut db).await.map_err(|_|"无法读取任务文件清单")?;
+    Ok(rows.iter().map(|r|json!({"name":r.get::<String,_>("name"),"status":r.get::<String,_>("status"),"reason":r.get::<String,_>("reason"),"done":r.get::<i64,_>("done"),"total":r.get::<i64,_>("total")})).collect())
+}
+#[tauri::command]
+pub async fn background_job_trash(window:Window,app:AppHandle,state:State<'_,InterviewState>,job:String)->Result<(),String>{
+    let _guard=guard(&window,&app,&state).await?;
+    let file=job_path(&app,&job)?;
+    let dir=file.parent().ok_or("整理任务目录无效")?.to_path_buf();
+    if !tokio::fs::symlink_metadata(&dir).await.map_err(|_|"整理任务已不存在")?.is_dir(){return Err("整理任务目录无效".into());}
+    tokio::task::spawn_blocking(move||crate::interview_history::move_to_trash(&dir)).await.map_err(|_|"移入废纸篓失败，任务已保留")??;
+    let mut work=state.background.0.lock().unwrap();
+    if work.draft.as_ref().is_some_and(|d|d.job.as_deref()==Some(job.as_str())){work.draft=None;}
+    Ok(())
+}
+async fn generate(app:&AppHandle,state:&InterviewState,selection:&str,include_library:bool,resume:Option<(String,Value)>)->Result<(),String>{
     let measure=selection=="measure";
     let index=state.index(&app).await?;let p=index.provider_config().await?.background;
     let key=state.provider_key(&p).await;
     if !p.enabled||(!p.accepts_empty_key()&&key.is_empty()){return Err("请先配置独立的背景整理模型".into())}
-    let (paths,folder)=if measure{(vec![],false)}else{let work=state.background.0.lock().unwrap();
+    let (paths,folder)=if measure||resume.is_some(){(vec![],false)}else{let work=state.background.0.lock().unwrap();
         let (_,paths,folder)=work.selection.as_ref().filter(|s|s.0==selection).ok_or("请重新选择文件夹或重点文件")?;(paths.clone(),*folder)};
     let previous=if !measure && include_library{index.background_inputs(false).await?}else{vec![]};
     let version=index.setting("version").await?;
-    let mut req=json!({"api":{"model":p.request.model,"endpoint":p.endpoint,"key":key,"timeout":p.request.total_timeout_secs},"previous":previous});
-    if measure{req["measure"]=json!(true)}else if folder{req["folder"]=json!(paths[0])}else{req["files"]=json!(paths)}
+    let job=if measure{None}else{Some(resume.as_ref().map(|(id,_)|id.clone()).unwrap_or_else(||uuid::Uuid::new_v4().to_string()))};
+    let mut req=if let Some((_,req))=resume{req}else{json!({})};
+    if !req["api"].is_null()&&(req["api"]["model"]!=p.request.model||req["api"]["endpoint"]!=p.endpoint){return Err("当前背景模型与断点不一致，请切回原模型或新建整理任务".into());}
+    req["api"]=json!({"model":p.request.model,"endpoint":p.endpoint,"key":key,"timeout":p.request.total_timeout_secs});
+    req["previous"]=json!(previous);req["include_library"]=json!(include_library);
+    if let Some(id)=&job{
+        if selection!="resume"&&jobs_view(app,&state.background).await?.len()>=20{return Err("已保留20份整理任务，请先导出并整理已有任务".into());}
+        let path=job_path(app,id)?;
+        tokio::fs::create_dir_all(path.parent().ok_or("整理断点目录无效")?).await.map_err(|_|"无法创建整理断点目录")?;
+        req["checkpoint"]=json!(path);
+    }
+    if measure{req["measure"]=json!(true)}else if selection!="resume"{if folder{req["folder"]=json!(paths[0])}else{req["files"]=json!(paths)}}
     let token=CancellationToken::new();
-    {let mut w=state.background.0.lock().unwrap();w.running=Some(token.clone());w.progress="读取资料".into();}
+    let checkpoint_job=job.clone();
+    {let mut w=state.background.0.lock().unwrap();w.running=Some(token.clone());w.job=job;w.progress="读取资料".into();}
     let job=async{
         if !measure{return worker(&req,&state.background).await}
         let (mut cursor,mut chunks,mut calls,mut total,mut peak,mut bound)=(0,0usize,0u64,0u64,0u64,0u64);
@@ -100,7 +181,7 @@ pub async fn background_generate(window:Window,app:AppHandle,state:State<'_,Inte
         if chunks==0{return Err("资料库中没有允许外发的片段".into())}
         Ok(json!({"chunks":chunks,"metrics":{"calls":calls,"sum_prompt_tokens":total,"peak_prompt_tokens":peak,"peak_budget":bound}}))
     };
-    let result=tokio::select!{biased;_=token.cancelled()=>Err("已取消，资料库未改变".into()),result=job=>result};
+    let result=tokio::select!{biased;_=token.cancelled()=>Err(if measure{"已取消计量，未保存不完整结果"}else{"已取消，已完成分块保留，可从整理任务继续；资料库未改变"}.into()),result=job=>result};
     {let mut w=state.background.0.lock().unwrap();w.running=None;w.progress.clear();}
     let mut result=result?;
     if measure{
@@ -110,7 +191,7 @@ pub async fn background_generate(window:Window,app:AppHandle,state:State<'_,Inte
     }
     let bundle:Bundle=serde_json::from_value(result["bundle"].take()).map_err(|_|"模型整理结果不符合资料格式")?;
     bundle.validate()?;
-    state.background.0.lock().unwrap().draft=Some(Draft{id:uuid::Uuid::new_v4().to_string(),version,bundle,metrics:result["metrics"].take(),failures:result["failures"].take()});
+    state.background.0.lock().unwrap().draft=Some(Draft{id:uuid::Uuid::new_v4().to_string(),version,bundle,metrics:result["metrics"].take(),failures:result["failures"].take(),job:checkpoint_job});
     Ok(())
 }
 async fn worker(req:&Value,work:&Work)->Result<Value,String>{
@@ -163,7 +244,12 @@ pub async fn background_edit(window:Window,app:AppHandle,state:State<'_,Intervie
 #[tauri::command]
 pub async fn background_apply(window:Window,app:AppHandle,state:State<'_,InterviewState>,id:String,profile:Profile,share:bool,merge_terms:bool)->Result<(),String>{
     let _guard=guard(&window,&app,&state).await?;
-    let (mut bundle,version,metrics)={let w=state.background.0.lock().unwrap();let d=w.draft.as_ref().filter(|d|d.id==id).ok_or("草稿已变化，请重新加载")?;(d.bundle.clone(),d.version.clone(),d.metrics.clone())};
+    let (mut bundle,version,metrics,job)={let w=state.background.0.lock().unwrap();let d=w.draft.as_ref().filter(|d|d.id==id).ok_or("草稿已变化，请重新加载")?;(d.bundle.clone(),d.version.clone(),d.metrics.clone(),d.job.clone())};
+    if let Some(job)=job{
+        let mut request=read_job_request(&app,&job).await?;
+        request["verify_documents"]=json!(bundle.documents.iter().map(|d|json!({"id":d.id,"hash":d.hash,"name":d.name})).collect::<Vec<_>>());
+        worker(&request,&state.background).await?;
+    }
     bundle.profile=profile;state.index(&app).await?.apply_background(&bundle,&version,share,metrics,merge_terms).await?;
     state.background.0.lock().unwrap().draft=None;Ok(())
 }
