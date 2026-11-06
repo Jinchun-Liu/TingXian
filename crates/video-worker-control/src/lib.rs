@@ -122,8 +122,10 @@ impl Controller {
         if inner.active.as_ref().map(|a|a.id) != Some(id) { return; }
         // Recheck under the admission lock. The caller's atomic snapshot can
         // precede a stop that wins this lock before completion is published.
+        // Drop also signals its owned event for cleanup; that is not user intent.
+        // Only a controller stop changes this locked generation/phase pair.
         let cancelled = cancelled || inner.snapshot.generation != id
-            || inner.active.as_ref().is_some_and(|active|active.signal.stopped());
+            || inner.snapshot.phase == Phase::Stopping;
         // Cancellation wins over late reports, but never conceals forced cleanup.
         let cleanup_failure = matches!(&result, Err(Reason::ForcedStop | Reason::Cleanup | Reason::Timeout)
             | Ok(Report::Eye(EyeReport { cleanup_uncertain: true, .. })));
