@@ -25,10 +25,11 @@
     <details class="audio-panel"><summary>语音口型</summary>
       <p>无声查看 · PCM16 单声道 WAV，最长 60 秒</p>
       <label class="file-label" for="audio-file">导入测试 WAV<input id="audio-file" type="file" accept=".wav"></label>
+      <label for="audio-mode">查看方式</label><select id="audio-mode"><option value="stream">逐段推流 · 1×</option><option value="offline">整段预览</option></select>
       <p id="audio-status" role="status">未导入语音</p>
       <label for="audio-seek">位置 <output id="audio-position">0.0 秒</output></label>
       <input id="audio-seek" type="range" min="0" max="1" step="1" value="0" disabled>
-      <div class="actions"><button id="audio-toggle" disabled>查看口型</button><button id="audio-clear" disabled>清除语音</button></div>
+      <div class="actions"><button id="audio-toggle" disabled>开始推流</button><button id="audio-clear" disabled>清除语音</button></div>
     </details>
     <p class="scope">仅本地预览 · 无声音</p>
     <details><summary>验证信息</summary>
