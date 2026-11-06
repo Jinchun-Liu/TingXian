@@ -36,8 +36,11 @@ HRESULT WorkerOwnerGuard::arm(HANDLE owner_process, HANDLE stop_event) noexcept 
     if (SUCCEEDED(hr)) hr = duplicate(stop_event, SYNCHRONIZE, &stop_);
     if (SUCCEEDED(hr)) {
         close_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (!close_) hr = HRESULT_FROM_WIN32(GetLastError());
+    }
+    if (SUCCEEDED(hr)) {
         revoked_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-        if (!close_ || !revoked_) hr = HRESULT_FROM_WIN32(GetLastError());
+        if (!revoked_) hr = HRESULT_FROM_WIN32(GetLastError());
     }
     if (SUCCEEDED(hr)) {
         const DWORD owner = WaitForSingleObject(owner_, 0);
@@ -59,7 +62,7 @@ HRESULT WorkerOwnerGuard::arm(HANDLE owner_process, HANDLE stop_event) noexcept 
                 : wait == WAIT_OBJECT_0 + 2 ? OwnerStopReason::guard_closed : OwnerStopReason::wait_failed);
         });
     } catch (...) {
-        revoke(OwnerStopReason::wait_failed); release_handles(); return E_OUTOFMEMORY;
+        revoke(OwnerStopReason::wait_failed); release_handles(); return E_FAIL;
     }
     armed_ = true; return S_OK;
 }

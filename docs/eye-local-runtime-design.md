@@ -10,7 +10,7 @@
 
 NGC 资料和免费的 NVIDIA Developer Program 登记已完成，实际会员入口可访问，未订阅营销通讯。登记后重新加载 Core 资源页，下载按钮仍禁用，页面要求 AI Enterprise 订阅，版本表被遮挡；没有读取受限版本内容或尝试绕过访问限制。当前可以确认账号登记与下载授权是两个门槛，不能宣称必须购买或已获 SDK 使用权。
 
-[官方 AI for Media 页面](https://developer.nvidia.com/topics/ai/generative-ai/ai-for-media)列有 90 天免费评估申请渠道。续查 NGC 当前组织 Subscriptions 为 0；[评估入口](https://enterpriseproductregistration.nvidia.com/?LicType=EVAL&ProductFamily=NVAIEnterprise)明确要求企业邮箱及兼容基础设施，不批准个人邮箱。用户补充学校邮箱后已进入新账户创建页，尚待用户自行设置凭证及验证邮箱；教育机构邮箱是否获批、该硬件是否适用及生产/分发许可仍未确认。没有把学校邮箱冒称企业资格，公开记录不含邮箱。尚未提交试用/销售申请、支付、生成 API Key 或下载 SDK。后续先确认授权类别，再固定 x64 Core、三个特征、摘要和许可；不以旧包或云端外发替换当前需求。免费计划登记适用的[Technology Access Terms](https://developer.nvidia.com/legal/terms/)与各软件产品协议仍须分开核对。
+[官方 AI for Media 页面](https://developer.nvidia.com/topics/ai/generative-ai/ai-for-media)列有 90 天免费评估申请渠道。续查 NGC 当前组织 Subscriptions 为 0；[评估入口](https://enterpriseproductregistration.nvidia.com/?LicType=EVAL&ProductFamily=NVAIEnterprise)明确要求企业邮箱及兼容基础设施，不批准个人邮箱。用户补充学校邮箱后已进入新账户创建页，用户当前无法完成注册，故暂停该流程；教育机构邮箱是否获批、该硬件是否适用及生产/分发许可仍未确认。没有把学校邮箱冒称企业资格，公开记录不含邮箱。尚未提交试用/销售申请、支付、生成 API Key 或下载 SDK。后续先确认授权类别，再固定 x64 Core、三个特征、摘要和许可；不以旧包或云端外发替换当前需求。免费计划登记适用的[Technology Access Terms](https://developer.nvidia.com/legal/terms/)与各软件产品协议仍须分开核对。
 
 ## 官方组件与版本
 
