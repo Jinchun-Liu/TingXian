@@ -70,6 +70,7 @@ struct SyntheticProducer final : OutputLease {
     FramePublisher publisher;
     std::atomic<bool> revoked{false};
     std::atomic<HRESULT> error{S_OK};
+    std::atomic<unsigned> stage{0}; // 0 waiting, 1 accepted, 2 begun, 3 submitting
     std::atomic<UINT64> submitted{0};
     std::thread sender;
     ~SyntheticProducer() { revoke(); if (sender.joinable()) sender.join(); }
@@ -77,11 +78,13 @@ struct SyntheticProducer final : OutputLease {
     void start() {
         sender = std::thread([this] {
             HRESULT hr = publisher.accept();
-            if (SUCCEEDED(hr)) hr = publisher.begin(1);
+            if (SUCCEEDED(hr)) { stage = 1; hr = publisher.begin(1); }
+            if (SUCCEEDED(hr)) stage = 2;
             std::vector<BYTE> pixels(FrameBytes, 128);
             UINT64 id = 0;
             while (SUCCEEDED(hr) && !revoked.load()) {
                 ++id;
+                stage = 3;
                 std::fill_n(pixels.begin(), Width * Height, BYTE(64 + id % 128));
                 hr = publisher.submit(1, id, GetTickCount64(), pixels.data(), FrameBytes);
                 if (SUCCEEDED(hr)) submitted = id;
@@ -172,16 +175,21 @@ HRESULT run_cycle(unsigned cycle) {
         require(MFSetAttributeRatio(type.Get(), MF_MT_FRAME_RATE, 30, 1), "30fps_format");
         require(reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM, nullptr, type.Get()), "reader_format");
         std::set<BYTE> unique;
+        UINT64 neutral_samples = 0, empty_samples = 0;
         const auto deadline = GetTickCount64() + 5000;
         while (unique.size() < 3 && GetTickCount64() < deadline) {
             ComPtr<IMFSample> sample;
             HRESULT hr = callback->read(reader.Get(), &sample); if (FAILED(hr)) require(hr, "read_live");
             if (sample) {
                 BYTE luma = 0; hr = classify(sample.Get(), &luma); if (FAILED(hr)) require(hr, "validate_pixels");
-                if (luma != 32) unique.insert(luma);
-            }
+                if (luma != 32) unique.insert(luma); else ++neutral_samples;
+            } else ++empty_samples;
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
+        std::cout << "{\"producer_stage\":" << producer.stage.load()
+            << ",\"producer_error\":\"0x" << std::hex << static_cast<unsigned long>(producer.error.load()) << std::dec
+            << "\",\"submitted\":" << producer.submitted.load() << ",\"distinct_live\":" << unique.size()
+            << ",\"neutral_samples\":" << neutral_samples << ",\"empty_samples\":" << empty_samples << "}" << std::endl;
         require(unique.size() == 3 && SUCCEEDED(producer.error.load()) ? S_OK : E_UNEXPECTED, "three_distinct_synthetic_frames");
         producer.revoke();
         if (producer.sender.joinable()) producer.sender.join();
