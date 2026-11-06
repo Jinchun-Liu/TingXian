@@ -81,7 +81,9 @@ sample bytes, abrupt process exit, stop/new epochs, cancellation under 500 ms in
 the test case, wrong PID/session/capability, nonlocal paths, oversized input,
 explicit recovery and activation-attribute redaction. All children and handles are
 bounded by the test; no device registration, account switching or elevated service
-is used. The older 15-group native media-source test remains required.
+is used. An injected constructor failure verifies exact-child cleanup even before
+the test fixture finishes initialization. The older 15-group native media-source
+test remains required.
 
 References: [pipe access rights](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights),
 [kernel producer PID](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeserverprocessid),

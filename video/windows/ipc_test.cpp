@@ -65,6 +65,17 @@ struct Handle {
     ~Handle() { if (value && value != INVALID_HANDLE_VALUE) CloseHandle(value); }
     void reset() { if (value && value != INVALID_HANDLE_VALUE) CloseHandle(value); value = nullptr; }
 };
+struct OwnedTestProcess {
+    HANDLE value = nullptr;
+    ~OwnedTestProcess() {
+        if (!value) return;
+        // This guard also runs if Child's constructor throws before ~Child can.
+        if (WaitForSingleObject(value, 0) == WAIT_TIMEOUT) {
+            TerminateProcess(value, 4); WaitForSingleObject(value, 1000);
+        }
+        CloseHandle(value);
+    }
+};
 void pipe_write(HANDLE pipe, const void* data, DWORD size) {
     DWORD written = 0; expect(WriteFile(pipe, data, size, &written, nullptr) && written == size, "control write failed");
 }
@@ -114,10 +125,13 @@ int publisher_child(HANDLE control, HANDLE report) {
 }
 
 struct Child {
-    Handle control, report, process;
+    Handle control, report;
+    OwnedTestProcess process;
     Ready ready;
     DWORD pid = 0;
-    Child() {
+    HRESULT handshake = E_PENDING;
+    bool crashed = false;
+    explicit Child(bool simulate_start_failure = false, HANDLE* observed_process = nullptr) {
         SECURITY_ATTRIBUTES security{sizeof(security), nullptr, TRUE};
         Handle child_control, child_report;
         expect(CreatePipe(&child_control.value, &control.value, &security, 0), "create control pipe");
@@ -146,22 +160,25 @@ struct Child {
         DeleteProcThreadAttributeList(attributes);
         expect(ok, "create synthetic producer child");
         process.value = created.hProcess; pid = created.dwProcessId; CloseHandle(created.hThread);
+        if (observed_process) expect(DuplicateHandle(GetCurrentProcess(), process.value, GetCurrentProcess(), observed_process,
+            SYNCHRONIZE, FALSE, 0), "duplicate test process observation handle");
+        if (simulate_start_failure) throw std::runtime_error("synthetic child startup failure");
         child_control.reset(); child_report.reset();
         pipe_read(report.value, &ready, sizeof(ready)); check(ready.result, "publisher create");
         expect(ready.endpoint.producer_pid == pid, "publisher PID differs from created child");
         expect(ready.restricted_acl, "live pipe ACL is broader than allowed");
     }
     ~Child() {
-        control.reset(); report.reset();
-        if (process.value && WaitForSingleObject(process.value, 1000) != WAIT_OBJECT_0) {
-            // Only this test's exact child handle; never terminate unrelated processes.
-            TerminateProcess(process.value, 4); WaitForSingleObject(process.value, 1000);
+        if (!crashed && handshake == S_OK && WaitForSingleObject(process.value, 0) == WAIT_TIMEOUT) {
+            try { send({Close}); } catch (...) { /* Preserve the original test failure; the exact-child guard remains. */ }
         }
+        control.reset(); report.reset();
+        if (process.value) WaitForSingleObject(process.value, 1000);
     }
-    HRESULT accepted() { HRESULT hr; pipe_read(report.value, &hr, sizeof(hr)); return hr; }
+    HRESULT accepted() { pipe_read(report.value, &handshake, sizeof(handshake)); return handshake; }
     HRESULT send(Command command) {
         pipe_write(control.value, &command, sizeof(command));
-        if (command.kind == Crash) return S_OK;
+        if (command.kind == Crash) { crashed = true; return S_OK; }
         HRESULT result; pipe_read(report.value, &result, sizeof(result)); return result;
     }
 };
@@ -243,6 +260,15 @@ struct SourceFixture {
 };
 
 void run(const wchar_t* dll) {
+    {
+        Handle observed;
+        bool failed = false;
+        try { Child child(true, &observed.value); }
+        catch (const std::exception&) { failed = true; }
+        expect(failed && observed.value && WaitForSingleObject(observed.value, 0) == WAIT_OBJECT_0,
+            "child survived a constructor failure");
+        passed("startup failure releases only the test's exact child process");
+    }
     SourceFixture source(dll);
     source.pixels(32, 128);
     {
