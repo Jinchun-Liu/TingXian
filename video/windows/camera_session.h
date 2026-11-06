@@ -56,6 +56,10 @@ public:
     CameraSession(const CameraSession&) = delete;
     CameraSession& operator=(const CameraSession&) = delete;
     HRESULT start(const VideoPipeEndpoint& endpoint) noexcept;
+    // Capture before dispatch/arming owner monitoring, then carry the ticket to
+    // the MTA. A stop that precedes a queued start must also invalidate that start.
+    UINT64 operation_ticket() const noexcept { return cancellation_.load(); }
+    HRESULT start_if_current(const VideoPipeEndpoint& endpoint, UINT64 ticket) noexcept;
     // May run on any thread, including while Windows Start is blocked.
     void request_stop() noexcept;
     HRESULT stop() noexcept;

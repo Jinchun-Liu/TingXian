@@ -24,7 +24,9 @@ HRESULT CameraSession::cleanup_locked() noexcept {
     return error;
 }
 HRESULT CameraSession::start(const VideoPipeEndpoint& endpoint) noexcept {
-    const UINT64 ticket = cancellation_.load();
+    return start_if_current(endpoint, operation_ticket());
+}
+HRESULT CameraSession::start_if_current(const VideoPipeEndpoint& endpoint, UINT64 ticket) noexcept {
     std::lock_guard guard(lifecycle_);
     if (ticket != cancellation_.load()) return Cancelled;
     if (resources_) return HRESULT_FROM_WIN32(ERROR_BUSY);

@@ -26,7 +26,7 @@ target_link_libraries(tingxian-video-ipc-test PRIVATE mfplat mf mfuuid ole32 pro
 add_test(NAME cross-process-video-without-device-registration
   COMMAND tingxian-video-ipc-test $<TARGET_FILE:TingXianVideoSource>)
 set_tests_properties(cross-process-video-without-device-registration PROPERTIES TIMEOUT 45)
-add_library(tingxian-video-session STATIC camera_session.cpp camera_windows.cpp frame_transport.cpp)
+add_library(tingxian-video-session STATIC camera_session.cpp camera_windows.cpp frame_transport.cpp worker_owner.cpp)
 target_compile_definitions(tingxian-video-session PUBLIC UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(tingxian-video-session PRIVATE /W4 /EHsc /utf-8)
 target_link_libraries(tingxian-video-session PUBLIC mfplat mfuuid ole32 advapi32 bcrypt)
@@ -50,3 +50,8 @@ target_link_libraries(tingxian-video-device-synthetic-test PRIVATE tingxian-vide
 # Actual devices are opt-in on the target Windows 11 PC, never an ordinary CTest.
 add_test(NAME installed-device-tool-description-only COMMAND tingxian-video-device-synthetic-test --describe)
 set_tests_properties(installed-device-tool-description-only PROPERTIES TIMEOUT 10)
+add_executable(tingxian-video-worker-owner-test worker_owner_test.cpp)
+target_compile_options(tingxian-video-worker-owner-test PRIVATE /W4 /EHsc /utf-8)
+target_link_libraries(tingxian-video-worker-owner-test PRIVATE tingxian-video-session)
+add_test(NAME worker-owner-lifetime-without-device-registration COMMAND tingxian-video-worker-owner-test)
+set_tests_properties(worker-owner-lifetime-without-device-registration PROPERTIES TIMEOUT 45)

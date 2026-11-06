@@ -35,6 +35,7 @@ jobs:
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-source-test.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-ipc-test.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-session-test.exe
+            ${{ runner.temp }}/video-source-build/Release/tingxian-video-worker-owner-test.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-device-probe.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-device-synthetic-test.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-registration-test.exe
