@@ -60,6 +60,17 @@ Session 显式选择时钟域；QPC 模式下 captured_ms 必须为 0，输入�
 受保护工作树/原安装进程记录和 SHA-256 清单。所有输入均为内存纯色，无私人媒体。
 本轮本机未出现失败重跑；第二次 stream 检查由新增断言触发，不覆盖首轮日志。
 
+功能提交 `8c3e33db5286885f5f5ad9a45023e3af5b7cfc24` 已保留原对象 SHA 推送。
+2026-11-08 [Windows CI 42392735152](https://github.com/Jinchun-Liu/TingXian/actions/runs/42392735152)
+（job `128463533651`）完整日志确认 102 Rust、9+2+3 原生 CTest、1655 文件检查通过。
+平台工件 ID `13582416214`，4,012,670 bytes，平台报告 SHA-256
+`cb23a6d4039497b911eb82ee46ac76f31617cbad4e0f64905323b5994c74f121`。
+下载在 60 秒后超时，失败日志及 partial 文件保留，未重跑相同下载；此摘要仅是平台
+元数据，不宣称已本地校验工件或细化日志。工件没有运行/安装，没有新安装器。
+Git 首次 fetch 连接 443 超时，后用官方 Git Database API 上传并核对原 tree/commit，
+按 expected-old-SHA 非强制更新；随后正常 fetch 成功、分支 0:0。
+Mac 后续 `6549357`（资料准备历史/受保护恢复）已检查范围并保留，未混入本轮。
+
 ## 未通过的门槛
 
 新 QPC Rust receiver/共同 owner、摄像头源时间映射和本人原声采集、实际 SDK、外部
