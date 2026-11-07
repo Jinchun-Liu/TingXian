@@ -32,21 +32,22 @@
     "network": "DENIED"
   },
   "upstream_commit": "6868817518876de8fd170c6a8354daca273b6191",
-  "host_commit": "f3e49f0aae35419675318fa4624614169067872c",
+  "host_commit": null,
+  "host_baseline_commit": "f3e49f0aae35419675318fa4624614169067872c",
   "adapter_files_sha256": {
     "adapter.py": "ee870193a4d3f9ce037e3a59448d19d01db22db2ee06e76d8e4035f1a0331d57",
     "control.py": "fbbf1f15975651961ecfc4d4fbd1079c3c91cdb6345215990bc1ff4ecf544b3a",
     "fixtures.py": "3c6cc9d97c321f793b811ac2175f643dbd32f3745533ed865b6cc8ba2dd14c2b",
     "policy.py": "1afd762060dfb5b72edab60c7f06ed2949d11fbd76e0ee37226910af3408d995",
-    "run_p0.py": "517342805681d95b84baa327ced6151ecc18dc816b15974bb7fea983da67eb0a",
+    "run_p0.py": "5e007e3ab03434f8b8b9a1039cbd9905c24d15b128804ef32b6057fb2a18accb",
     "sandbox.py": "1901a985bf4d56f297a1173495c4df19193a34d5adb09479d9227ca6f31020bb",
     "test_p0.py": "7de3db3a718a890bfb92fe37b60269cc14b2016f4364b5008f16bd368ac5582b",
     "worker.py": "c3e46c600a35f52c89d460424cc26c51e40e2374898dd9debad643e4d6338f74"
   },
-  "manifest_sha256": "ec140ef8443490870e3dc362b79d76c7bb2726470993c5db5f23a2aaa60ece52",
-  "smoke_report_sha256": "033a88b4c98f7d447b283fc5c71956a0d1e7852826c7c876ab8321550eb29391",
+  "manifest_sha256": "1722a0248fb7502091a9801926a09c8c43c68fcf48fe9ac0ea1de2a513cb26f9",
+  "smoke_report_sha256": "ea904e7d0d76c06ebcb638d5487975a22ab6423311a55b965787887d1ae807c3",
   "candidate_sha256": "699b7c175c61474bf0f07a3796cded65fee7e19b556986e7495ecca5d55d8140",
-  "audit": "Re-read all source, adapter and 96 bundle hashes after execution",
+  "audit": "Re-read source, adapter and all 96 bundle hashes; portable source without Git metadata",
   "candidate_activation": false,
   "dataset_human_review": "pending",
   "official_demo": {

@@ -19,6 +19,8 @@ Harness² run_task(k=1, agg)
 
 ## 复现（macOS）
 
+ZIP 中的 `source/` 是可独立运行本试验的最小源码快照；可以在其中执行下列命令。没有 `.git` 时清单的 `host_commit` 为空，另外记录已冻结的原宿主基线和实际文件哈希。
+
 Python 3.12/3.13；已实测 macOS 14.6.1 arm64 / Python 3.12.0。不要复用正式听弦的虚拟环境。
 
 ```sh
