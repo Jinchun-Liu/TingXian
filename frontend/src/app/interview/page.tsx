@@ -666,7 +666,7 @@ export default function InterviewPage() {
     {audioPanel && <section className="shrink-0 max-h-[48vh] overflow-y-auto rounded-xl border bg-white p-4 space-y-4"><header className="tx-section-head"><h2>音频设置</h2><Button variant="ghost" onClick={()=>setAudioPanel(false)}>返回对话</Button></header><AudioSettings locked={busy || recording.isRecording} microphone={recordMicrophone} onMicrophone={enabled=>void toggleMicrophone(enabled)} onConfigurationChanged={()=>{setAsrCloudAllowed(false);void refresh();}}/></section>}
     {settings && <section className="shrink-0 max-h-[45vh] overflow-y-auto rounded-xl border bg-white p-4 space-y-4">
       <div className="flex justify-between gap-3"><h2 className="font-semibold">资料与场景设置</h2><Button variant="outline" size="sm" onClick={()=>setSettings(false)}>收起资料与设置</Button></div>
-      <InterviewPreferences locked={busy || !!status?.session_active || recording.isRecording || generating} onSaved={preferences=>setStatus(value=>value?{...value,preferences}:value)} />
+      <InterviewPreferences sourceRevision={status?.index_version} locked={busy || !!status?.session_active || recording.isRecording || generating} onSaved={preferences=>setStatus(value=>value?{...value,preferences}:value)} />
       <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
         <p className="text-slate-500">已索引 {status?.index_documents ?? '…'} 份资料 · {status?.index_chunks ?? '…'} 个片段。清空索引保留原文件、事实卡、术语和会话历史。</p>
         <Button variant="outline" size="sm" disabled={busy || !status || status.session_active} onClick={clearIndex}>移入废纸篓并清空索引</Button>

@@ -52,7 +52,7 @@ impl crate::Index {
     }
     pub async fn set_preferences(&self,value:&InterviewPreferences) -> crate::Result<()> {
         value.validate()?;
-        self.set("interview_preferences",&serde_json::to_string(value).map_err(|_|"对话场景设置序列化失败")?).await
+        self.save_manual_preferences(value).await
     }
 }
 

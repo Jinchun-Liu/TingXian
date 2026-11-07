@@ -32,6 +32,7 @@ const invoke = async (name, args) => {
   if(name.startsWith('interview_recovery_'))return recoveryNative(name,args);
   if(name==='interview_preferences_save'){scene=args.preferences.scenario;return {...args.preferences};}
   if(name==='interview_preferences_get')return {scenario:scene,role:'',organization:'',context:'',terminology:'',answer_language:'auto',transcription_language:'auto'};
+  if(name==='interview_preferences_state')return {preferences:{scenario:scene,role:'',organization:'',context:'',terminology:'',answer_language:'auto',transcription_language:'auto'},blocked_fields:[]};
   if(name==='pause_recording'){paused=true;return;}
   if(name==='resume_recording'){paused=false;return;}
   if (name === 'profile_import_status') return null;

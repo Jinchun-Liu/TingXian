@@ -43,6 +43,7 @@ pub struct InterviewState {
     connection: crate::interview_connection::ConnectionState,
 }
 impl InterviewState {
+    pub(crate) fn source_network(&self)->Arc<RwLock<()>> {self.network.clone()}
     pub(crate) async fn index<R:tauri::Runtime>(&self, app:&tauri::AppHandle<R>)->Result<&Index,String> {
         self.index.get_or_try_init(||async {
             let dir=app.path().app_data_dir().map_err(|e|e.to_string())?.join("interview");
@@ -123,13 +124,27 @@ pub async fn interview_preferences_get<R:tauri::Runtime>(app:tauri::AppHandle<R>
     state.index(&app).await?.preferences().await
 }
 #[tauri::command]
-pub async fn interview_preferences_save<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,preferences:interview_core::InterviewPreferences)->Result<interview_core::InterviewPreferences,String> {
+pub async fn interview_preferences_state<R:tauri::Runtime>(window:tauri::WebviewWindow<R>,app:tauri::AppHandle<R>,state:State<'_,InterviewState>)->Result<interview_core::preference_sources::PreferenceState,String> {
+    if window.label()!="main" {return Err("请在主窗口查看设置来源".into());}
+    state.index(&app).await?.preference_state().await
+}
+#[tauri::command]
+pub async fn interview_preferences_manual<R:tauri::Runtime>(window:tauri::WebviewWindow<R>,app:tauri::AppHandle<R>,state:State<'_,InterviewState>,fields:Vec<interview_core::preference_sources::ManualSetting>)->Result<interview_core::preference_sources::PreferenceState,String> {
+    if window.label()!="main" {return Err("请在主窗口核对设置".into());}
+    crate::interview_exit::ensure_not_exiting(&app)?;
+    let _guard=state.lifecycle.try_lock().map_err(|_|"请先完成或取消当前操作")?;
+    if state.session.load(Ordering::SeqCst)||crate::audio::recording_commands::is_recording().await {return Err("请结束当前会话后核对设置".into());}
+    crate::interview_exit::ensure_not_exiting(&app)?;
+    state.index(&app).await?.confirm_manual_settings(&fields).await
+}
+#[tauri::command]
+pub async fn interview_preferences_save<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,preferences:interview_core::InterviewPreferences,expected:Option<interview_core::InterviewPreferences>)->Result<interview_core::InterviewPreferences,String> {
     crate::interview_exit::ensure_not_exiting(&app)?;
     preferences.validate()?;
     let _guard=state.lifecycle.try_lock().map_err(|_|"请先完成或取消当前操作")?;
     crate::interview_exit::ensure_not_exiting(&app)?;
     if state.session.load(Ordering::SeqCst) || crate::audio::recording_commands::is_recording().await {return Err("请结束当前会话后修改对话场景".into());}
-    state.index(&app).await?.set_preferences(&preferences).await?;Ok(preferences)
+    state.index(&app).await?.set_preferences_expected(&preferences,expected.as_ref()).await?;Ok(preferences)
 }
 #[tauri::command]
 pub async fn interview_request_config_get<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>)->Result<interview_core::RequestConfig,String> {
@@ -671,7 +686,7 @@ async fn start_answer(app:tauri::AppHandle,state:&InterviewState,question_id:Str
             let review=index.search_review(&question,if aliases.is_empty(){DEFAULT_ALIASES}else{&aliases},Some(&facts)).await?;
             let evidence=review.evidence;
             emit(json!({"type":"sources","evidence":evidence,"conflicts":review.conflicts,"retrieval_ms":started.elapsed().as_millis(),"index_version":index.setting("version").await?,"fact_version":facts.version,"profile_id":profile.id}));
-            let prefs=index.preferences().await?;
+            let prefs=index.request_preferences().await?;
             let history=index.request_history(&history).await?;
             let mut messages=interview_core::messages_with_preferences(&question,&facts,&history,&evidence,&dialogue.unwrap_or_default(),&prefs)?;
             if let Some(role)=index.background_role().await? {
@@ -718,6 +733,30 @@ pub async fn profile_source_exclude<R:tauri::Runtime>(window:tauri::WebviewWindo
 #[cfg(test)]
 mod source_withdrawal_tests {
     use super::*;
+    #[test]
+    fn applied_setting_review_ipc_is_main_only_and_preserves_session_and_expected_values(){
+        let root=std::env::temp_dir().join(format!("tingxian-preference-review-{}",uuid::Uuid::new_v4()));std::fs::create_dir(&root).unwrap();
+        let index=tauri::async_runtime::block_on(Index::open(&root.join("synthetic.sqlite"))).unwrap();
+        tauri::async_runtime::block_on(async {
+            index.set_preferences(&interview_core::InterviewPreferences{context:"需核对的虚构背景".into(),..Default::default()}).await.unwrap();
+            let binding=json!({"format":"preference-sources-v1","fields":{"context":{"value_hash":interview_core::digest("需核对的虚构背景".as_bytes()),"snapshot":"missing-source"}},"snapshots":{}});
+            index.set("interview_preference_sources",&binding.to_string()).await.unwrap();
+        });
+        let state=InterviewState::default();assert!(state.index.set(index).is_ok());
+        let app=tauri::test::mock_builder().manage(state).manage(crate::interview_exit::ExitState::default())
+            .invoke_handler(tauri::generate_handler![interview_preferences_state,interview_preferences_manual])
+            .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let main=tauri::WebviewWindowBuilder::new(&app,"main",Default::default()).build().unwrap();
+        let display=tauri::WebviewWindowBuilder::new(&app,"display",Default::default()).build().unwrap();
+        let invoke=|window:&tauri::WebviewWindow<tauri::test::MockRuntime>,cmd:&str,body:Value|tauri::test::get_ipc_response(window,tauri::webview::InvokeRequest {cmd:cmd.into(),callback:tauri::ipc::CallbackFn(0),error:tauri::ipc::CallbackFn(1),url:"tauri://localhost".parse().unwrap(),body:tauri::ipc::InvokeBody::Json(body),headers:Default::default(),invoke_key:tauri::test::INVOKE_KEY.to_string()});
+        let body=json!({"fields":[{"field":"context","expected":"需核对的虚构背景"}]});
+        assert!(invoke(&display,"interview_preferences_state",json!({})).is_err());assert!(invoke(&display,"interview_preferences_manual",body.clone()).is_err());
+        let view=invoke(&main,"interview_preferences_state",json!({})).unwrap().deserialize::<Value>().unwrap();assert_eq!(view["blocked_fields"],json!(["context"]));assert_eq!(view["preferences"]["context"],"需核对的虚构背景");
+        let state=app.state::<InterviewState>();state.session.store(true,Ordering::SeqCst);assert!(invoke(&main,"interview_preferences_manual",body.clone()).is_err());state.session.store(false,Ordering::SeqCst);
+        let guard=tauri::async_runtime::block_on(state.lifecycle.clone().lock_owned());assert!(invoke(&main,"interview_preferences_manual",body.clone()).is_err());drop(guard);
+        assert!(invoke(&main,"interview_preferences_manual",json!({"fields":[{"field":"context","expected":"旧值"}]})).is_err());
+        let result=invoke(&main,"interview_preferences_manual",body).unwrap().deserialize::<Value>().unwrap();assert_eq!(result["blocked_fields"],json!([]));assert_eq!(result["preferences"]["context"],"需核对的虚构背景");
+    }
     #[tokio::test]
     async fn source_withdrawal_interrupts_background_before_waiting_for_its_lifecycle_lock(){
         let root=std::env::temp_dir().join(format!("tingxian-background-withdrawal-{}",uuid::Uuid::new_v4()));

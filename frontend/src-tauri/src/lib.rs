@@ -653,6 +653,8 @@ pub fn run() {
             interview::rag_search,
             interview::answer_start,
             interview::interview_preferences_get,
+            interview::interview_preferences_state,
+            interview::interview_preferences_manual,
             interview::interview_preferences_save,
             interview::interview_screenshot_answer_start,
             interview_screenshot::interview_screenshot_displays,

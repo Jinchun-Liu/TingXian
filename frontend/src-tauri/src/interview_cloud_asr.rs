@@ -4,7 +4,7 @@ use interview_core::cloud_asr::{CloudAsrConfig,AsrMode,PreparedTask,AsrEvent};
 use serde_json::{json,Value};
 use std::{sync::{Arc,atomic::{AtomicU64,Ordering}},collections::HashMap,time::Duration};
 use tauri::{AppHandle,Emitter,State,WebviewWindow,Runtime};
-use tokio::sync::{Mutex,mpsc};
+use tokio::sync::{Mutex,mpsc,RwLock,OwnedRwLockReadGuard};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Default)]
@@ -28,14 +28,21 @@ pub async fn interview_cloud_asr_save<R:Runtime>(window:WebviewWindow<R>,app:App
     if let Some(key)=key{*state.cloud_asr.0.lock().await=Some((config.workspace_id,key.trim().into()));}
     Ok(())
 }
-pub struct CloudStart {config:CloudAsrConfig,key:String,language:String,terms:String,initial:[Option<PreparedTask>;2]}
+struct SourceContext {index:interview_core::Index,network:Arc<RwLock<()>>}
+impl SourceContext {
+    async fn acquire(&self,cancel:&CancellationToken)->Result<(OwnedRwLockReadGuard<()>,interview_core::InterviewPreferences),String>{
+        let guard=tokio::select!{biased;_=cancel.cancelled()=>return Err("已取消".into()),guard=self.network.clone().read_owned()=>guard};
+        let preferences=self.index.request_preferences().await?;
+        Ok((guard,preferences))
+    }
+}
+pub struct CloudStart {config:CloudAsrConfig,key:String,context:SourceContext,initial:[Option<PreparedTask>;2]}
 impl CloudStart {
     pub async fn prepare<R:Runtime>(app:&AppHandle<R>,state:&InterviewState,allowed:bool,microphone:bool)->Result<Option<Self>,String>{
         let index=state.index(app).await?;let config=index.cloud_asr_config().await?;
         if config.mode==AsrMode::Local{return Ok(None);}
         if !allowed{return Err("请勾选允许将本次声音发送至百炼，或在音频设置切回本地转写".into());}
-        let prefs=index.preferences().await?;
-        let mut prepared=Self{key:state.cloud_asr.key(&config).await,config,language:prefs.transcription_language,terms:prefs.terminology,initial:[None,None]};
+        let mut prepared=Self{key:state.cloud_asr.key(&config).await,config,context:SourceContext{index:index.clone(),network:state.source_network()},initial:[None,None]};
         let cancel=CancellationToken::new();
         prepared.initial[0]=Some(prepared.connect(&cancel).await?);
         if microphone{prepared.initial[1]=Some(prepared.connect(&cancel).await?);}
@@ -45,7 +52,13 @@ impl CloudStart {
         // A failed startup can be retried once. Audio is admitted only after ready.
         let mut error=String::new();
         for _ in 0..2 {
-            match PreparedTask::connect(&self.config,&self.key,uuid::Uuid::new_v4().to_string(),48000,&self.language,&self.terms,cancel).await{
+            let result={
+                // Every new handshake, including retries, resolves current
+                // terms under the same boundary used by source withdrawal.
+                let (_guard,prefs)=self.context.acquire(cancel).await?;
+                PreparedTask::connect(&self.config,&self.key,uuid::Uuid::new_v4().to_string(),48000,&prefs.transcription_language,&prefs.terminology,cancel).await
+            };
+            match result {
                 Ok(task)=>return Ok(task),Err(e)=>error=e,
             }
             if cancel.is_cancelled()||error.contains("401")||error.contains("403")||error.contains("Key"){break;}
@@ -86,7 +99,7 @@ pub fn start<R:Runtime>(app:AppHandle<R>,mut input:AsrReceiver,state:Arc<Recordi
                     if channels[i].as_ref().is_some_and(|c|c.epoch!=epoch||c.microphone_epoch!=mic_epoch){channels[i].take().unwrap().cancel.cancel();}
                     if channels[i].is_none(){
                         let (sender,receiver)=mpsc::channel(128);let child=cancel.child_token();
-                        let config=CloudStart{config:start.config.clone(),key:start.key.clone(),language:start.language.clone(),terms:start.terms.clone(),initial:[None,None]};
+                        let config=CloudStart{config:start.config.clone(),key:start.key.clone(),context:SourceContext{index:start.context.index.clone(),network:start.context.network.clone()},initial:[None,None]};
                         let prepared=start.initial[i].take();let application=app.clone();let capture=state.clone();let token=child.clone();let gate=chunk.microphone_gate.clone();
                         let offset=(chunk.timestamp-chunk.data.len() as f64/48000.0).max(0.0);
                         tasks.spawn(async move{run_channel(application,capture,config,prepared,receiver,token,gate,i==0,epoch,offset).await});
@@ -158,6 +171,24 @@ async fn run_channel<R:Runtime>(app:AppHandle<R>,state:Arc<RecordingState>,confi
 #[cfg(test)]
 mod tests{
     use super::*;use tauri::Listener;
+    #[tokio::test]
+    async fn cloud_handshake_reloads_terms_after_withdrawal_and_holds_the_network_boundary(){
+        let root=std::env::temp_dir().join(format!("tingxian-cloud-context-{}",uuid::Uuid::new_v4()));std::fs::create_dir(&root).unwrap();
+        let index=interview_core::Index::open(&root.join("synthetic.sqlite")).await.unwrap();
+        index.set_preferences(&interview_core::InterviewPreferences{terminology:"SYNTHETIC_TERM".into(),..Default::default()}).await.unwrap();
+        let network=Arc::new(RwLock::new(()));let context=SourceContext{index:index.clone(),network:network.clone()};let cancel=CancellationToken::new();
+        let (guard,prefs)=context.acquire(&cancel).await.unwrap();assert_eq!(prefs.terminology,"SYNTHETIC_TERM");assert!(network.try_write().is_err());drop(guard);
+        let writer=network.clone().write_owned().await;
+        let reconnect=context.acquire(&cancel);
+        let withdrawn=async {
+            let binding=json!({"format":"preference-sources-v1","fields":{"terminology":{"value_hash":interview_core::digest("SYNTHETIC_TERM".as_bytes()),"snapshot":"withdrawn-source"}},"snapshots":{}});
+            index.set("interview_preference_sources",&binding.to_string()).await.unwrap();drop(writer);
+        };
+        let (result,())=tokio::join!(reconnect,withdrawn);let (guard,prefs)=result.unwrap();assert!(prefs.terminology.is_empty());drop(guard);
+        assert_eq!(index.preferences().await.unwrap().terminology,"SYNTHETIC_TERM","context resolution overwrote the editor value");
+        let _writer=network.write().await;cancel.cancel();
+        assert!(tokio::time::timeout(Duration::from_millis(200),context.acquire(&cancel)).await.unwrap().is_err());
+    }
     #[test]
     fn failure_detail_survives_stop_and_is_scoped_to_the_native_session(){
         let app=tauri::test::mock_builder().build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();

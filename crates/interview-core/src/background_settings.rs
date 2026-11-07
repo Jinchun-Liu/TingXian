@@ -14,7 +14,7 @@ impl Suggestions {
         Ok(())
     }
 }
-#[derive(Clone,Debug,PartialEq,Eq,Hash,Serialize,Deserialize)]
+#[derive(Clone,Copy,Debug,PartialEq,Eq,PartialOrd,Ord,Hash,Serialize,Deserialize)]
 #[serde(rename_all="snake_case")]
 pub enum Field {Role,Organization,Context,Terminology}
 #[derive(Clone,Debug,Serialize,Deserialize)]
@@ -59,6 +59,7 @@ impl Index {
             *field=change.value.clone();
         }
         current.validate()?;
+        crate::preference_sources::bind(&mut tx,changes).await?;
         sqlx::query("INSERT OR REPLACE INTO settings VALUES('interview_preferences',?)").bind(serde_json::to_string(&current).map_err(|e|e.to_string())?).execute(&mut *tx).await.map_err(|e|e.to_string())?;
         tx.commit().await.map_err(|e|e.to_string())?;Ok(current)
     }

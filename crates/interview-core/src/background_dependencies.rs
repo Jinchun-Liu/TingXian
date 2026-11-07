@@ -24,9 +24,13 @@ impl Dependency {
 pub(crate) fn legacy_invalid_sql()->String {
     format!("(EXISTS(SELECT 1 FROM background_library x WHERE x.key GLOB 'excluded/*' AND json_extract(x.value,'$.excluded')=1) OR EXISTS(SELECT 1 FROM record_assertions) OR EXISTS(SELECT 1 FROM documents d WHERE NOT {}))",crate::source_policy::CURRENT_SQL)
 }
-pub(crate) fn available_sql()->String {
+pub(crate) fn sources_current_sql(value:&str)->String {
     let current=crate::source_policy::CURRENT_SQL;let excluded=crate::source_policy::EXCLUDED_SQL;
-    format!("(CASE WHEN EXISTS(SELECT 1 FROM background_library WHERE key='profile_dependencies') THEN EXISTS(SELECT 1 FROM background_library p JOIN background_library b ON b.key='profile' WHERE p.key='profile_dependencies' AND json_extract(p.value,'$.format')='profile-dependencies-v1' AND json_extract(p.value,'$.profile')=json_extract(b.value,'$.profile') AND json_array_length(p.value,'$.sources')>0 AND NOT EXISTS(SELECT 1 FROM json_each(p.value,'$.sources') dep WHERE NOT EXISTS(SELECT 1 FROM documents d WHERE d.path=json_extract(dep.value,'$.path') AND d.hash=json_extract(dep.value,'$.hash') AND d.kind=json_extract(dep.value,'$.kind') AND d.allow_external=json_extract(dep.value,'$.allow_external') AND CASE WHEN d.path GLOB '.背景/*' THEN '背景资料库' ELSE COALESCE((SELECT value FROM settings WHERE key='root'),'') END=json_extract(dep.value,'$.root') AND {current} AND NOT {excluded} AND {ASSERTIONS_SQL}=json_extract(dep.value,'$.assertions') AND {REVIEW_SQL} IS {STORED_REVIEW_SQL}))) ELSE NOT {} END)",legacy_invalid_sql())
+    format!("COALESCE((json_extract({value},'$.format')='profile-dependencies-v1' AND json_array_length({value},'$.sources')>0 AND NOT EXISTS(SELECT 1 FROM json_each({value},'$.sources') dep WHERE NOT EXISTS(SELECT 1 FROM documents d WHERE d.path=json_extract(dep.value,'$.path') AND d.hash=json_extract(dep.value,'$.hash') AND d.kind=json_extract(dep.value,'$.kind') AND d.allow_external=json_extract(dep.value,'$.allow_external') AND CASE WHEN d.path GLOB '.背景/*' THEN '背景资料库' ELSE COALESCE((SELECT value FROM settings WHERE key='root'),'') END=json_extract(dep.value,'$.root') AND {current} AND NOT {excluded} AND {ASSERTIONS_SQL}=json_extract(dep.value,'$.assertions') AND {REVIEW_SQL} IS {STORED_REVIEW_SQL}))),0)")
+}
+pub(crate) fn available_sql()->String {
+    let sources=sources_current_sql("p.value");
+    format!("(CASE WHEN EXISTS(SELECT 1 FROM background_library WHERE key='profile_dependencies') THEN EXISTS(SELECT 1 FROM background_library p JOIN background_library b ON b.key='profile' WHERE p.key='profile_dependencies' AND json_extract(p.value,'$.profile')=json_extract(b.value,'$.profile') AND {sources}) ELSE NOT {} END)",legacy_invalid_sql())
 }
 pub(crate) async fn snapshot(tx:&mut sqlx::Transaction<'_,sqlx::Sqlite>,path:Option<&str>)->Result<Vec<Dependency>> {
     let current=crate::source_policy::CURRENT_SQL;let excluded=crate::source_policy::EXCLUDED_SQL;
