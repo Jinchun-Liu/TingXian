@@ -1,0 +1,57 @@
+{
+  "schema_version": "toolkit-evaluation-1",
+  "status": "frozen_preparation_no_model_calls",
+  "authorization": false,
+  "budget_cny": 0,
+  "tracks": [
+    "A_background",
+    "B_realtime"
+  ],
+  "groups": {
+    "existing": "current fixed workflow",
+    "methods": "single Lead with selected methods",
+    "team": "fixed four-role workflow",
+    "optimized": "optional Harness2, disabled"
+  },
+  "development_cases": 6,
+  "holdout_cases": 6,
+  "spoken_pairs": 12,
+  "model_configuration": null,
+  "quality_gates": [
+    "no invented personal facts",
+    "source locations resolve",
+    "withdrawn sources never resent",
+    "self speech no generation",
+    "cancelled late events rejected",
+    "partial failures never completed",
+    "known usage survives failure"
+  ],
+  "human_required": [
+    "semantic entailment",
+    "technical correctness",
+    "multi-part coverage",
+    "blind oral preference",
+    "read aloud"
+  ],
+  "metrics": [
+    "same-input byte envelopes",
+    "actual input/output/reasoning tokens",
+    "all request attempts including failures",
+    "cost known/unknown",
+    "first usable answer and final latency p50/p95",
+    "retrieval latency",
+    "CPU/memory peaks"
+  ],
+  "performance_targets_not_verified": {
+    "routing_retrieval_p95_ms": 500,
+    "static_instruction_tokens": 1500,
+    "spoken_instruction_tokens": 350,
+    "common_input_tokens": 8192,
+    "input_reduction_fraction": 0.25
+  },
+  "optimizer_allowed_split": "development",
+  "holdout_feedback_for_optimization": false,
+  "active_policy": "legacy",
+  "harness2_enabled": false,
+  "old_47_case_mutation_allowed": false
+}

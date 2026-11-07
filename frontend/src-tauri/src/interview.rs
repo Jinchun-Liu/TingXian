@@ -643,11 +643,12 @@ async fn start_answer(app:tauri::AppHandle,state:&InterviewState,question_id:Str
             if cancel.is_cancelled(){return Err("已取消".to_string());}
             let started=std::time::Instant::now();
             let aliases=index.setting("aliases").await?;
-            let facts=index.fact_card().await?;
+            let facts=index.request_fact_card().await?;
             let review=index.search_review(&question,if aliases.is_empty(){DEFAULT_ALIASES}else{&aliases},Some(&facts)).await?;
             let evidence=review.evidence;
             emit(json!({"type":"sources","evidence":evidence,"conflicts":review.conflicts,"retrieval_ms":started.elapsed().as_millis(),"index_version":index.setting("version").await?,"fact_version":facts.version,"profile_id":profile.id}));
             let prefs=index.preferences().await?;
+            let history=index.request_history(&history).await?;
             let mut messages=interview_core::messages_with_preferences(&question,&facts,&history,&evidence,&dialogue.unwrap_or_default(),&prefs)?;
             if let Some(role)=index.background_role().await? {
                 let mut input:Value=serde_json::from_str(messages[1]["content"].as_str().ok_or("缺少问题上下文")?).map_err(|e|e.to_string())?;
@@ -676,6 +677,51 @@ async fn start_answer(app:tauri::AppHandle,state:&InterviewState,question_id:Str
 }
 #[tauri::command]
 pub async fn answer_cancel(state:State<'_,InterviewState>)->Result<(),String> {state.cancel_answers().await}
+#[tauri::command]
+pub async fn profile_source_exclude<R:tauri::Runtime>(window:tauri::WebviewWindow<R>,app:tauri::AppHandle<R>,state:State<'_,InterviewState>,update:interview_core::source_policy::SourceExclusion)->Result<(),String> {
+    if window.label()!="main" {return Err("请在主窗口调整资料范围".into());}
+    let _guard=state.lifecycle.lock().await;
+    crate::interview_exit::ensure_not_exiting(&app)?;
+    // No new request can start across the withdrawal. Cancel old work and wait
+    // for its network lease before acknowledging the new source policy.
+    state.cancel().await;
+    let _network=tokio::time::timeout(std::time::Duration::from_secs(35),state.network.write()).await.map_err(|_|"旧请求仍在结束，尚未修改来源范围，请重试")?;
+    state.index(&app).await?.exclude_source(update).await
+}
+
+#[cfg(test)]
+mod source_withdrawal_tests {
+    use super::*;
+    #[tokio::test]
+    async fn interview_source_withdrawal_cancels_inflight_and_waits_before_acknowledging() {
+        let root=std::env::temp_dir().join(format!("tingxian-source-policy-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let index=Index::open(&root.join("synthetic.sqlite")).await.unwrap();
+        sqlx::query("INSERT INTO documents VALUES('synthetic.txt','synthetic-hash','personal',1)").execute(&index.pool).await.unwrap();
+        let state=InterviewState::default();assert!(state.index.set(index).is_ok());
+        let app=tauri::test::mock_builder().manage(state).manage(crate::interview_exit::ExitState::default())
+            .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let main=tauri::WebviewWindowBuilder::new(&app,"main",Default::default()).build().unwrap();
+        let display=tauri::WebviewWindowBuilder::new(&app,"display",Default::default()).build().unwrap();
+        let update=||interview_core::source_policy::SourceExclusion{path:"synthetic.txt".into(),expected_root:String::new(),expected_hash:"synthetic-hash".into(),excluded:true};
+        assert!(profile_source_exclude(display,app.handle().clone(),app.state(),update()).await.is_err());
+        let state=app.state::<InterviewState>();state.session.store(true,Ordering::SeqCst);
+        let lease=state.active.reserve("synthetic-q",1,&["answer-1".into()]).unwrap();
+        let network=state.network.clone().read_owned().await;
+        let withdrawal=profile_source_exclude(main,app.handle().clone(),app.state(),update());
+        let releasing=async {
+            tokio::time::timeout(std::time::Duration::from_secs(3),lease.cancel.cancelled()).await.unwrap();
+            assert!(state.lifecycle.try_lock().is_err(),"new starts stay behind withdrawal");
+            let count:i64=sqlx::query_scalar("SELECT count(*) FROM background_library WHERE key GLOB 'excluded/*'").fetch_one(&state.index.get().unwrap().pool).await.unwrap();
+            assert_eq!(count,0,"do not acknowledge while old network worker still runs");
+            drop(lease);drop(network);
+        };
+        let (result,())=tokio::join!(withdrawal,releasing);result.unwrap();
+        assert!(state.index.get().unwrap().documents().await.unwrap()[0].excluded);
+        assert!(state.session.load(Ordering::SeqCst),"withdrawing a source must not stop recording/session");
+        assert!(state.active.is_empty());
+    }
+}
 #[tauri::command]
 pub async fn session_clear(state:State<'_,InterviewState>)->Result<(),String> {
     let _guard=state.lifecycle.lock().await;state.cancel().await;let _network=state.network.write().await;state.session.store(false,Ordering::SeqCst);Ok(())

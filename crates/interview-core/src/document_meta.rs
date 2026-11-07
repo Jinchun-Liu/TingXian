@@ -24,7 +24,7 @@ impl Default for DocumentStatus {
 #[derive(Debug, Clone, Serialize)]
 pub struct DocumentRecord {
     pub path: String, pub root: String, pub hash: String, pub kind: String, pub allow_external: bool,
-    pub chunks: i64, pub metadata: DocumentStatus,
+    pub chunks: i64, pub excluded: bool, pub metadata: DocumentStatus,
 }
 #[derive(Debug, Clone, Deserialize)]
 pub struct DocumentUpdate {
@@ -59,10 +59,11 @@ pub(crate) fn status(row:&sqlx::sqlite::SqliteRow, hash:&str, today:NaiveDate)->
 }
 impl Index {
     pub async fn documents(&self)->Result<Vec<DocumentRecord>> {
-        let rows=sqlx::query(&format!("SELECT d.*,CASE WHEN d.path GLOB '.背景/*' THEN '背景资料库' ELSE COALESCE((SELECT value FROM settings WHERE key='root'),'') END AS current_root,(SELECT count(*) FROM chunks c WHERE c.path=d.path) AS chunk_count,{META_COLUMNS} FROM documents d {META_JOIN} ORDER BY d.path"))
+        let excluded=crate::source_policy::EXCLUDED_SQL;
+        let rows=sqlx::query(&format!("SELECT d.*,CASE WHEN d.path GLOB '.背景/*' THEN '背景资料库' ELSE COALESCE((SELECT value FROM settings WHERE key='root'),'') END AS current_root,(SELECT count(*) FROM chunks c WHERE c.path=d.path) AS chunk_count,{META_COLUMNS},{excluded} AS excluded FROM documents d {META_JOIN} ORDER BY d.path"))
             .fetch_all(&self.pool).await.map_err(|e|e.to_string())?;
         let today=Local::now().date_naive();
-        Ok(rows.into_iter().map(|r| {let hash:String=r.get("hash");let metadata=status(&r,&hash,today);DocumentRecord {path:r.get("path"),root:r.get("current_root"),hash,kind:r.get("kind"),allow_external:r.get("allow_external"),chunks:r.get("chunk_count"),metadata}}).collect())
+        Ok(rows.into_iter().map(|r| {let hash:String=r.get("hash");let metadata=status(&r,&hash,today);DocumentRecord {path:r.get("path"),root:r.get("current_root"),hash,kind:r.get("kind"),allow_external:r.get("allow_external"),chunks:r.get("chunk_count"),excluded:r.get("excluded"),metadata}}).collect())
     }
     pub async fn update_document(&self, update:DocumentUpdate)->Result<()> {
         bounds(update.valid_from.as_deref(),update.valid_until.as_deref())?;

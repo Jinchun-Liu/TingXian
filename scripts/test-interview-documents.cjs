@@ -43,6 +43,13 @@ const onSave=async update=>{saves.push(update);if(failSave)throw Error('资料�
   await act(async()=>tree.update(React.createElement(DocumentReview,{key:'changed',document:changed,locked:true,onSave})));
   assert.equal(checkbox().props.checked,false);assert.ok(text(tree.toJSON()).includes('内容已变化'));
   assert.ok(tree.root.findAllByType('input').every(n=>n.props.disabled));assert.ok(tree.root.findAllByType('button').every(n=>n.props.disabled));
+  const exclusions=[];
+  await act(async()=>tree.update(React.createElement(DocumentReview,{key:'exclude',document,locked:true,exclusionLocked:false,onSave,onExclude:async v=>{exclusions.push(v);}})));
+  assert.equal(button('排除检索').props.disabled,false,'withdrawal remains available during a session');
+  await click('排除检索');assert.deepEqual(exclusions,[true]);
+  await act(async()=>tree.update(React.createElement(DocumentReview,{key:'excluded',document:{...document,excluded:true},locked:true,exclusionLocked:false,onSave,onExclude:async()=>{throw Error('旧请求仍在结束');}})));
+  assert.ok(text(tree.toJSON()).includes('已排除检索'));
+  await click('恢复参与检索');assert.ok(text(tree.toJSON()).includes('旧请求仍在结束'));
   await act(async()=>tree.unmount());
   console.log('PASS: explicit review, all snapshot segments, content/root identity, date range validation, surfaced failures, changed-content and session locks');
 })().catch(error=>{console.error(error);process.exitCode=1;});

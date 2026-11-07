@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { BackgroundVersions } from '@/components/interview/BackgroundVersions';
 import { DocumentRecord, DocumentUpdate, sourceStatusLabel } from '@/lib/interview-documents';
 
-export function DocumentReview({document,locked,onSave}:{document:DocumentRecord;locked:boolean;onSave:(update:DocumentUpdate)=>Promise<unknown>}) {
+export function DocumentReview({document,locked,onSave,onExclude,exclusionLocked}:{document:DocumentRecord;locked:boolean;exclusionLocked?:boolean;onExclude?:(excluded:boolean)=>Promise<unknown>;onSave:(update:DocumentUpdate)=>Promise<unknown>}) {
   const [confirmed,setConfirmed]=useState(document.metadata.confirmation==='confirmed');
   const [from,setFrom]=useState(document.metadata.valid_from || '');
   const [until,setUntil]=useState(document.metadata.valid_until || '');
@@ -24,8 +24,9 @@ export function DocumentReview({document,locked,onSave}:{document:DocumentRecord
     catch(e){setError(String(e));}
   };
   return <details className="rounded border p-3 text-xs">
-    <summary className="cursor-pointer break-all">{document.path.replace(/^\.背景\/(?:[a-f0-9]{64}\/)?/,'')} · {sourceStatusLabel(document.metadata)}</summary>
+    <summary className="cursor-pointer break-all">{document.path.replace(/^\.背景\/(?:[a-f0-9]{64}\/)?/,'')} · {document.excluded?'已排除检索':sourceStatusLabel(document.metadata)}</summary>
     <div className="mt-3 space-y-3">
+      {onExclude&&<Button variant="outline" size="sm" disabled={exclusionLocked||loading} onClick={async()=>{setLoading(true);setError('');try{await onExclude(!document.excluded);}catch(e){setError(String(e));}finally{setLoading(false);}}}>{document.excluded?'恢复参与检索':'排除检索'}</Button>}
       <p className="text-slate-500">核对针对本次导入的内容；源文件修改后请重新导入。日期可留空，保存不会修改原文件。练习参考仍只用于组织表达。</p>
       <Button variant="outline" size="sm" disabled={locked || loading} onClick={preview}>{loading ? '正在读取片段' : '查看已导入片段'}</Button>
       {/^\.背景\/[a-f0-9]{64}\//.test(document.path)&&<BackgroundVersions source={document.path.split('/')[1]} expected={document.hash} locked={locked}/>}

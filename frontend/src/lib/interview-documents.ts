@@ -3,7 +3,7 @@ export type DocumentMetadata = {
   validity: 'unknown' | 'current' | 'expired' | 'not_yet_valid' | 'content_changed' | 'invalid';
   confirmed_at: string | null; valid_from: string | null; valid_until: string | null; updated_at: string | null;
 };
-export type DocumentRecord = {path: string; root: string; hash: string; kind: string; allow_external: boolean; chunks: number; metadata: DocumentMetadata};
+export type DocumentRecord = {path: string; root: string; hash: string; kind: string; allow_external: boolean; chunks: number; excluded?: boolean; metadata: DocumentMetadata};
 export type DocumentUpdate = {path: string; expected_root: string; expected_hash: string; confirmed: boolean; valid_from: string | null; valid_until: string | null};
 export function sourceStatusLabel(metadata?: DocumentMetadata) {
   if (!metadata) return '核对与时效未标注';

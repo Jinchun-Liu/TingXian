@@ -1,0 +1,165 @@
+{
+  "schema_version": "tingxian-team-run-1",
+  "execution_profile": "offline",
+  "execution_mode": "fixture",
+  "harness2_enabled": false,
+  "evidence_ids": [
+    "source:1"
+  ],
+  "versions": [
+    {
+      "candidate": {
+        "id": "v1",
+        "artifact": "已在生产独立实现",
+        "claim_evidence_map": [
+          {
+            "claim": "仅模拟练习",
+            "evidence_refs": [
+              "source:1"
+            ]
+          }
+        ],
+        "gaps": [],
+        "changelog": [
+          "revision 1"
+        ],
+        "policy_proposals": []
+      },
+      "reviews": {
+        "hr": {
+          "schema_version": "review-1",
+          "reviewer": "hr",
+          "mode": "artifact_review",
+          "candidate_id": "v1",
+          "candidate_hash": "7c175eb0513ef2f5d319283c4a0bb309f4cfe01b7641b6905d5b6d7c962bd02d",
+          "findings": [
+            {
+              "id": "scope",
+              "severity": "major",
+              "category": "fact",
+              "location": "artifact",
+              "claim": "生产经历无依据",
+              "evidence_refs": [
+                "source:1"
+              ],
+              "certainty": "supported",
+              "recommended_change": "仅说明模拟练习",
+              "verification": "核对source:1"
+            }
+          ],
+          "missing_evidence": [],
+          "prioritized_actions": [],
+          "status": "reviewed"
+        },
+        "mentor": {
+          "schema_version": "review-1",
+          "reviewer": "mentor",
+          "mode": "artifact_review",
+          "candidate_id": "v1",
+          "candidate_hash": "7c175eb0513ef2f5d319283c4a0bb309f4cfe01b7641b6905d5b6d7c962bd02d",
+          "findings": [
+            {
+              "id": "scope",
+              "severity": "major",
+              "category": "fact",
+              "location": "artifact",
+              "claim": "生产经历无依据",
+              "evidence_refs": [
+                "source:1"
+              ],
+              "certainty": "supported",
+              "recommended_change": "仅说明模拟练习",
+              "verification": "核对source:1"
+            }
+          ],
+          "missing_evidence": [],
+          "prioritized_actions": [],
+          "status": "reviewed"
+        },
+        "consultant": {
+          "schema_version": "review-1",
+          "reviewer": "consultant",
+          "mode": "coaching",
+          "candidate_id": "v1",
+          "candidate_hash": "7c175eb0513ef2f5d319283c4a0bb309f4cfe01b7641b6905d5b6d7c962bd02d",
+          "findings": [
+            {
+              "id": "scope",
+              "severity": "major",
+              "category": "fact",
+              "location": "artifact",
+              "claim": "生产经历无依据",
+              "evidence_refs": [
+                "source:1"
+              ],
+              "certainty": "supported",
+              "recommended_change": "仅说明模拟练习",
+              "verification": "核对source:1"
+            }
+          ],
+          "missing_evidence": [],
+          "prioritized_actions": [],
+          "status": "reviewed"
+        }
+      }
+    },
+    {
+      "candidate": {
+        "id": "v2",
+        "artifact": "仅模拟练习",
+        "claim_evidence_map": [
+          {
+            "claim": "仅模拟练习",
+            "evidence_refs": [
+              "source:1"
+            ]
+          }
+        ],
+        "gaps": [],
+        "changelog": [
+          "revision 2"
+        ],
+        "policy_proposals": []
+      },
+      "reviews": {
+        "hr": {
+          "schema_version": "review-1",
+          "reviewer": "hr",
+          "mode": "artifact_review",
+          "candidate_id": "v2",
+          "candidate_hash": "0f9b11d882d8f35f7f05ea7d9e7527b7e011b5684f5fbc1fcde8e4b340bbeeba",
+          "findings": [],
+          "missing_evidence": [],
+          "prioritized_actions": [],
+          "status": "reviewed"
+        },
+        "mentor": {
+          "schema_version": "review-1",
+          "reviewer": "mentor",
+          "mode": "artifact_review",
+          "candidate_id": "v2",
+          "candidate_hash": "0f9b11d882d8f35f7f05ea7d9e7527b7e011b5684f5fbc1fcde8e4b340bbeeba",
+          "findings": [],
+          "missing_evidence": [],
+          "prioritized_actions": [],
+          "status": "reviewed"
+        },
+        "consultant": {
+          "schema_version": "review-1",
+          "reviewer": "consultant",
+          "mode": "coaching",
+          "candidate_id": "v2",
+          "candidate_hash": "0f9b11d882d8f35f7f05ea7d9e7527b7e011b5684f5fbc1fcde8e4b340bbeeba",
+          "findings": [],
+          "missing_evidence": [],
+          "prioritized_actions": [],
+          "status": "reviewed"
+        }
+      }
+    }
+  ],
+  "attempts": [],
+  "attempts_complete": true,
+  "stop_reason": "quality_threshold",
+  "final_candidate_hash": "0f9b11d882d8f35f7f05ea7d9e7527b7e011b5684f5fbc1fcde8e4b340bbeeba"
+}

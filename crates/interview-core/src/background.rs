@@ -79,7 +79,8 @@ impl Index {
         Ok(out)
     }
     pub async fn background_input_page(&self,measure:bool,cursor:i64)->Result<(i64,Vec<Value>)>{
-        let rows=sqlx::query(&format!("SELECT c.rowid AS seq,c.path,c.location,c.text,d.kind,d.hash,(SELECT json_extract(value,'$.hash') FROM background_library WHERE key=substr(c.path,5,64)) AS source_hash,{} FROM chunks c JOIN documents d ON d.path=c.path {} WHERE c.rowid>? AND d.allow_external=1 AND (? OR c.path!='.背景/综合背景') ORDER BY c.rowid LIMIT 256",crate::document_meta::META_COLUMNS,crate::document_meta::META_JOIN)).bind(cursor).bind(measure).fetch_all(&self.pool).await.map_err(|e|e.to_string())?;
+        let excluded=crate::source_policy::EXCLUDED_SQL;let summary=crate::source_policy::SUMMARY_BLOCKED_SQL;
+        let rows=sqlx::query(&format!("SELECT c.rowid AS seq,c.path,c.location,c.text,d.kind,d.hash,(SELECT json_extract(value,'$.hash') FROM background_library WHERE key=substr(c.path,5,64)) AS source_hash,{} FROM chunks c JOIN documents d ON d.path=c.path {} WHERE c.rowid>? AND d.allow_external=1 AND NOT {excluded} AND NOT {summary} AND (? OR c.path!='.背景/综合背景') ORDER BY c.rowid LIMIT 256",crate::document_meta::META_COLUMNS,crate::document_meta::META_JOIN)).bind(cursor).bind(measure).fetch_all(&self.pool).await.map_err(|e|e.to_string())?;
         let mut next=cursor;let mut out=vec![];
         for r in rows {
             let path:String=r.get("path");
@@ -151,6 +152,8 @@ impl Index {
         tx.commit().await.map_err(|e|e.to_string())
     }
     pub async fn background_role(&self)->Result<Option<String>>{
+        let withdrawn=self.has_withdrawn_sources().await?;
+        if withdrawn{return Ok(None);}
         let role:Option<String>=sqlx::query_scalar("SELECT CASE WHEN json_extract(value,'$.share')=1 THEN json_extract(value,'$.profile.role') ELSE '' END FROM background_library WHERE key='profile'").fetch_optional(&self.pool).await.map_err(|e|e.to_string())?;
         Ok(role)
     }

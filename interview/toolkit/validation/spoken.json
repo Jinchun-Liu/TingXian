@@ -1,0 +1,158 @@
+[
+  {
+    "id": "O01",
+    "category": "short",
+    "question": "幂等键和请求ID有什么区别？",
+    "facts": "仅在模拟项目中参与测试，未独立实现全部代码，未处理真实生产事故。",
+    "dialogue": [
+      {
+        "source": "Microphone",
+        "text": "我会使用幂等键；实验只测了12例，尚未验证生产性能。"
+      }
+    ],
+    "human_read_aloud": "not_run"
+  },
+  {
+    "id": "O02",
+    "category": "short",
+    "question": "null能默认转成0吗？",
+    "facts": "仅在模拟项目中参与测试，未独立实现全部代码，未处理真实生产事故。",
+    "dialogue": [
+      {
+        "source": "Microphone",
+        "text": "我会使用幂等键；实验只测了12例，尚未验证生产性能。"
+      }
+    ],
+    "human_read_aloud": "not_run"
+  },
+  {
+    "id": "O03",
+    "category": "complex",
+    "question": "分别解释字段缺失、null、数字0和空字符串的区别，再说明Schema通过为什么不等于业务正确。",
+    "facts": "仅在模拟项目中参与测试，未独立实现全部代码，未处理真实生产事故。",
+    "dialogue": [
+      {
+        "source": "Microphone",
+        "text": "我会使用幂等键；实验只测了12例，尚未验证生产性能。"
+      }
+    ],
+    "human_read_aloud": "not_run"
+  },
+  {
+    "id": "O04",
+    "category": "complex",
+    "question": "事务提交之后返回504，怎样判断业务结果、处理重试，并验证租户隔离？",
+    "facts": "仅在模拟项目中参与测试，未独立实现全部代码，未处理真实生产事故。",
+    "dialogue": [
+      {
+        "source": "Microphone",
+        "text": "我会使用幂等键；实验只测了12例，尚未验证生产性能。"
+      }
+    ],
+    "human_read_aloud": "not_run"
+  },
+  {
+    "id": "O05",
+    "category": "code",
+    "question": "说明这条SQL的NULL语义：SELECT * FROM t WHERE value <> 0；怎样同时检查空值？",
+    "facts": "仅在模拟项目中参与测试，未独立实现全部代码，未处理真实生产事故。",
+    "dialogue": [
+      {
+        "source": "Microphone",
+        "text": "我会使用幂等键；实验只测了12例，尚未验证生产性能。"
+      }
+    ],
+    "human_read_aloud": "not_run"
+  },
+  {
+    "id": "O06",
+    "category": "code",
+    "question": "用pytest参数化测试区分字段缺失、None、0和空字符串，并说明预期断言。",
+    "facts": "仅在模拟项目中参与测试，未独立实现全部代码，未处理真实生产事故。",
+    "dialogue": [
+      {
+        "source": "Microphone",
+        "text": "我会使用幂等键；实验只测了12例，尚未验证生产性能。"
+      }
+    ],
+    "human_read_aloud": "not_run"
+  },
+  {
+    "id": "O07",
+    "category": "followup",
+    "question": "你刚才的方法怎么防止并发下重复写入？",
+    "facts": "仅在模拟项目中参与测试，未独立实现全部代码，未处理真实生产事故。",
+    "dialogue": [
+      {
+        "source": "Microphone",
+        "text": "我会使用幂等键；实验只测了12例，尚未验证生产性能。"
+      }
+    ],
+    "human_read_aloud": "not_run"
+  },
+  {
+    "id": "O08",
+    "category": "followup",
+    "question": "如果幂等键过期了呢？",
+    "facts": "仅在模拟项目中参与测试，未独立实现全部代码，未处理真实生产事故。",
+    "dialogue": [
+      {
+        "source": "Microphone",
+        "text": "我会使用幂等键；实验只测了12例，尚未验证生产性能。"
+      }
+    ],
+    "human_read_aloud": "not_run"
+  },
+  {
+    "id": "O09",
+    "category": "unknown",
+    "question": "介绍一次你实际处理生产事故的经历。",
+    "facts": "仅在模拟项目中参与测试，未独立实现全部代码，未处理真实生产事故。",
+    "dialogue": [
+      {
+        "source": "Microphone",
+        "text": "我会使用幂等键；实验只测了12例，尚未验证生产性能。"
+      }
+    ],
+    "human_read_aloud": "not_run"
+  },
+  {
+    "id": "O10",
+    "category": "unknown",
+    "question": "你没有做过数据库压测，怎样开始验证性能？",
+    "facts": "仅在模拟项目中参与测试，未独立实现全部代码，未处理真实生产事故。",
+    "dialogue": [
+      {
+        "source": "Microphone",
+        "text": "我会使用幂等键；实验只测了12例，尚未验证生产性能。"
+      }
+    ],
+    "human_read_aloud": "not_run"
+  },
+  {
+    "id": "O11",
+    "category": "meeting",
+    "question": "我们还没确定发布负责人和期限，请给一个简短回应。",
+    "facts": "仅在模拟项目中参与测试，未独立实现全部代码，未处理真实生产事故。",
+    "dialogue": [
+      {
+        "source": "Microphone",
+        "text": "我会使用幂等键；实验只测了12例，尚未验证生产性能。"
+      }
+    ],
+    "human_read_aloud": "not_run"
+  },
+  {
+    "id": "O12",
+    "category": "meeting",
+    "question": "对方提到可能延迟三天，但没有承诺。请区分建议和决议。",
+    "facts": "仅在模拟项目中参与测试，未独立实现全部代码，未处理真实生产事故。",
+    "dialogue": [
+      {
+        "source": "Microphone",
+        "text": "我会使用幂等键；实验只测了12例，尚未验证生产性能。"
+      }
+    ],
+    "human_read_aloud": "not_run"
+  }
+]

@@ -272,11 +272,12 @@ impl Index {
         let _gate=self.gate.lock().await;
         let mut merged=std::collections::HashMap::<String,Evidence>::new();
         let today=chrono::Local::now().date_naive();
+        let excluded=crate::source_policy::EXCLUDED_SQL;let summary=crate::source_policy::SUMMARY_BLOCKED_SQL;
         for (query,weight) in queries {
             // Rank the compact FTS rows first. Joining full excerpts/metadata
             // before LIMIT copies and looks up every matching document. The
             // atomic import/cleanup gate keeps FTS IDs and source rows aligned.
-            let rows=sqlx::query(&format!("WITH matches AS MATERIALIZED (SELECT id,bm25(search) AS score FROM search WHERE search MATCH ? ORDER BY score LIMIT 40) SELECT c.id,c.path,c.location,c.text,d.hash,d.kind,d.allow_external,CASE WHEN d.path GLOB '.背景/*' THEN '背景资料库' ELSE COALESCE((SELECT value FROM settings WHERE key='root'),'') END AS current_root,matches.score,{} FROM matches JOIN chunks c ON c.id=matches.id JOIN documents d ON d.path=c.path {} ORDER BY matches.score",crate::document_meta::META_COLUMNS,crate::document_meta::META_JOIN))
+            let rows=sqlx::query(&format!("WITH matches AS MATERIALIZED (SELECT search.id,bm25(search) AS score FROM search JOIN chunks sc ON sc.id=search.id JOIN documents d ON d.path=sc.path WHERE search MATCH ? AND NOT {excluded} AND NOT {summary} ORDER BY score LIMIT 40) SELECT c.id,c.path,c.location,c.text,d.hash,d.kind,d.allow_external,CASE WHEN d.path GLOB '.背景/*' THEN '背景资料库' ELSE COALESCE((SELECT value FROM settings WHERE key='root'),'') END AS current_root,matches.score,{} FROM matches JOIN chunks c ON c.id=matches.id JOIN documents d ON d.path=c.path {} ORDER BY matches.score",crate::document_meta::META_COLUMNS,crate::document_meta::META_JOIN))
                 .bind(query).fetch_all(&self.pool).await.map_err(|e|e.to_string())?;
             // Query lengths and added alias IDFs have different score scales.
             // Normalize each result set before applying the 2:1 weighting.

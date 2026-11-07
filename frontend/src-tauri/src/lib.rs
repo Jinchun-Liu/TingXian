@@ -641,6 +641,7 @@ pub fn run() {
             interview::profile_import_status,
             interview::profile_index_clear,
             interview::profile_document_update,
+            interview::profile_source_exclude,
             interview::profile_document_segments,
             interview::profile_facts_correct,
             interview::profile_facts_current,

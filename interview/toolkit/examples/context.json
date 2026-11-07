@@ -1,0 +1,11 @@
+{
+  "tool": "realtime",
+  "mode": "interview",
+  "question_types": [
+    "general"
+  ],
+  "role": "R08",
+  "seniority": "unspecified",
+  "language": "zh",
+  "question": "接口超时重试怎么验证幂等与null？"
+}

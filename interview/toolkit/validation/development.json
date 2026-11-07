@@ -1,0 +1,146 @@
+[
+  {
+    "id": "D01",
+    "split": "development",
+    "person_id": "林禾",
+    "project_id": "ParcelLane",
+    "jd_id": "D01-jd",
+    "role": "后端开发",
+    "question": "创建任务在提交后连接断开，用户再次点击。请区分业务是否完成、能否重试以及按什么标识查证。",
+    "question_type": "project",
+    "facts": "林禾仅参与虚构ParcelLane课程实验，未验证生产环境效果。",
+    "dialogue": [
+      {
+        "source": "Microphone",
+        "text": "我会先明确契约，再验证可观察结果。"
+      }
+    ],
+    "source_revision": "synthetic-1",
+    "updates": [
+      "initial",
+      "changed_contribution",
+      "exclude_source"
+    ],
+    "quality_review_status": "not_run"
+  },
+  {
+    "id": "D02",
+    "split": "development",
+    "person_id": "许汀",
+    "project_id": "CouponGate",
+    "jd_id": "D02-jd",
+    "role": "功能测试",
+    "question": "优惠券只能使用一次，但两个窗口同时提交。请说明边界、并发验证和验收证据。",
+    "question_type": "design",
+    "facts": "许汀仅参与虚构CouponGate课程实验，未验证生产环境效果。",
+    "dialogue": [
+      {
+        "source": "Microphone",
+        "text": "我会先明确契约，再验证可观察结果。"
+      }
+    ],
+    "source_revision": "synthetic-1",
+    "updates": [
+      "initial",
+      "changed_contribution",
+      "exclude_source"
+    ],
+    "quality_review_status": "not_run"
+  },
+  {
+    "id": "D03",
+    "split": "development",
+    "person_id": "陈谷",
+    "project_id": "TraceDesk",
+    "jd_id": "D03-jd",
+    "role": "测试开发",
+    "question": "同一组自动化在本机通过，在CI偶发失败。不能直接加重试，你会怎么定位？",
+    "question_type": "code",
+    "facts": "陈谷仅参与虚构TraceDesk课程实验，未验证生产环境效果。",
+    "dialogue": [
+      {
+        "source": "Microphone",
+        "text": "我会先明确契约，再验证可观察结果。"
+      }
+    ],
+    "source_revision": "synthetic-1",
+    "updates": [
+      "initial",
+      "changed_contribution",
+      "exclude_source"
+    ],
+    "quality_review_status": "not_run"
+  },
+  {
+    "id": "D04",
+    "split": "development",
+    "person_id": "苏遥",
+    "project_id": "ArchiveMint",
+    "jd_id": "D04-jd",
+    "role": "后端开发",
+    "question": "项目说明写主导完成，但提交记录只有两次审阅。怎样介绍这段经历，缺什么证据？",
+    "question_type": "behavioral",
+    "facts": "苏遥仅参与虚构ArchiveMint课程实验，未验证生产环境效果。",
+    "dialogue": [
+      {
+        "source": "Microphone",
+        "text": "我会先明确契约，再验证可观察结果。"
+      }
+    ],
+    "source_revision": "synthetic-1",
+    "updates": [
+      "initial",
+      "changed_contribution",
+      "exclude_source"
+    ],
+    "quality_review_status": "not_run"
+  },
+  {
+    "id": "D05",
+    "split": "development",
+    "person_id": "孟川",
+    "project_id": "SurveyLeaf",
+    "jd_id": "D05-jd",
+    "role": "功能测试",
+    "question": "你只有两小时验证一次配置升级，如何说明优先级及没有覆盖的风险？",
+    "question_type": "complex",
+    "facts": "孟川仅参与虚构SurveyLeaf课程实验，未验证生产环境效果。",
+    "dialogue": [
+      {
+        "source": "Microphone",
+        "text": "我会先明确契约，再验证可观察结果。"
+      }
+    ],
+    "source_revision": "synthetic-1",
+    "updates": [
+      "initial",
+      "changed_contribution",
+      "exclude_source"
+    ],
+    "quality_review_status": "not_run"
+  },
+  {
+    "id": "D06",
+    "split": "development",
+    "person_id": "顾苇",
+    "project_id": "FixturePort",
+    "jd_id": "D06-jd",
+    "role": "测试开发",
+    "question": "你刚才说隔离测试数据，那么如何验证并发清理不会误删其他用例的数据？",
+    "question_type": "code",
+    "facts": "顾苇仅参与虚构FixturePort课程实验，未验证生产环境效果。",
+    "dialogue": [
+      {
+        "source": "Microphone",
+        "text": "我会先明确契约，再验证可观察结果。"
+      }
+    ],
+    "source_revision": "synthetic-1",
+    "updates": [
+      "initial",
+      "changed_contribution",
+      "exclude_source"
+    ],
+    "quality_review_status": "not_run"
+  }
+]
