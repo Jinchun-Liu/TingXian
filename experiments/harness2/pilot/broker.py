@@ -50,6 +50,7 @@ class Broker:
         self.ledger = control.Ledger(self.root / 'budget.sqlite', 30 * UNITS_PER_YUAN, 700)
         self.key = key
         self.transport = transport or self._http
+        self.currency_verified = transport is not None
         self.lock = threading.RLock()
         self.scope = threading.local()
         self.slots = threading.BoundedSemaphore(2)
@@ -57,12 +58,49 @@ class Broker:
         self.cancel_file = self.root / 'CANCEL'
 
     def stopped(self):
-        if self.cancel_file.exists():
-            self.ledger.cancel()
-        return self.ledger.cancelled()
+        with self.lock:
+            if self.cancel_file.exists() or time.monotonic() - self.started > 5400:
+                self.ledger.cancel()
+            return self.ledger.cancelled()
 
     def stop(self):
-        self.ledger.cancel()
+        with self.lock:
+            self.ledger.cancel()
+
+    def adopt(self, action):
+        # Cancellation and publication share one lock. A completed publication
+        # either precedes cancellation, or is rejected entirely.
+        with self.lock:
+            if self.stopped():
+                raise control.Stopped('Cancelled; result publication rejected')
+            return action()
+
+    def _verify_currency(self):
+        if self.currency_verified:
+            return
+        if not self.key or any(c.isspace() for c in self.key):
+            raise ValueError('Missing/invalid dedicated pilot credential')
+        context = ssl.create_default_context()
+        if Path('/etc/ssl/cert.pem').is_file():
+            context.load_verify_locations(cafile='/etc/ssl/cert.pem')
+        opener = urllib.request.build_opener(NoRedirect, urllib.request.HTTPSHandler(context=context))
+        request = urllib.request.Request('https://api.deepseek.com/user/balance',
+            headers={'Authorization': 'Bearer ' + self.key})
+        try:
+            with opener.open(request, timeout=30) as response:
+                data = json.loads(response.read(65536))
+        except Exception:
+            self.stop()
+            raise ValueError('Cannot verify CNY billing currency; no generation request sent') from None
+        currencies = sorted({r.get('currency') for r in data.get('balance_infos', []) if r.get('currency')})
+        # Never retain balance amounts or assume a conversion from USD.
+        (self.root / 'account-currency.json').write_bytes(encoded({
+            'currencies': currencies, 'checked_at': time.time(), 'generation_request': False,
+            'amounts_saved': False}))
+        if currencies != ['CNY']:
+            self.stop()
+            raise ValueError('This pilot budget only supports verified CNY accounts')
+        self.currency_verified = True
 
     @contextmanager
     def group(self, group_id, limit_units):
@@ -120,6 +158,7 @@ class Broker:
             if self.stopped() or time.monotonic() - self.started > 5400:
                 self.stop()
                 raise control.Stopped('Pilot cancelled or 90-minute time cap reached')
+            self._verify_currency()
             if path.exists():
                 state = json.loads((path / 'state.json').read_text())
                 result = path / 'result.json'
@@ -139,6 +178,13 @@ class Broker:
         try:
             response = self.transport(payload)
             usage = response.get('usage') or {}
+            choice = (response.get('choices') or [{}])[0]
+            content = choice.get('message', {}).get('content')
+            diagnostic_content = content.replace(self.key, '[REDACTED]') if self.key and isinstance(content, str) else content
+            # Retain only the final answer channel, never reasoning_content.
+            (path / 'response.json').write_bytes(encoded({'content': diagnostic_content,
+                'finish_reason': choice.get('finish_reason'), 'usage': usage or None,
+                'model': response.get('model')}))
             prompt = usage.get('prompt_tokens')
             completion = usage.get('completion_tokens')
             measured = all(type(n) is int and n >= 0 for n in (prompt, completion))
@@ -147,6 +193,9 @@ class Broker:
                 raise ValueError('Provider usage exceeded reserved token bounds')
             actual = prompt * INPUT_RATE + completion * OUTPUT_RATE if measured else None
             self.ledger.finish(signature, actual, usage or None)
+            state.update(estimated_peak_micro_cny=actual, usage_known=measured)
+            if self.key and isinstance(content, str) and self.key in content:
+                raise ValueError('Credential-like response suppressed')
             if self.stopped():
                 raise control.Stopped('Late result from cancelled pilot was not adopted')
             choice = response['choices'][0]
@@ -161,10 +210,11 @@ class Broker:
             saved = {'content': value, 'usage': usage or None, 'model': response.get('model'),
                      'system_fingerprint': response.get('system_fingerprint'), 'response_id': response.get('id'),
                      'estimated_peak_micro_cny': actual, 'usage_known': measured}
-            (path / 'result.json').write_bytes(encoded(saved))
-            state.update(status='completed', ended=time.time(), result_sha256=hash_file(path / 'result.json'),
-                         estimated_peak_micro_cny=actual, usage_known=measured)
-            (path / 'state.json').write_bytes(encoded(state))
+            def publish():
+                (path / 'result.json').write_bytes(encoded(saved))
+                state.update(status='completed', ended=time.time(), result_sha256=hash_file(path / 'result.json'))
+                (path / 'state.json').write_bytes(encoded(state))
+            self.adopt(publish)
             return value
         except BaseException as exc:
             # A failed/unknown request retains its reservation. If usage was

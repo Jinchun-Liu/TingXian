@@ -59,10 +59,11 @@ class PilotAdapter(p0.TingXianAdapter):
             with self.broker.group(*budget_scope):
                 result = self.broker.run_worker(run, cfg, read_dirs=[self.task_files(task_id)], read_files=[HOST])
             self._sources(task_id)
-            if self.broker.stopped():raise RuntimeError('Cancelled; result not adopted')
-            state.update(status='completed', ended=time.time(), result=result, artifact_sha256=result['bundle_sha256'])
-            p0.write_json(run / 'state.json', state)
-            (run / 'trajectory.md').write_text('[ACTION] Fixed background extraction, quote/hash checks and pack.\n[OBSERVATION] ' + json.dumps(result, ensure_ascii=False))
+            def publish():
+                state.update(status='completed', ended=time.time(), result=result, artifact_sha256=result['bundle_sha256'])
+                p0.write_json(run / 'state.json', state)
+                (run / 'trajectory.md').write_text('[ACTION] Fixed background extraction, quote/hash checks and pack.\n[OBSERVATION] ' + json.dumps(result, ensure_ascii=False))
+            self.broker.adopt(publish)
             self._log(state)
             return run
         except BaseException as exc:

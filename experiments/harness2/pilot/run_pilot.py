@@ -17,6 +17,7 @@ sys.path.insert(0, str(HERE));sys.path.insert(1, str(HERE.parent))
 from broker import Broker, encoded, hash_file, MODEL
 import policy
 import sandbox
+from fixed_review import run_fixed
 
 CASES = ['clear-a', 'practice-a', 'conflict-a', 'duplicate-a', 'long-a', 'ambiguity-a']
 
@@ -81,15 +82,8 @@ def main():
                 if group == 'A':
                     selected = adapter.execute(task, None, group_id)
                 elif group == 'B':
-                    candidates = []
-                    for n in range(4):
-                        path = adapter.execute(task, None, group_id + '-' + str(n))
-                        candidates.append({'id': str(n), 'path': str(path / 'artifacts/bundle.meetily.json')})
-                    choice_dir = root / 'selectors' / group_id
-                    cfg = {'job_id': group_id + '-selection', 'role': 'reviewer', 'candidates': candidates}
-                    choice = broker.run_worker(choice_dir, cfg, read_files=[Path(c['path']) for c in candidates])
-                    selected = Path(candidates[int(choice['selected'])]['path']).parent.parent
-                    row['selection'] = choice
+                    selected, choice, failures = run_fixed(adapter, broker, root, task, group_id)
+                    row.update(selection=choice, candidate_failures=failures)
                 else:
                     prop = PilotProposer(adapter.spec.channels['proposer'], broker, root / 'proposers' / group_id, group_id=group_id)
                     result = run_task(task, 1, adapter=adapter, prop=prop, runs_root=adapter.spec.runs_root, modes=('agg',), tag='pilot', seed=0)
@@ -99,10 +93,12 @@ def main():
                     if result.status != 'ok' or not selection.get('ok'):raise RuntimeError('Core candidate pipeline incomplete')
                     selected = adapter.root / 'executions' / hashlib.sha256(selection['chosen_run_id'].encode()).hexdigest()[:32]
                     row['selected_policy'] = selection['chosen_label']
-                if not adapter.delivered(selected) or broker.stopped():raise RuntimeError('No adopted verified artifact')
-                target = root / 'submissions' / (group_id + '.json');target.parent.mkdir(exist_ok=True)
-                shutil.copyfile(selected / 'artifacts/bundle.meetily.json', target)
-                row.update(status='completed', path=str(target), sha256=hash_file(target))
+                def publish():
+                    if not adapter.delivered(selected):raise RuntimeError('No verified artifact')
+                    target = root / 'submissions' / (group_id + '.json');target.parent.mkdir(exist_ok=True)
+                    shutil.copyfile(selected / 'artifacts/bundle.meetily.json', target)
+                    row.update(status='completed', path=str(target), sha256=hash_file(target))
+                broker.adopt(publish)
         except Exception as exc:
             row['error'] = str(exc)[:1200]
         with broker.lock:
