@@ -51,6 +51,7 @@ impl Bundle {
 }
 impl Index {
     pub async fn background_view(&self)->Result<Value> {
+        let _gate=self.gate.lock().await;
         let row=sqlx::query("SELECT COUNT(*) AS chunks,COALESCE(SUM(length(CAST(c.text AS BLOB))+length(CAST(c.location AS BLOB))+length(CAST(c.path AS BLOB))+128),0) AS bytes FROM chunks c").fetch_one(&self.pool).await.map_err(|e|e.to_string())?;
         let docs:i64=sqlx::query_scalar("SELECT count(*) FROM documents").fetch_one(&self.pool).await.map_err(|e|e.to_string())?;
         let all:u64=row.get::<i64,_>("bytes") as u64;
@@ -73,7 +74,11 @@ impl Index {
         let measurement:Value=measurement.map(|s|serde_json::from_str(&s)).transpose().map_err(|e|e.to_string())?.unwrap_or(Value::Null);
         Ok(json!({"documents":docs,"chunks":row.get::<i64,_>("chunks"),"full_budget":full,"rag_budget":rag,
             "context_estimates":{"method":"UTF-8 bytes; conservative token ceiling, not provider tokenizer","raw_extract_text_bytes":raw_bytes,"deduplicated_current_user_claim_bytes":fact_bytes,"manual_current_text_and_framing_bytes":manual_bytes,"manual_history_storage_bytes":history_bytes,"fts_storage_bytes":index_bytes,"summary_text_bytes":summary_bytes,"one_request_text_ceiling":rag-OUTPUT,"output_reserved_tokens":OUTPUT,"actual_usage":null},
-            "measurement":measurement,"baseline":BASELINE,"fits_full":full<=BASELINE,"state":state,"version":self.setting("version").await?}))
+            "profile_current":self.profile_available().await?,"measurement":measurement,"baseline":BASELINE,"fits_full":full<=BASELINE,"state":state,"version":self.setting("version").await?}))
+    }
+    pub async fn background_inputs_observed(&self)->Result<(Vec<Value>,Vec<crate::background_dependencies::Dependency>)> {
+        let _gate=self.gate.lock().await;
+        Ok((self.background_inputs(false).await?,self.background_dependencies().await?))
     }
     pub async fn background_inputs(&self,measure:bool)->Result<Vec<Value>>{
         // Only documents marked for sharing may participate in remote synthesis.
@@ -90,13 +95,16 @@ impl Index {
     }
     pub async fn background_input_page(&self,measure:bool,cursor:i64)->Result<(i64,Vec<Value>)>{
         let current=crate::source_policy::CURRENT_SQL;let excluded=crate::source_policy::EXCLUDED_SQL;let summary=crate::source_policy::summary_blocked_sql();
-        let rows=sqlx::query(&format!("SELECT c.rowid AS seq,c.id,c.path,c.location,c.text,d.kind,d.hash,a.value AS assertion_json,(SELECT json_extract(value,'$.hash') FROM background_library WHERE key=substr(c.path,5,64)) AS source_hash,{} FROM chunks c JOIN documents d ON d.path=c.path {} {} WHERE c.rowid>? AND d.allow_external=1 AND {current} AND NOT {excluded} AND NOT {summary} AND (? OR c.path!='.背景/综合背景') ORDER BY c.rowid LIMIT 256",crate::document_meta::META_COLUMNS,crate::document_meta::META_JOIN,crate::assertions::JOIN)).bind(cursor).bind(measure).fetch_all(&self.pool).await.map_err(|e|e.to_string())?;
+        let assertions=crate::background_dependencies::ASSERTIONS_SQL;let review=crate::background_dependencies::REVIEW_SQL;
+        let rows=sqlx::query(&format!("SELECT {assertions} AS assertions_json,{review} AS review_json,CASE WHEN d.path GLOB '.背景/*' THEN '背景资料库' ELSE COALESCE((SELECT value FROM settings WHERE key='root'),'') END AS current_root,c.rowid AS seq,c.id,c.path,c.location,c.text,d.kind,d.hash,a.value AS assertion_json,(SELECT json_extract(value,'$.hash') FROM background_library WHERE key=substr(c.path,5,64)) AS source_hash,{} FROM chunks c JOIN documents d ON d.path=c.path {} {} WHERE c.rowid>? AND d.allow_external=1 AND {current} AND NOT {excluded} AND NOT {summary} AND (? OR c.path!='.背景/综合背景') ORDER BY c.rowid LIMIT 256",crate::document_meta::META_COLUMNS,crate::document_meta::META_JOIN,crate::assertions::JOIN)).bind(cursor).bind(measure).fetch_all(&self.pool).await.map_err(|e|e.to_string())?;
         let mut next=cursor;let mut out=vec![];
         for r in rows {
             let path:String=r.get("path");
             let (id,name)=path.strip_prefix(PREFIX).and_then(|p|p.split_once('/')).unwrap_or(("",path.as_str()));
             let status=crate::document_meta::status(&r,&r.get::<String,_>("hash"),chrono::Local::now().date_naive());
+            let dependency=crate::background_dependencies::Dependency {path:path.clone(),root:r.get("current_root"),hash:r.get("hash"),kind:r.get("kind"),allow_external:true,review:r.get::<Option<String>,_>("review_json").map(|v|serde_json::from_str(&v).map_err(|e|e.to_string())).transpose()?,assertions:serde_json::from_str(&r.get::<String,_>("assertions_json")).map_err(|e|e.to_string())?};
             let mut item=json!({"id":id,"file":name,"kind":r.get::<String,_>("kind"),"location":r.get::<String,_>("location"),"quote":r.get::<String,_>("text"),"source_hash":r.get::<Option<String>,_>("source_hash").unwrap_or_else(||r.get("hash")),"source_status":status});
+            if !measure {item["dependency_id"]=json!(dependency.id());}
             if let Some(assertion)=crate::assertions::parse(r.get("assertion_json"))? {
                 item["original_source"]=json!({"source_id":r.get::<String,_>("id"),"source_hash":item["source_hash"],"extraction_hash":r.get::<String,_>("hash"),"location":item["location"]});
                 // This quote comes from the separate manual declaration, not
@@ -112,14 +120,18 @@ impl Index {
     }
     pub async fn apply_background(&self,bundle:&Bundle,version:&str,share:bool,metrics:Value,merge_terms:bool)->Result<()>{
         bundle.validate()?;
-        self.save_background(bundle,version,share,metrics,merge_terms).await
+        self.save_background(bundle,version,share,metrics,merge_terms,&[]).await
     }
     pub async fn edit_background(&self,profile:Profile,version:&str,share:bool,metrics:Value,merge_terms:bool)->Result<()>{
         let bundle=Bundle{format:"meetily-background-v1".into(),documents:vec![],profile,settings:None};
         bundle.validate_fields()?;
-        self.save_background(&bundle,version,share,metrics,merge_terms).await
+        self.save_background(&bundle,version,share,metrics,merge_terms,&[]).await
     }
-    async fn save_background(&self,bundle:&Bundle,version:&str,share:bool,metrics:Value,merge_terms:bool)->Result<()>{
+    pub async fn apply_background_observed(&self,bundle:&Bundle,version:&str,share:bool,metrics:Value,merge_terms:bool,observed:&[crate::background_dependencies::Dependency])->Result<()> {
+        bundle.validate()?;
+        self.save_background(bundle,version,share,metrics,merge_terms,observed).await
+    }
+    async fn save_background(&self,bundle:&Bundle,version:&str,share:bool,metrics:Value,merge_terms:bool,observed:&[crate::background_dependencies::Dependency])->Result<()>{
         let _guard=self.gate.lock().await;
         let mut tx=self.pool.begin().await.map_err(|e|e.to_string())?;
         let current:String=sqlx::query_scalar("SELECT value FROM settings WHERE key='version'").fetch_one(&mut *tx).await.map_err(|e|e.to_string())?;
@@ -165,13 +177,13 @@ impl Index {
             let aliases=lines.join("\n"); if aliases.chars().count()>4000{return Err("合并后术语超过 4000 字，请先精简".into())}
             sqlx::query("INSERT OR REPLACE INTO settings VALUES('aliases',?)").bind(aliases).execute(&mut *tx).await.map_err(|e|e.to_string())?;
         }
+        crate::background_dependencies::publish(&mut tx,bundle,observed).await?;
         sqlx::query("INSERT OR REPLACE INTO background_library VALUES('profile',?)").bind(json!({"profile":bundle.profile,"share":share,"metrics":metrics,"settings":bundle.settings}).to_string()).execute(&mut *tx).await.map_err(|e|e.to_string())?;
         sqlx::query("UPDATE settings SET value=CAST(value AS INTEGER)+1 WHERE key='version'").execute(&mut *tx).await.map_err(|e|e.to_string())?;
         tx.commit().await.map_err(|e|e.to_string())
     }
     pub async fn background_role(&self)->Result<Option<String>>{
-        let withdrawn=self.has_withdrawn_sources().await?;
-        if withdrawn{return Ok(None);}
+        if !self.profile_available().await? {return Ok(None);}
         let role:Option<String>=sqlx::query_scalar("SELECT CASE WHEN json_extract(value,'$.share')=1 THEN json_extract(value,'$.profile.role') ELSE '' END FROM background_library WHERE key='profile'").fetch_optional(&self.pool).await.map_err(|e|e.to_string())?;
         Ok(role)
     }

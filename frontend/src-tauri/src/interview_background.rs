@@ -26,8 +26,10 @@ const LIMIT:usize=16*1024*1024;
 pub struct Work(Mutex<Inner>);
 #[derive(Default)]
 struct Inner{selection:Option<(String,Vec<PathBuf>,bool)>,running:Option<CancellationToken>,job:Option<String>,progress:String,draft:Option<Draft>}
-struct Draft{id:String,version:String,bundle:Bundle,metrics:Value,failures:Value,job:Option<String>}
+struct Draft{id:String,version:String,bundle:Bundle,metrics:Value,failures:Value,job:Option<String>,dependencies:Vec<interview_core::background_dependencies::Dependency>}
 impl Work{
+    #[cfg(test)]
+    pub(crate) fn fixture_running(&self)->CancellationToken{let token=CancellationToken::new();self.0.lock().unwrap().running=Some(token.clone());token}
     pub fn cancel(&self){if let Some(t)=&self.0.lock().unwrap().running{t.cancel()}}
     fn view(&self)->Value{
         let s=self.0.lock().unwrap();
@@ -122,7 +124,7 @@ pub async fn background_choose(window:Window,app:AppHandle,state:State<'_,Interv
         if bytes.len()>LIMIT{return Err("资料包过大".into())}
         let bundle:Bundle=serde_json::from_slice(&bytes).map_err(|_|"不是有效的 听弦背景资料包")?;bundle.validate()?;
         let version=state.index(&app).await?.setting("version").await?;
-        state.background.0.lock().unwrap().draft=Some(Draft{id,version,bundle,metrics:Value::Null,failures:json!([]),job:None});
+        state.background.0.lock().unwrap().draft=Some(Draft{id,version,bundle,metrics:Value::Null,failures:json!([]),job:None,dependencies:vec![]});
         return Ok(json!({"draft":true}))
     }
     let label=paths.iter().take(3).filter_map(|p|p.file_name()).map(|p|p.to_string_lossy()).collect::<Vec<_>>().join("、");
@@ -172,7 +174,7 @@ async fn generate(app:&AppHandle,state:&InterviewState,selection:&str,include_li
     if measure&&p.request.usage_unsupported(){return Err("此背景模型标记为不返回用量，无法实测 tokens；请核对能力或更换接口".into());}
     let (paths,folder)=if measure||resume.is_some(){(vec![],false)}else{let work=state.background.0.lock().unwrap();
         let (_,paths,folder)=work.selection.as_ref().filter(|s|s.0==selection).ok_or("请重新选择文件夹或重点文件")?;(paths.clone(),*folder)};
-    let previous=if !measure && include_library{index.background_inputs(false).await?}else{vec![]};
+    let (previous,observed)=if !measure && include_library{index.background_inputs_observed().await?}else{(vec![],vec![])};
     let version=index.setting("version").await?;
     let job=if measure{None}else{Some(resume.as_ref().map(|(id,_)|id.clone()).unwrap_or_else(||uuid::Uuid::new_v4().to_string()))};
     let mut req=if let Some((_,req))=resume{req}else{json!({})};
@@ -213,8 +215,20 @@ async fn generate(app:&AppHandle,state:&InterviewState,selection:&str,include_li
     }
     let bundle:Bundle=serde_json::from_value(result["bundle"].take()).map_err(|_|"模型整理结果不符合资料格式")?;
     bundle.validate()?;
-    state.background.0.lock().unwrap().draft=Some(Draft{id:uuid::Uuid::new_v4().to_string(),version,bundle,metrics:result["metrics"].take(),failures:result["failures"].take(),job:checkpoint_job});
+    let dependencies=select_dependencies(&observed,&result["previous_dependencies"])?;
+    state.background.0.lock().unwrap().draft=Some(Draft{id:uuid::Uuid::new_v4().to_string(),version,bundle,metrics:result["metrics"].take(),failures:result["failures"].take(),job:checkpoint_job,dependencies});
     Ok(())
+}
+fn select_dependencies(observed:&[interview_core::background_dependencies::Dependency],used:&Value)->Result<Vec<interview_core::background_dependencies::Dependency>,String>{
+    let ids=used.as_array().ok_or("整理器没有返回来源依赖清单；未应用")?;
+    let mut selected=vec![];let mut seen=std::collections::HashSet::new();
+    for id in ids {
+        let id=id.as_str().ok_or("来源依赖标识无效")?;
+        if !seen.insert(id){return Err("来源依赖重复".into());}
+        let dependency=observed.iter().find(|d|d.id()==id).ok_or("整理器引用了未读取的资料版本；未应用")?;
+        selected.push(dependency.clone());
+    }
+    Ok(selected)
 }
 async fn worker(req:&Value,work:&Work)->Result<Value,String>{
     use std::process::Stdio;
@@ -283,14 +297,14 @@ pub async fn background_edit(window:Window,app:AppHandle,state:State<'_,Intervie
 #[tauri::command]
 pub async fn background_apply(window:Window,app:AppHandle,state:State<'_,InterviewState>,id:String,profile:Profile,share:bool,merge_terms:bool)->Result<(),String>{
     let _guard=guard(&window,&app,&state).await?;
-    let (mut bundle,version,metrics,job)={let w=state.background.0.lock().unwrap();let d=w.draft.as_ref().filter(|d|d.id==id).ok_or("草稿已变化，请重新加载")?;(d.bundle.clone(),d.version.clone(),d.metrics.clone(),d.job.clone())};
+    let (mut bundle,version,metrics,job,dependencies)={let w=state.background.0.lock().unwrap();let d=w.draft.as_ref().filter(|d|d.id==id).ok_or("草稿已变化，请重新加载")?;(d.bundle.clone(),d.version.clone(),d.metrics.clone(),d.job.clone(),d.dependencies.clone())};
     if let Some(job)=job{
         let mut request=read_job_request(&app,&job).await?;
         request["verify_documents"]=json!(bundle.documents.iter().map(|d|json!({"id":d.id,"hash":d.hash,"name":d.name})).collect::<Vec<_>>());
         worker(&request,&state.background).await?;
     }
     if let Some(settings)=&mut bundle.settings{settings.role=if profile.role.chars().count()<=120{profile.role.clone()}else{String::new()};}
-    bundle.profile=profile;state.index(&app).await?.apply_background(&bundle,&version,share,metrics,merge_terms).await?;
+    bundle.profile=profile;state.index(&app).await?.apply_background_observed(&bundle,&version,share,metrics,merge_terms,&dependencies).await?;
     state.background.0.lock().unwrap().draft=None;Ok(())
 }
 #[tauri::command]
@@ -324,6 +338,17 @@ pub async fn background_export_skill(window:Window,app:AppHandle)->Result<Option
 
 #[cfg(test)]
 mod tests{
+    #[test]
+    fn background_dependency_trace_rejects_unknown_and_duplicate_snapshots(){
+        let d=interview_core::background_dependencies::Dependency{path:"fictional.md".into(),root:"/synthetic".into(),hash:"hash".into(),kind:"personal".into(),allow_external:true,assertions:vec![],review:None};
+        let observed=vec![d.clone()];
+        assert_eq!(super::select_dependencies(&observed,&serde_json::json!([d.id()])).unwrap(),observed);
+        assert!(super::select_dependencies(&observed,&serde_json::json!(["unknown"])).is_err());
+        assert!(super::select_dependencies(&observed,&serde_json::json!([d.id(),d.id()])).is_err());
+        assert!(super::select_dependencies(&observed,&serde_json::Value::Null).is_err());
+        assert!(super::select_dependencies(&observed,&serde_json::json!([])).unwrap().is_empty());
+    }
+
     use super::*;
     #[tokio::test]
     async fn checkpoint_usage_keeps_partial_and_failed_response_metering(){

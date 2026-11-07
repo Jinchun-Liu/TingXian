@@ -8,7 +8,7 @@ type Profile={overview:string;role:string;aliases:string};
 type Metrics={peak_prompt_tokens:number|null;sum_prompt_tokens?:number|null;sum_completion_tokens?:number|null;unknown_calls?:number;calls:number};
 type Draft={id:string;job?:string;profile:Profile;documents:{id:string;name:string;count:number}[];failures:[string,string][];metrics:Metrics|null};
 type ContextEstimates={raw_extract_text_bytes:number;deduplicated_current_user_claim_bytes:number;manual_current_text_and_framing_bytes:number;manual_history_storage_bytes:number;fts_storage_bytes:number;summary_text_bytes:number;output_reserved_tokens:number};
-type Report={context_estimates?:ContextEstimates;documents:number;chunks:number;baseline:number;full_budget:number;rag_budget:number;fits_full:boolean;version:string;state:null|{profile:Profile;share:boolean;metrics:Metrics|null};measurement:null|{version:string;model:string;chunks:number;metrics:Metrics}};
+type Report={profile_current?:boolean;context_estimates?:ContextEstimates;documents:number;chunks:number;baseline:number;full_budget:number;rag_budget:number;fits_full:boolean;version:string;state:null|{profile:Profile;share:boolean;metrics:Metrics|null};measurement:null|{version:string;model:string;chunks:number;metrics:Metrics}};
 type Job={id:string;model?:string;status:string;total:number;completed:number;failed:number;skipped:number;unknown_calls:number;metrics?:Metrics};
 type JobFile={name:string;status:string;reason:string;done:number;total:number};
 type View={library:Report;model:string;ready:boolean;jobs?:Job[];work:{busy:boolean;progress:string;draft:Draft|null}};
@@ -95,9 +95,9 @@ export function BackgroundLibrary({locked,onBusy,onApplied,onModels,revision,act
       <label className="block"><input type="checkbox" checked={terms} disabled={off} onChange={e=>setTerms(e.target.checked)}/> 将术语合并到检索设置</label>
       <Button size="sm" disabled={off||!edit.overview.trim()} onClick={apply}>{draft?'应用到资料库':'保存调整'}</Button>
     </div>}
-    {v?.library.state&&!edit&&<details><summary>当前背景</summary><p className="whitespace-pre-wrap py-2">{v.library.state.profile.overview}</p>
+    {v?.library.state&&!edit&&<details><summary>{v.library.profile_current===false?'背景待更新':'当前背景'}</summary>{v.library.profile_current===false&&<p className="py-2 text-amber-700">来源已变化，重新整理后再用于问答。</p>}<p className="whitespace-pre-wrap py-2">{v.library.state.profile.overview}</p>
       <Button size="sm" variant="outline" disabled={off} onClick={()=>{setEdit(v.library.state!.profile);setBase(v.library.version);setShare(v.library.state!.share);}}>微调背景与岗位</Button></details>}
-    {active&&v?.library.state&&!edit&&<BackgroundSettings revision={v.library.version} locked={off} names={names} applyNames={applyNames} onBusy={onBusy} onApplied={onApplied}/>}
+    {active&&v?.library.state&&v.library.profile_current!==false&&!edit&&<BackgroundSettings revision={v.library.version} locked={off} names={names} applyNames={applyNames} onBusy={onBusy} onApplied={onApplied}/>}
     {v&&<details><summary>上下文预算 · 256K</summary>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 py-2">
         <dt>整库一次读入</dt><dd>≤ 约 {num(v.library.full_budget)} tokens</dd>

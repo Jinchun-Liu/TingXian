@@ -704,6 +704,8 @@ pub async fn answer_cancel(state:State<'_,InterviewState>)->Result<(),String> {s
 #[tauri::command]
 pub async fn profile_source_exclude<R:tauri::Runtime>(window:tauri::WebviewWindow<R>,app:tauri::AppHandle<R>,state:State<'_,InterviewState>,update:interview_core::source_policy::SourceExclusion)->Result<(),String> {
     if window.label()!="main" {return Err("请在主窗口调整资料范围".into());}
+    state.background.cancel();
+    state.cancel().await;
     let _guard=state.lifecycle.lock().await;
     crate::interview_exit::ensure_not_exiting(&app)?;
     // No new request can start across the withdrawal. Cancel old work and wait
@@ -716,6 +718,29 @@ pub async fn profile_source_exclude<R:tauri::Runtime>(window:tauri::WebviewWindo
 #[cfg(test)]
 mod source_withdrawal_tests {
     use super::*;
+    #[tokio::test]
+    async fn source_withdrawal_interrupts_background_before_waiting_for_its_lifecycle_lock(){
+        let root=std::env::temp_dir().join(format!("tingxian-background-withdrawal-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let index=interview_core::Index::open(&root.join("synthetic.sqlite")).await.unwrap();
+        sqlx::query("INSERT INTO documents VALUES('fictional.txt','synthetic-hash','personal',1)").execute(&index.pool).await.unwrap();
+        let state=InterviewState::default();assert!(state.index.set(index).is_ok());
+        let token=state.background.fixture_running();
+        let app=tauri::test::mock_builder().manage(state).manage(crate::interview_exit::ExitState::default())
+            .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let window=tauri::WebviewWindowBuilder::new(&app,"main",Default::default()).build().unwrap();
+        let state=app.state::<InterviewState>();
+        let lifecycle=state.lifecycle.clone().lock_owned().await;
+        let network=state.network.clone().read_owned().await;
+        let withdrawal=crate::interview::profile_source_exclude(window,app.handle().clone(),app.state(),interview_core::source_policy::SourceExclusion{path:"fictional.txt".into(),expected_root:String::new(),expected_hash:"synthetic-hash".into(),excluded:true});
+        let finish_worker=async {
+            tokio::time::timeout(std::time::Duration::from_secs(3),token.cancelled()).await.expect("withdrawal waited for background without cancelling it");
+            assert!(!state.index.get().unwrap().documents().await.unwrap()[0].excluded,"source policy changed before old worker exited");
+            drop(network);drop(lifecycle);
+        };
+        let (result,())=tokio::join!(withdrawal,finish_worker);result.unwrap();
+        assert!(state.index.get().unwrap().documents().await.unwrap()[0].excluded);
+    }
     #[tokio::test]
     async fn interview_record_revision_is_main_only_session_locked_and_provenance_bound() {
         let root=std::env::temp_dir().join(format!("tingxian-assertion-ipc-{}",uuid::Uuid::new_v4()));std::fs::create_dir(&root).unwrap();

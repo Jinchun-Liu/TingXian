@@ -31,6 +31,8 @@ impl Index {
         let Some(raw)=raw else{return Ok(Value::Null)};
         let saved:Value=serde_json::from_str(&raw).map_err(|_|"背景资料状态无效")?;
         if saved["settings"].is_null(){return Ok(Value::Null);}
+        let available:bool=sqlx::query_scalar(&format!("SELECT {}",crate::background_dependencies::available_sql())).fetch_one(&mut *tx).await.map_err(|e|e.to_string())?;
+        if !available {return Err("背景建议的来源已变化，请重新整理后再核对设置".into());}
         let suggestions:Suggestions=serde_json::from_value(saved["settings"].clone()).map_err(|_|"背景设置建议无效")?;suggestions.validate()?;
         let current=preferences(sqlx::query_scalar("SELECT value FROM settings WHERE key='interview_preferences'").fetch_optional(&mut *tx).await.map_err(|e|e.to_string())?)?;
         let version:String=sqlx::query_scalar("SELECT value FROM settings WHERE key='version'").fetch_one(&mut *tx).await.map_err(|e|e.to_string())?;
@@ -43,6 +45,8 @@ impl Index {
         let active:String=sqlx::query_scalar("SELECT value FROM settings WHERE key='version'").fetch_one(&mut *tx).await.map_err(|e|e.to_string())?;
         let raw:Option<String>=sqlx::query_scalar("SELECT value FROM background_library WHERE key='profile'").fetch_optional(&mut *tx).await.map_err(|e|e.to_string())?;
         if active!=version||raw.as_deref().map(|v|crate::digest(v.as_bytes())).as_deref()!=Some(profile_hash){return Err("资料或背景已变化，请重新核对设置差异".into());}
+        let available:bool=sqlx::query_scalar(&format!("SELECT {}",crate::background_dependencies::available_sql())).fetch_one(&mut *tx).await.map_err(|e|e.to_string())?;
+        if !available {return Err("背景建议的来源已变化，未应用旧设置".into());}
         let mut current=preferences(sqlx::query_scalar("SELECT value FROM settings WHERE key='interview_preferences'").fetch_optional(&mut *tx).await.map_err(|e|e.to_string())?)?;
         // A names-only UI application still verifies the source snapshot before
         // changing local reminder settings, but makes no preferences write.

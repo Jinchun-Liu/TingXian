@@ -91,13 +91,36 @@ class Test(unittest.TestCase):
         self.assertEqual(result["metrics"]["calls"],4);self.assertEqual(result["metrics"]["sum_completion_tokens"],120)
         self.assertEqual(result["metrics"]["unknown_calls"],0)
 
+    def test_process_keeps_observed_dependencies_outside_model_prompts(self):
+        root=Path(tempfile.mkdtemp());(root/"new.txt").write_text("虚构当前资料",encoding="utf8")
+        previous={"id":"older","file":"older.txt","source_hash":"hash","kind":"personal","location":"行1","quote":"虚构已有资料","dependency_id":"native-binding"}
+        def complete(api,system,data,metrics,*args,**kwargs):
+            self.assertNotIn("dependency_id",m.dumps(data))
+            if system==m.MAP:
+                row=data["segments"][0]
+                return {"records":[{"kind":"personal","location":row["location"],"quote":row["text"],"note":"虚构"}]}
+            return {"overview":"虚构当前与已有资料","role":"","aliases":""}
+        req={"folder":str(root),"previous":[previous],"api":{"model":"fixture","key":"","endpoint":"http://localhost/chat/completions","timeout":1}}
+        with patch.object(m,"complete",side_effect=complete):result=m.process(req,lambda _:None)
+        self.assertEqual(result["previous_dependencies"],["native-binding"])
+    def test_dependency_trace_uses_current_source_and_keeps_unchanged_manual_claim(self):
+        previous={"id":"a","file":"a.md","source_hash":"old","kind":"personal","location":"行1","quote":"旧来源句子","dependency_id":"old-binding"}
+        new={"id":"a","name":"a.md","hash":"new","records":[{"kind":"personal","location":"行1","quote":"新来源句子","note":"新内容"}]}
+        rows=m.merge_inputs([previous],[new],18000)
+        self.assertEqual(len(rows),1);self.assertNotIn("dependency_id",rows[0]["sources"][0])
+        manual={**previous,"origin":"user_asserted","quote":"本人声明，尚未完成","original_source":{"source_hash":"new"},"dependency_id":"manual-binding","user_assertion":{"revision":1,"activity":"planned"}}
+        rows=m.merge_inputs([manual],[new],18000)
+        self.assertEqual(rows[0]["sources"][0]["dependency_id"],"manual-binding")
+        self.assertEqual(rows[0]["sources"][0]["version_state"],"indexed_user_assertion")
+        manual["original_source"]["source_hash"]="old"
+        self.assertEqual(len(m.merge_inputs([manual],[new],18000)),1)
     def test_incremental_synthesis_deduplicates_quotes_without_erasing_sources_or_conflicts(self):
         old={"id":"a","file":"old.md","source_hash":"before","kind":"personal","location":"行 1","quote":"Orchid 生产经验：无","source_status":{"confirmation":"confirmed","validity":"expired"}}
         same={**old,"id":"copy","file":"copy.md"}
         new={"id":"a","name":"new.md","hash":"after","records":[{"kind":"personal","location":"行 1","quote":"Orchid 生产经验：有","note":"待本人核实"}]}
         rows=m.merge_inputs([old,same], [new],18000)
-        self.assertEqual(len(rows),2);self.assertEqual(len(rows[0]["sources"]),2)
-        self.assertEqual([s["version_state"] for s in rows[0]["sources"]],["superseded","indexed"])
+        self.assertEqual(len(rows),2);self.assertEqual(len(rows[0]["sources"]),1)
+        self.assertEqual([s["version_state"] for s in rows[0]["sources"]],["indexed"])
         self.assertEqual(rows[0]["sources"][0]["source_status"]["validity"],"expired")
         self.assertEqual(rows[1]["sources"][0]["version_state"],"current")
         repeated={**old,"source_hash":"after","quote":new["records"][0]["quote"]}

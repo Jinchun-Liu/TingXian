@@ -6,13 +6,13 @@ use serde_json::json;
 use sqlx::Row;
 
 pub const EXCLUDED_SQL: &str = "EXISTS (SELECT 1 FROM background_library x WHERE x.key GLOB 'excluded/*' AND json_extract(x.value,'$.excluded')=1 AND json_extract(x.value,'$.root')=CASE WHEN d.path GLOB '.背景/*' THEN '背景资料库' ELSE COALESCE((SELECT value FROM settings WHERE key='root'),'') END AND json_extract(x.value,'$.path')=d.path)";
-// Until the summary is regenerated with a dependency map, fail closed: it may
-// contain any revoked source. It remains visible for local historical review.
 // Unknown dates remain eligible. Reviewed content that changed, is expired,
 // not yet effective, or has invalid date bounds needs explicit re-review.
 pub const CURRENT_SQL: &str = "NOT EXISTS(SELECT 1 FROM document_metadata m WHERE m.path=d.path AND m.root=CASE WHEN d.path GLOB '.背景/*' THEN '背景资料库' ELSE COALESCE((SELECT value FROM settings WHERE key='root'),'') END AND (m.reviewed_hash!=d.hash OR (m.valid_from IS NOT NULL AND (date(m.valid_from) IS NULL OR date(m.valid_from)!=m.valid_from OR m.valid_from>date('now','localtime'))) OR (m.valid_until IS NOT NULL AND (date(m.valid_until) IS NULL OR date(m.valid_until)!=m.valid_until OR m.valid_until<date('now','localtime'))) OR m.valid_from>m.valid_until))";
 pub fn summary_blocked_sql()->String {
-    format!("(d.path='.背景/综合背景' AND (EXISTS(SELECT 1 FROM background_library x WHERE x.key GLOB 'excluded/*' AND json_extract(x.value,'$.excluded')=1) OR EXISTS(SELECT 1 FROM record_assertions) OR EXISTS(SELECT 1 FROM documents d WHERE NOT {CURRENT_SQL})))")
+    // New profiles follow observed sources; legacy summaries fail closed on
+    // any invalid source. Historical display remains available in both cases.
+    format!("(d.path='.背景/综合背景' AND NOT {})",crate::background_dependencies::available_sql())
 }
 
 #[derive(Deserialize)]
