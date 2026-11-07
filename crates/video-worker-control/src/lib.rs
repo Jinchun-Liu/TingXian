@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::{Arc, Condvar, Mutex}, time::Duration};
 mod eye;
 pub use eye::{EyeJob, EyeOutcome, EyeProvider, EyeReport};
+mod stream;
+pub use stream::{NativeOutputEndpoint, StreamFeed, StreamFrame, StreamInputStatus, StreamReport, STREAM_BGR_BYTES};
 #[cfg(windows)]
 mod windows;
 #[cfg(all(test, windows))]
@@ -11,7 +13,7 @@ mod tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Phase { Off, Preparing, Unavailable, Stopping, Fault, Completed }
+pub enum Phase { Off, Preparing, Ready, Unavailable, Stopping, Fault, Completed }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Reason { NotBundled, UnsupportedPlatform, RuntimeNotPinned, Integrity, Launch, Protocol, WorkerExit, Timeout, ForcedStop, Cleanup, Abandoned, EyeInput, EyeOutput, EyeProcessing, ProviderCleanup }
@@ -40,14 +42,14 @@ impl Inspection {
     }
 }
 #[derive(Clone, Debug, Serialize)]
-pub struct Snapshot { pub generation: u64, pub phase: Phase, pub reason: Option<Reason>, pub inspection: Option<Inspection>, pub eye: Option<EyeReport> }
+pub struct Snapshot { pub generation: u64, pub phase: Phase, pub reason: Option<Reason>, pub inspection: Option<Inspection>, pub eye: Option<EyeReport>, pub stream: Option<StreamReport> }
 impl Default for Snapshot {
-    fn default() -> Self { Self { generation: 0, phase: Phase::Off, reason: None, inspection: None, eye: None } }
+    fn default() -> Self { Self { generation: 0, phase: Phase::Off, reason: None, inspection: None, eye: None, stream: None } }
 }
 // Native-only input. Never deserialize a webview-supplied path/hash/command.
 pub struct BundledWorker { pub path: PathBuf, pub sha256: String }
-enum Work { Inspect, Eye(EyeJob) }
-enum Report { Inspection(Inspection), Eye(EyeReport) }
+enum Work { Inspect, Eye(EyeJob), Stream(stream::StreamJob) }
+enum Report { Inspection(Inspection), Eye(EyeReport), Stream(StreamReport) }
 #[cfg(windows)]
 type Signal = windows::Signal;
 #[cfg(not(windows))]
@@ -58,7 +60,7 @@ impl Signal {
     fn stop(&self) {}
     fn stopped(&self) -> bool { true }
 }
-struct Active { id: u64, signal: Arc<Signal> }
+struct Active { id: u64, signal: Arc<Signal>, stream: Option<Arc<stream::Shared>> }
 #[derive(Default)]
 struct Inner { snapshot: Snapshot, suspended: bool, cleanup_uncertain: bool, active: Option<Active> }
 #[derive(Default)]
@@ -76,6 +78,12 @@ impl Controller {
     pub fn begin_eye_if_current(self:&Arc<Self>,worker:Option<BundledWorker>,job:EyeJob,generation:u64)->Result<Option<Run>,&'static str> {
         self.begin_inner(worker,Some(generation),Work::Eye(job))
     }
+    /// Native-only explicit intent. This grants no camera or virtual-device
+    /// permission. Ready means the worker is prepared, not that anyone sees it.
+    pub fn begin_stream_if_current(self:&Arc<Self>,worker:Option<BundledWorker>,provider:EyeProvider,generation:u64)->Result<Option<(Run,StreamFeed)>,&'static str> {
+        let (job,feed)=stream::pair(provider);
+        Ok(self.begin_inner(worker,Some(generation),Work::Stream(job))?.map(|run|(run,feed)))
+    }
     fn begin_inner(self:&Arc<Self>,worker:Option<BundledWorker>,generation:Option<u64>,work:Work)->Result<Option<Run>,&'static str> {
         let mut inner = self.inner.lock().unwrap_or_else(|e|e.into_inner());
         if generation.is_some_and(|value|value!=inner.snapshot.generation) {return Err("视频状态已变化，请重新检查");}
@@ -85,6 +93,7 @@ impl Controller {
         inner.snapshot.generation = inner.snapshot.generation.checked_add(1).ok_or("视频代次已耗尽，请重启应用")?;
         inner.snapshot.inspection = None;
         inner.snapshot.eye = None;
+        inner.snapshot.stream = None;
         let Some(worker) = worker else {
             inner.snapshot.phase = Phase::Unavailable; inner.snapshot.reason = Some(Reason::NotBundled); return Ok(None);
         };
@@ -94,7 +103,8 @@ impl Controller {
         };
         let id = inner.snapshot.generation;
         inner.snapshot.phase = Phase::Preparing; inner.snapshot.reason = None;
-        inner.active = Some(Active { id, signal: signal.clone() });
+        let stream=if let Work::Stream(job)=&work { job.shared.admit();Some(job.shared.clone()) } else { None };
+        inner.active = Some(Active { id, signal: signal.clone(), stream });
         Ok(Some(Run { controller: self.clone(), signal, worker, work, id, finished: false }))
     }
     fn stop_locked(inner: &mut Inner) {
@@ -102,7 +112,9 @@ impl Controller {
         inner.snapshot.generation = inner.snapshot.generation.saturating_add(1);
         inner.snapshot.inspection = None;
         inner.snapshot.eye = None;
+        inner.snapshot.stream = None;
         if let Some(active) = &inner.active {
+            if let Some(stream)=&active.stream { stream.close(); }
             active.signal.stop(); inner.snapshot.phase = Phase::Stopping;
         } else { inner.snapshot.phase = Phase::Off; inner.snapshot.reason = None; }
     }
@@ -117,6 +129,14 @@ impl Controller {
         let (inner, _) = self.idle.wait_timeout_while(inner, timeout, |s|s.active.is_some()).unwrap_or_else(|e|e.into_inner());
         inner.active.is_none() && !inner.cleanup_uncertain
     }
+    #[cfg(windows)]
+    fn publish_stream_endpoint(&self,id:u64,endpoint:NativeOutputEndpoint)->bool {
+        let mut inner=self.inner.lock().unwrap_or_else(|e|e.into_inner());
+        let Some(active)=&inner.active else { return false; };
+        if active.id!=id||inner.snapshot.generation!=id||active.signal.stopped()||inner.snapshot.phase!=Phase::Preparing { return false; }
+        if !active.stream.as_ref().is_some_and(|s|s.publish(endpoint)) { return false; }
+        inner.snapshot.phase=Phase::Ready;true
+    }
     fn complete(&self, id: u64, cancelled: bool, result: Result<Report, Reason>) {
         let mut inner = self.inner.lock().unwrap_or_else(|e|e.into_inner());
         if inner.active.as_ref().map(|a|a.id) != Some(id) { return; }
@@ -128,9 +148,12 @@ impl Controller {
             || inner.snapshot.phase == Phase::Stopping;
         // Cancellation wins over late reports, but never conceals forced cleanup.
         let cleanup_failure = matches!(&result, Err(Reason::ForcedStop | Reason::Cleanup | Reason::Timeout)
-            | Ok(Report::Eye(EyeReport { cleanup_uncertain: true, .. })));
+            | Ok(Report::Eye(EyeReport { cleanup_uncertain: true, .. }))
+            | Ok(Report::Stream(StreamReport { cleanup_uncertain: true, .. })));
         if matches!(result, Err(Reason::Cleanup)) { inner.cleanup_uncertain = true; }
+        if let Some(stream)=inner.active.as_ref().and_then(|a|a.stream.as_ref()) { stream.close(); }
         inner.active = None;
+        inner.snapshot.stream = None;
         if cancelled && !cleanup_failure {
             inner.snapshot.phase = Phase::Off; inner.snapshot.reason = None; inner.snapshot.inspection = None; inner.snapshot.eye = None;
         } else {
@@ -145,6 +168,12 @@ impl Controller {
                     };
                     inner.snapshot.eye = Some(report);
                 }
+                Ok(Report::Stream(report)) => {
+                    inner.snapshot.phase=if report.outcome==EyeOutcome::Completed {Phase::Completed} else {Phase::Fault};
+                    inner.snapshot.reason=match report.outcome { EyeOutcome::Completed=>None,
+                        _ if report.cleanup_uncertain=>Some(Reason::ProviderCleanup),_=>Some(Reason::EyeProcessing) };
+                    inner.snapshot.stream=Some(report);
+                }
                 Err(reason) => { inner.snapshot.phase = Phase::Fault; inner.snapshot.reason = Some(reason); inner.snapshot.inspection = None; inner.snapshot.eye = None; }
             }
         }
@@ -156,12 +185,12 @@ impl Controller {
 pub struct Run { controller: Arc<Controller>, signal: Arc<Signal>, worker: BundledWorker, work: Work, id: u64, finished: bool }
 impl Run {
     pub fn execute(self) -> Snapshot {
-        let timeout = if matches!(self.work, Work::Eye(_)) { 120 } else { 5 };
+        let timeout = match &self.work { Work::Eye(_)=>120, Work::Stream(_)=>7200, Work::Inspect=>5 };
         self.execute_with_timeout(Duration::from_secs(timeout))
     }
     fn execute_with_timeout(mut self, timeout: Duration) -> Snapshot {
         #[cfg(windows)]
-        let result = windows::execute(&self.worker, &self.signal, &self.work, self.id, timeout);
+        let result = windows::execute(&self.worker, &self.signal, &self.work, self.id, timeout, &self.controller);
         #[cfg(not(windows))]
         let result = { let _ = timeout; Err(Reason::UnsupportedPlatform) };
         self.controller.complete(self.id, self.signal.stopped(), result);

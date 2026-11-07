@@ -64,6 +64,7 @@ jobs:
             ${{ runner.temp }}/video-source-build/controller-test.log
             ${{ runner.temp }}/eye-worker-build/Release/tingxian-eye-worker-fixture.exe
             ${{ runner.temp }}/eye-worker-build/Release/tingxian-eye-session-test.exe
+            ${{ runner.temp }}/eye-worker-build/Release/tingxian-eye-stream-test.exe
             ${{ runner.temp }}/eye-worker-build/Testing/Temporary/LastTest.log
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-device-probe.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-device-synthetic-test.exe

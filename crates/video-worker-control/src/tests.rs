@@ -1,4 +1,6 @@
 use super::*;
+#[path = "stream_tests.rs"]
+mod stream_tests;
 use sha2::{Digest, Sha256};
 use std::{fs, path::Path, sync::atomic::{AtomicU64, Ordering}, thread, time::{Instant, SystemTime, UNIX_EPOCH}};
 static COUNTER: AtomicU64 = AtomicU64::new(0);

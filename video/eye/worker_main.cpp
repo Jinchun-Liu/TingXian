@@ -2,6 +2,7 @@
 #include "session.h"
 #include "owner_watch.h"
 #include "ar087_provider.h"
+#include "stream_protocol.h"
 #include <windows.h>
 #include <atomic>
 #include <cerrno>
@@ -50,9 +51,11 @@ bool disk_file(HANDLE file, uint64_t expected_size) {
 }
 }
 int wmain(int argc, wchar_t** argv) {
-    if (argc != 11 || std::wstring(argv[1]) != L"--eye-offline-v1") return 2;
+    if (argc < 2) return 2;
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
     if (!SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_APPLICATION_DIR)) return 3;
+    if (std::wstring(argv[1]) == L"--eye-stream-v1") return tingxian::eye::stream::run(argc, argv);
+    if (argc != 11 || std::wstring(argv[1]) != L"--eye-offline-v1") return 2;
     const auto width = number(argv[7]), height = number(argv[8]), count = number(argv[9]), request = number(argv[10]);
     if (!width || !height || width > 1920 || height > 1080 || !count || count > 100000 || !request) return 2;
     Format format{uint32_t(width), uint32_t(height)};

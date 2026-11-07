@@ -8,6 +8,8 @@ use windows_sys::Win32::{Foundation::*, Security::SECURITY_ATTRIBUTES,
 #[cfg(test)]
 #[path = "launch_diagnostics.rs"]
 mod launch_diagnostics;
+#[path = "stream_windows.rs"]
+mod stream_io;
 
 struct Handle(HANDLE);
 unsafe impl Send for Handle {}
@@ -118,7 +120,7 @@ impl Attributes {
     }
 }
 impl Drop for Attributes { fn drop(&mut self) { if self.initialized { unsafe { DeleteProcThreadAttributeList(self.pointer()); } } } }
-struct Process { process: Handle, job: Handle, output: Handle, _verified: Verified, eye_files: Option<EyeFiles> }
+struct Process { process: Handle, job: Handle, output: Handle, input: Option<Handle>, _verified: Verified, eye_files: Option<EyeFiles> }
 impl Process {
     fn terminate(&self) -> Result<(), Reason> {
         if unsafe { WaitForSingleObject(self.process.0, 0) } == WAIT_OBJECT_0 { return Ok(()); }
@@ -138,7 +140,7 @@ impl Drop for Process {
 fn launch(worker: &BundledWorker, signal: &Signal, work: &Work, generation: u64) -> Result<Process, Reason> {
     let verified = verify(worker)?;
     if signal.stopped() { return Err(Reason::Abandoned); }
-    let eye_files = match work { Work::Inspect => None, Work::Eye(job) => Some(EyeFiles::open(job)?) };
+    let eye_files = match work { Work::Eye(job) => Some(EyeFiles::open(job)?), _=>None };
     let event = signal.event.duplicate(SYNCHRONIZE)?;
     let mut owner_raw = null_mut();
     if unsafe { DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(), &mut owner_raw,
@@ -156,6 +158,13 @@ fn launch(worker: &BundledWorker, signal: &Signal, work: &Work, generation: u64)
     if unsafe { SetInformationJobObject(job.0, JobObjectExtendedLimitInformation,
         (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(), size_of_val(&limits) as u32) } == 0 { return Err(Reason::Launch); }
     let mut inherited = vec![owner.0, event.0, writer.0];
+    let (input,stream_reader)=if matches!(work,Work::Stream(_)) {
+        let (mut read,mut write)=(null_mut(),null_mut());
+        if unsafe { CreatePipe(&mut read,&mut write,&security,128*1024) }==0 {return Err(Reason::Launch);}
+        let reader=Handle::take(read)?;let writer=Handle::take(write)?;
+        if unsafe { SetHandleInformation(writer.0,HANDLE_FLAG_INHERIT,0) }==0 {return Err(Reason::Launch);}
+        inherited.push(reader.0);(Some(writer),Some(reader))
+    } else {(None,None)};
     let mut eye_handles = Vec::new();
     if let Some(files) = &eye_files {
         eye_handles.push(Handle::duplicate_raw(files.input.as_raw_handle(), FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE)?);
@@ -170,6 +179,8 @@ fn launch(worker: &BundledWorker, signal: &Signal, work: &Work, generation: u64)
         Work::Inspect => format!("--inspect-v1 {} {}", owner.0 as usize, event.0 as usize),
         Work::Eye(job) => format!("--eye-offline-v1 {} {} {} {} {} {} {} {} {}", owner.0 as usize, event.0 as usize,
             writer.0 as usize, eye_handles[0].0 as usize, eye_handles[1].0 as usize, job.width, job.height, job.frames, generation),
+        Work::Stream(_) => format!("--eye-stream-v1 {} {} {} {} 1280 720 {}",owner.0 as usize,event.0 as usize,
+            writer.0 as usize,stream_reader.as_ref().unwrap().0 as usize,generation),
     };
     let mut command: Vec<u16> = format!("\"{}\" {}", worker.path.display(), args).encode_utf16().chain(Some(0)).collect();
     // No API keys, app config, PATH, proxy, or private profile settings are inherited.
@@ -208,13 +219,14 @@ fn launch(worker: &BundledWorker, signal: &Signal, work: &Work, generation: u64)
             unsafe { WaitForSingleObject(process.0, 1000) } != WAIT_OBJECT_0 { return Err(Reason::Cleanup); }
         return Err(Reason::Launch);
     }
-    let owned = Process { process, job, output, _verified: verified, eye_files };
+    let owned = Process { process, job, output, input, _verified: verified, eye_files };
     if signal.stopped() { owned.terminate()?; return Err(Reason::Abandoned); }
     if unsafe { ResumeThread(thread.0) } == u32::MAX { owned.terminate()?; return Err(Reason::Launch); }
     Ok(owned)
 }
-pub(super) fn execute(worker: &BundledWorker, signal: &Signal, work: &Work, generation: u64, timeout: Duration) -> Result<Report, Reason> {
+pub(super) fn execute(worker: &BundledWorker, signal: &Signal, work: &Work, generation: u64, timeout: Duration, controller: &super::Controller) -> Result<Report, Reason> {
     let process = launch(worker, signal, work, generation)?;
+    if let Work::Stream(job)=work { return stream_io::execute(process,signal,job,generation,timeout,controller).map(Report::Stream); }
     let started = Instant::now();
     let mut stop_deadline = None;
     loop {
@@ -245,6 +257,7 @@ pub(super) fn execute(worker: &BundledWorker, signal: &Signal, work: &Work, gene
         if bytes.len() > 4096 { return Err(Reason::Protocol); }
     }
     match work {
+        Work::Stream(_)=>unreachable!(),
         Work::Inspect => Inspection::parse(&bytes).map(Report::Inspection),
         Work::Eye(job) => {
             let report = EyeReport::parse(&bytes, job, generation)?;
