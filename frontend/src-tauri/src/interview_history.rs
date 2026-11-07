@@ -201,7 +201,7 @@ where F:FnOnce(&Path)->Result<PathBuf,String> {
     let root = recordings.canonicalize().map_err(|e| e.to_string())?;
     let owned=owned_folders(&root)?;
     let recording_folders=owned.recordings.len();let staged_archives=owned.archives.len();
-    if include_saved {crate::interview_sessions::init(pool).await?;interview_core::recovery::init(pool).await?;}
+    if include_saved {crate::interview_sessions::init(pool).await?;interview_core::recovery::init(pool).await?;interview_core::memory_store::init(pool).await?;}
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
     let meetings=sqlx::query("SELECT id,title,folder_path FROM meetings").fetch_all(&mut *tx).await.map_err(|e|e.to_string())?;
     let selected=select_meetings(meetings,&owned.recordings)?;
@@ -222,6 +222,11 @@ where F:FnOnce(&Path)->Result<PathBuf,String> {
     let drafts=if include_saved {rows_to_json(sqlx::query("SELECT * FROM tingxian_recovery_drafts ORDER BY id").fetch_all(&mut *tx).await.map_err(|e|e.to_string())?)?}else{vec![]};
     let recovery_drafts=drafts.len();
     database.insert("tingxian_recovery_drafts".into(),json!(drafts));
+    if include_saved {
+        for table in interview_core::memory_store::TABLES {
+            database.insert((*table).into(),json!(rows_to_json(sqlx::query(&format!("SELECT * FROM {table}")).fetch_all(&mut *tx).await.map_err(|e|e.to_string())?)?));
+        }
+    }
     // Stage on the recordings volume so moving audio never needs copy+delete.
     let staging = root.join(format!("Meetily-历史清理-{}-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"), uuid::Uuid::new_v4()));
     fs::create_dir(&staging).map_err(|e| e.to_string())?;
@@ -269,6 +274,7 @@ where F:FnOnce(&Path)->Result<PathBuf,String> {
         }
         if include_saved {
             sqlx::query("DELETE FROM interview_sessions").execute(&mut *tx).await?;
+            interview_core::memory_store::clear_archived(&mut tx).await.map_err(sqlx::Error::Protocol)?;
             interview_core::recovery::clear_archived(&mut tx).await.map_err(sqlx::Error::Protocol)?;
         }
         Ok::<(),sqlx::Error>(())
@@ -301,14 +307,24 @@ mod residue_tests {
         let draft=json!({"version":1,"snapshot":{"version":1,"history":[],"calls":0},"composer":{"question":"unfinished draft","confirmed_answer":""}});
         let epoch=recovery::list(&pool).await.unwrap().epoch;
         recovery::write(&pool,"draft",epoch,1,draft.clone(),"").await.unwrap();
+        use interview_core::{memory_store,session_memory::{Dependencies,Event,EventKind,Origin,JournalRecord},digest};
+        let deps=Dependencies{source_policy:digest(b"sources"),facts:digest(b"facts"),model:digest(b"model"),policy:digest(b"policy")};
+        let memory=memory_store::open(&pool,"synthetic-memory",deps,false).await.unwrap();
+        let record=JournalRecord{record_sequence:1,event:Event{id:"event-1".into(),session_id:memory.id.clone(),epoch:memory.epoch,sequence:1,revision:1,kind:EventKind::ConfirmedSelf,origin:Origin::UserText,capture_session:None,utterance_id:None,replaces_revision:None,text:"我只模拟过超时，未处理生产事故".into(),closed:true,terminal:None,question:None,source_dependencies:Default::default(),asset_sha256:None}};
+        memory_store::append(&pool,&record).await.unwrap();
         let exit=clear_temporary_history_with(&pool,&recordings,json!({}),|source|{let dest=root.join("synthetic-exit-trash");fs::rename(source,&dest).map_err(|e|e.to_string())?;Ok(dest)}).await.unwrap();
         assert_eq!(exit.recovery_drafts,0);assert_eq!(recovery::load(&pool,"draft").await.unwrap(),draft);
+        assert_eq!(memory_store::page(&pool,&memory.id,memory.epoch,0,64).await.unwrap(),vec![record.clone()]);
         let failed=clear_history_with(&pool,&recordings,json!({}),|_|Err("synthetic Trash refusal".into())).await.unwrap_err();
         assert!(failed.contains("synthetic Trash refusal"));assert_eq!(recovery::list(&pool).await.unwrap().epoch,epoch);
         assert_eq!(recovery::load(&pool,"draft").await.unwrap(),draft);
+        assert_eq!(memory_store::page(&pool,&memory.id,memory.epoch,0,64).await.unwrap(),vec![record.clone()]);
         let cleared=clear_history_with(&pool,&recordings,json!({}),|source|{let dest=root.join("synthetic-clear-trash");fs::rename(source,&dest).map_err(|e|e.to_string())?;Ok(dest)}).await.unwrap();
         assert_eq!(cleared.recovery_drafts,1);
         let archive:Value=serde_json::from_slice(&fs::read(Path::new(&cleared.archive_path).join("history.json")).unwrap()).unwrap();
+        let saved_memory=&archive["database_rows"]["tingxian_memory_events"][0];
+        assert_eq!(serde_json::from_str::<Value>(saved_memory["payload"].as_str().unwrap()).unwrap(),serde_json::to_value(&record).unwrap());
+        assert!(memory_store::append(&pool,&record).await.is_err());
         let row=&archive["database_rows"]["tingxian_recovery_drafts"][0];
         assert_eq!(serde_json::from_str::<Value>(row["payload"].as_str().unwrap()).unwrap(),draft);
         let listed=recovery::list(&pool).await.unwrap();assert!(listed.drafts.is_empty());assert_eq!(listed.epoch,epoch+1);

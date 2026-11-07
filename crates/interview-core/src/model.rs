@@ -150,6 +150,10 @@ where F:FnMut(StreamEvent)+Send {
     if config.usage_unsupported(){payload.as_object_mut().unwrap().remove("stream_options");}
     if *protocol!=crate::ProviderProtocol::Deepseek {payload.as_object_mut().unwrap().remove("thinking");}
     if *protocol==crate::ProviderProtocol::Qwen {payload["enable_thinking"]=json!(false);}
+    let budget_basis=if config.capabilities.is_some(){crate::request_budget::WindowBasis::UserReviewed}else{crate::request_budget::WindowBasis::ConfiguredUnknown};
+    // Check the actual wire envelope after protocol adaptation. This also
+    // covers callers supplying messages outside the normal short-history path.
+    crate::request_budget::fit(&mut payload,&config.budget,budget_basis.clone(),None)?;
     let notify=std::sync::Mutex::new(notify);
     let emit=|event|{(notify.lock().unwrap())(event);};
     if image_budget_unknown{emit(StreamEvent::Warning{message:"图片 token 用量由供应商决定，当前仅核对文字、输出和余量预算；图片窗口是否适配尚未确认。".into()});}
@@ -157,6 +161,7 @@ where F:FnMut(StreamEvent)+Send {
     let start=Instant::now();let mut first=None;let mut warned=false;
     let work=async {
         for attempt in 0..2 {
+            crate::request_budget::admit(&crate::request_budget::measure(&payload,&config.budget,budget_basis.clone(),None)?)?;
             emit(StreamEvent::RequestSent { attempt: attempt + 1 });
             let response=client.post(endpoint).bearer_auth(key).json(&payload).send().await;
             let response=match response {

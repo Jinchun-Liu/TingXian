@@ -88,6 +88,20 @@ async fn model_budget_blocks_mandatory_overflow_before_any_network_attempt(){
 }
 
 #[tokio::test]
+async fn final_envelope_guard_blocks_non_content_overflow_and_unknown_images_before_send(){
+    let server=serve(vec![ok(vec![(0,delta("建议回答：合成结果")),(0,done())])]).await;
+    let mut cfg=config();cfg.budget=crate::context_budget::ContextBudget{context_tokens:4096,max_output_tokens:512,safety_tokens:256};
+    for messages in [json!([{"role":"user","content":"短问题","name":"x".repeat(4000)}]),json!([{"role":"user","content":[{"type":"text","text":"x".repeat(2600)},{"type":"image_url","image_url":{"url":"data:image/png;base64,synthetic"}}]}])] {
+        let mut events=vec![];
+        let result=run_stream(reqwest::Client::builder().no_proxy().build().unwrap(),&server.url,"synthetic",messages,CancellationToken::new(),&cfg,|e|events.push(e)).await;
+        assert!(result.unwrap_err().contains("未发送"));assert_eq!(attempts(&events),0);assert!(server.requests.lock().unwrap().is_empty());
+    }
+    let mut events=vec![];
+    run_stream(reqwest::Client::builder().no_proxy().build().unwrap(),&server.url,"synthetic",json!([{"role":"user","content":"普通短题"}]),CancellationToken::new(),&cfg,|e|events.push(e)).await.unwrap();
+    assert_eq!(server.requests.lock().unwrap().len(),1);assert_eq!(attempts(&events),1);assert!(completed(&events));
+}
+
+#[tokio::test]
 async fn multipart_answer_streams_as_one_request_without_losing_numbered_points() {
     let parts = ["建议回答：分别验证约束和最终状态。\n", "1. 同租户重试只产生一份资源，不同租户独立。\n", "2. 缺失、null、零和空字符串分别断言。\n", "3. HTTP 504 后先查询最终状态，权限错误不重试。"];
     let mut frames: Vec<_> = parts.iter().map(|text| (0, delta(text))).collect();

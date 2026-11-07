@@ -1,0 +1,8 @@
+[
+  {"id":"D01","split":"development","kind":"short","question":"什么是单元测试？","terms":[],"old_statement":"我尚未做过生产环境运维。","required":[],"image":false},
+  {"id":"D02","split":"development","kind":"cross_topic","question":"回到刚才的幂等键，你实际做过什么？","terms":["幂等键"],"old_statement":"我只在模拟环境验证过幂等键；同租户重复请求不应重复写入，不同租户要隔离；没有处理过真实生产事故。","required":["模拟环境","不同租户","没有处理过真实生产事故"],"image":false},
+  {"id":"D03","split":"development","kind":"code_vision","question":"结合之前的 SQL 条件和当前截图，说明该如何验证？","terms":["SQL"],"old_statement":"SQL 条件是 tenant_id = 7 AND amount IS NULL；金额 10 元不是 10 万元；不能把 null、数字 0、缺失字段混用；HTTP 504 后状态未知。","required":["tenant_id = 7 AND amount IS NULL","10 元","状态未知"],"image":true},
+  {"id":"H01","split":"holdout","kind":"short","question":"一句话解释回归测试。","terms":[],"old_statement":"我还没有参与过实际容灾演练。","required":[],"image":false},
+  {"id":"H02","split":"holdout","kind":"cross_topic","question":"回到刚才的重试方案，你的贡献和限制是什么？","terms":["重试方案"],"old_statement":"重试方案只是我的练习设计，尚未上线；我只负责分析用例，没有实现服务端；最多重试 2 次，不应把连接超时当成事务已回滚。","required":["尚未上线","没有实现服务端","最多重试 2 次"],"image":false},
+  {"id":"H03","split":"holdout","kind":"code_vision","question":"对照截图与之前的契约条件，哪些边界不能漏？","terms":["契约条件"],"old_statement":"契约条件包含 missing、null、0 和空字符串四种状态。DELETE 必须同时限制 tenant_id 和 resource_id；403 不重试；返回 202 只表示已受理，不证明写入成功。","required":["missing、null、0","403 不重试","不证明写入成功"],"image":true}
+]

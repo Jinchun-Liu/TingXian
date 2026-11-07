@@ -14,7 +14,7 @@ pub struct ProviderProfile {
 }
 impl ProviderProfile {
     pub fn validate(&self)->Result<()> {
-        if !["answer-1","answer-2","answer-3","vision","background"].contains(&self.id.as_str()) {return Err("未知模型位置".into());}
+        if !["answer-1","answer-2","answer-3","vision","background","compaction"].contains(&self.id.as_str()) {return Err("未知模型位置".into());}
         if self.name.trim().is_empty() || self.name.chars().count()>40 || crate::contains_credential(&self.name) {return Err("接口名称须为1–40字，不能包含凭证".into());}
         self.request.validate()?;
         validate_endpoint(&self.endpoint)?;
