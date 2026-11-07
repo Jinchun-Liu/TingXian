@@ -1,6 +1,5 @@
-//! Native-only A/V timeline; no capture, resampler, device, network, or UI commands.
-//! Output adapters consume a protected PCM window at the returned fractional
-//! source positions and account for their filter/device delay. This is NOT an
+//! Native-only A/V timeline with optional bounded original-voice sinc rendering.
+//! Output adapters still account for their actual device delay. This is NOT an
 //! installed virtual microphone or an end-to-end synchronization claim.
 use std::{
     collections::VecDeque,
@@ -8,6 +7,8 @@ use std::{
 };
 mod clock;
 pub use clock::{DeviceClock, OutputInterval};
+mod render;
+pub use render::{RenderStatus, RenderedWindow, SincRenderer};
 #[cfg(test)]
 mod tests;
 
@@ -20,6 +21,7 @@ pub const NV12_BYTES: usize = 1280 * 720 * 3 / 2;
 const DELAY: u64 = 400_000; // 40 ms experimental contract, not a product default.
 const MAX_AGE: u64 = 2_500_000; // Preserve the existing 250 ms video safety lease.
 const MAX_VIDEO_LAG: u64 = 500_000;
+const FILTER_HISTORY: u64 = 30_000; // 3 ms covers the 128-sample sinc lookbehind.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Time(u64);
@@ -43,6 +45,7 @@ pub enum Error {
     AudioOverflow,
     OutputOrder,
     Sink,
+    Render,
     Exhausted,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,6 +109,7 @@ pub struct Metrics {
     pub output_frames: u64,
     pub silence_frames: u64,
     pub windows: u64,
+    pub filter_underrun_windows: u64,
 }
 pub struct Snapshot {
     pub generation: u64,
@@ -131,6 +135,7 @@ pub struct Window<'a> {
     pub video: &'a CorrectedFrame,
     packets: &'a VecDeque<PcmPacket>,
     period: clock::SamplePeriod,
+    audio_origin: u64,
 }
 impl Window<'_> {
     pub fn position_at(&self, output_frame: usize) -> Option<SourcePosition> {
@@ -154,6 +159,18 @@ impl Window<'_> {
             .iter()
             .map(|p| (p.first_sample, p.samples.as_slice()))
     }
+    /// Monotone cursor avoids rescanning all packets for every output sample.
+    fn positions(&self) -> impl Iterator<Item = Option<SourcePosition>> + '_ {
+        let mut packet = 0;
+        (0..self.frames).map(move |frame| {
+            position_from(self.packets, self.first_capture, self.period, frame, packet).map(
+                |(value, index)| {
+                    packet = index;
+                    value
+                },
+            )
+        })
+    }
 }
 
 fn position(
@@ -162,10 +179,20 @@ fn position(
     period: clock::SamplePeriod,
     frame: usize,
 ) -> Option<SourcePosition> {
+    position_from(packets, first, period, frame, 0).map(|(value, _)| value)
+}
+
+fn position_from(
+    packets: &VecDeque<PcmPacket>,
+    first: Time,
+    period: clock::SamplePeriod,
+    frame: usize,
+    start: usize,
+) -> Option<(SourcePosition, usize)> {
     let offset = period.numerator.checked_mul(frame as u128)?;
     // Integer time differences and rational periods preserve exact sample
     // boundaries, including QPC values too large for an f64 integer.
-    for i in 0..packets.len().saturating_sub(1) {
+    for i in start..packets.len().saturating_sub(1) {
         let p = &packets[i];
         let next = &packets[i + 1];
         let gap = u128::from(first.0.abs_diff(p.capture.0)).checked_mul(period.denominator)?;
@@ -182,10 +209,13 @@ fn position(
         if delta < span {
             let numerator = delta.checked_mul(p.samples.len() as u128)?;
             let whole = u64::try_from(numerator / span).ok()?;
-            return Some(SourcePosition {
-                sample: p.first_sample.checked_add(whole)?,
-                fraction: (numerator % span) as f64 / span as f64,
-            });
+            return Some((
+                SourcePosition {
+                    sample: p.first_sample.checked_add(whole)?,
+                    fraction: (numerator % span) as f64 / span as f64,
+                },
+                i,
+            ));
         }
     }
     // The last packet has no following clock anchor; do not extrapolate it.
@@ -199,6 +229,7 @@ struct State {
     audio: VecDeque<PcmPacket>,
     video: VecDeque<CorrectedFrame>,
     audio_frames: usize,
+    audio_origin: Option<u64>,
     output_end: Option<(u128, u64)>,
     presented_capture: Option<Time>,
     last_video: u64,
@@ -212,6 +243,7 @@ impl State {
         self.audio.clear();
         self.video.clear();
         self.audio_frames = 0;
+        self.audio_origin = None;
         self.output_end = None;
         self.presented_capture = None;
         self.last_video = 0;
@@ -249,6 +281,7 @@ impl Default for Timeline {
                 audio: VecDeque::new(),
                 video: VecDeque::new(),
                 audio_frames: 0,
+                audio_origin: None,
                 output_end: None,
                 presented_capture: None,
                 last_video: 0,
@@ -341,6 +374,7 @@ impl Timeline {
             return Err(s.fail(Error::AudioOverflow));
         }
         s.audio_frames += p.samples.len();
+        s.audio_origin.get_or_insert(p.first_sample);
         s.metrics.admitted_audio += p.samples.len() as u64;
         s.metrics.audio_peak = s.metrics.audio_peak.max(s.audio_frames);
         s.audio.push_back(p);
@@ -403,6 +437,28 @@ impl Timeline {
     where
         F: FnOnce(Option<Window<'_>>) -> bool,
     {
+        self.dispatch(generation, output, now, |view| {
+            let ready = view.is_some();
+            if consume(view) {
+                Ok(ready)
+            } else {
+                Err(Error::Sink)
+            }
+        })
+    }
+
+    // The callback reports whether media or neutral/silence was actually handed
+    // off. A filter underrun must not count as successful audio/video delivery.
+    fn dispatch<F>(
+        &self,
+        generation: u64,
+        output: OutputInterval,
+        now: Time,
+        consume: F,
+    ) -> Result<bool, Error>
+    where
+        F: FnOnce(Option<Window<'_>>) -> Result<bool, Error>,
+    {
         let mut s = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         s.admit(generation)?;
         if output.generation != generation {
@@ -451,19 +507,21 @@ impl Timeline {
                 video: video.unwrap(),
                 packets: &s.audio,
                 period: output.period,
+                audio_origin: s.audio_origin.unwrap(),
             })
         } else {
             None
         };
-        if !std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consume(view)))
-            .unwrap_or(false)
-        {
-            return Err(s.fail(Error::Sink));
-        }
+        let delivered =
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consume(view))) {
+                Ok(Ok(delivered)) if !delivered || ready => delivered,
+                Ok(Err(error)) => return Err(s.fail(error)),
+                _ => return Err(s.fail(Error::Sink)),
+            };
         s.output_end = Some((output.end, output.frequency));
         s.presented_capture = Some(first);
         s.metrics.windows += 1;
-        if ready {
+        if delivered {
             s.metrics.output_frames += output.frames as u64;
             if id == s.last_video {
                 s.metrics.repeated_video += 1;
@@ -473,14 +531,17 @@ impl Timeline {
             }
         } else {
             s.metrics.silence_frames += output.frames as u64;
+            if ready {
+                s.metrics.filter_underrun_windows += 1;
+            }
         }
         // Retain two anchors and lookbehind. A passed deadline is never replayed,
         // even if its sink used silence. retired_audio is not a delivery counter.
-        while s.audio.len() > 3 && s.audio[2].capture <= first {
+        while s.audio.len() > 2 && s.audio[1].capture.0 <= first.0.saturating_sub(FILTER_HISTORY) {
             let p = s.audio.pop_front().unwrap();
             s.audio_frames -= p.samples.len();
             s.metrics.retired_audio += p.samples.len() as u64;
         }
-        Ok(ready)
+        Ok(delivered)
     }
 }

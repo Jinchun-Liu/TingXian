@@ -11,3 +11,31 @@ TingXian is MIT licensed and retains the Meetily notices. Third-party components
 - Microsoft Edge WebView2 is redistributed by the installer under Microsoft's runtime terms. It is not part of TingXian's MIT license.
 
 The base installer contains a CPU Whisper build. It does not distribute CUDA, a local LLM, voice clones or avatar weights.
+
+## Rubato 0.15.0
+
+The native original-voice timeline uses the public sinc interpolator from
+[Rubato 0.15.0](https://docs.rs/rubato/0.15.0/rubato/), already pinned in Cargo.lock.
+The archive SHA-256 is `b5d18b486e7d29a408ef3f825bc1327d8f87af091c987ca2f5b734625940e234`.
+Its MIT notice is retained below; this does not grant rights to NVIDIA models or
+third-party virtual audio drivers. No such driver is bundled by this change.
+
+Copyright (c) 2020 Henrik Enquist
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
