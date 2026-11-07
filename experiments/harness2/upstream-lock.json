@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/google-research/harness2",
+  "commit": "6868817518876de8fd170c6a8354daca273b6191",
+  "route": "U",
+  "upstream_patches": [],
+  "license": "Apache-2.0",
+  "host_baseline_commit": "f3e49f0aae35419675318fa4624614169067872c",
+  "host_packer_sha256": "ed51d6d0fea5b3ba5c34338c5ed7af6a348fcd53a3675846e806573bd0e4ead8",
+  "p0_model": "none; deterministic transport probe",
+  "production_enabled": false
+}
