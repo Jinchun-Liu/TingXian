@@ -111,6 +111,7 @@ fn validate_document(v:&Value)->Result<()> {
     if v["format"]!="tingxian-learning-v1"||v["schema_version"]!=1||v["mode"]!="review"||!v["id"].as_str().is_some_and(valid_id)||v["generation"].as_u64().is_none()||v["store_revision"].as_u64().is_none()||!["editing","saved","archived"].contains(&v["status"].as_str().unwrap_or("")){return Err("教育记录结构无效".into());}
     for key in ["attempts","feedback","tasks","evidence","items"]{if !v[key].as_array().is_some_and(|a|a.len()<=1000){return Err("教育记录数量或结构无效".into());}}
     if !v["draft"]["question"].is_string()||!v["draft"]["text"].is_string(){return Err("缺少待保存输入".into());}
+    if !v["preferences"]["context_limit"].as_u64().is_some_and(|n|(8192..=262144).contains(&n))||![json!(16),json!(20),json!(24)].contains(&v["preferences"]["font_size"]){return Err("教育偏好无效：模型窗口须为 8192–262144 的整数，字号须为 16、20 或 24；请改正后重试保存".into());}
     let content:Value=serde_json::from_str(CONTENT).unwrap();
     if !content["packs"].as_array().unwrap().iter().any(|p|p["id"]==v["pack_id"]&&p["version"]==v["pack_version"]){return Err("教育内容包版本不可用".into());}
     for key in ["attempts","feedback","tasks","items","evidence"]{
@@ -203,7 +204,7 @@ mod tests {
         Request{task_id:"task-1".into(),session_id:"study-1".into(),generation:2,lane:"interactive".into(),input_hash:digest(input.as_bytes()),input_json:input,profile_id:"answer-1".into(),context_limit:32768,confirmed:true,profile_stamp:String::new(),scope_epoch:0}
     }
     fn replace_input(r:&mut Request,change:impl FnOnce(&mut Value)){let mut value:Value=serde_json::from_str(&r.input_json).unwrap();change(&mut value);r.input_json=value.to_string();r.input_hash=digest(r.input_json.as_bytes());}
-    fn document()->Value{json!({"format":"tingxian-learning-v1","schema_version":1,"id":"study-1","mode":"review","pack_id":"software-ai-foundations","pack_version":"1.0.0","generation":0,"store_revision":0,"status":"editing","draft":{"question":"合成题目","text":"未完成的本人输入"},"attempts":[],"feedback":[],"tasks":[],"items":[],"evidence":[]})}
+    fn document()->Value{json!({"format":"tingxian-learning-v1","schema_version":1,"id":"study-1","mode":"review","pack_id":"software-ai-foundations","pack_version":"1.0.0","generation":0,"store_revision":0,"status":"editing","draft":{"question":"合成题目","text":"未完成的本人输入"},"attempts":[],"feedback":[],"tasks":[],"items":[],"evidence":[],"preferences":{"profile_id":"answer-1","context_limit":32768,"font_size":20}})}
     #[test]
     fn selected_input_budget_and_provenance_are_validated_before_any_network(){
         let r=request();let (payload,budget)=messages(&r).unwrap();assert!(budget>4096&&budget<=32768);assert_eq!(payload.as_array().unwrap().len(),2);assert!(!payload.to_string().contains("assistant_suggestion"));
@@ -239,6 +240,8 @@ mod tests {
     async fn ambiguous_save_receipts_are_read_only_and_do_not_hide_other_writers(){
         let root=tempfile::Builder::new().prefix("education-receipt-").tempdir().unwrap().keep();
         let pool=open(&root.join("合成回执.sqlite")).await.unwrap();let first=document();
+        for invalid in [json!(0),json!(8191),json!(262145),json!(8192.5),Value::Null]{let mut bad=first.clone();bad["preferences"]["context_limit"]=invalid;assert!(save(&pool,bad.clone(),0).await.is_err());assert_eq!(save_receipt(&pool,bad,0).await.unwrap(),None);}
+        let mut bad=first.clone();bad["preferences"]["font_size"]=json!(18);assert!(save(&pool,bad,0).await.is_err());
         assert_eq!(save_receipt(&pool,first.clone(),0).await.unwrap(),None);
         assert!(save_receipt(&pool,first.clone(),1).await.is_err(),"missing prior data is not an uncommitted first save");
         assert_eq!(save(&pool,first.clone(),0).await.unwrap(),1);
