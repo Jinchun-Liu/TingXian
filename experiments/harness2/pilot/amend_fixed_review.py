@@ -41,7 +41,7 @@ def main():
         'scope':'Only unattempted B slots and selection; no retry of failed slots; no A/C0 rerun',
         'original_ledger_sha256':hash_file(original/'evidence-original/budget.sqlite'),
         'same_budget_ledger':True,'total_cap_cny':30,'initial_generation_requests':prior['budget']['attempts'],
-        'source_commit':subprocess.check_output(['git','-C',str(HERE.parents[2]),'rev-parse','HEAD'],text=True).strip(),
+        'source_commit':subprocess.check_output(['git','-C',str(HERE.parents[2]),'rev-parse','HEAD'],text=True).strip() if (HERE.parents[2]/'.git').exists() else None,
         'source_sha256':{str(p.relative_to(HERE)):hash_file(p) for p in sorted(HERE.glob('*.py'))},'created':time.time()}
     (root/'manifest.json').write_bytes(encoded(manifest))
     broker=Broker(original/'broker',key=os.environ.get('TX_H2_API_KEY',''))
