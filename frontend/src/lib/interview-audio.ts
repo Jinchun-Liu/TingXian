@@ -5,6 +5,10 @@ export interface MicrophoneState { recording: boolean; enabled: boolean; epoch: 
 
 export const stopInterviewAudio = () => invoke<void>('stop_recording', { args: { save_path: '' } });
 
+export const listeningPhase = (automatic: boolean, cloudAsr: boolean, addressed = false) => automatic
+  ? addressed ? '监听中 · 等待点名' : '监听中 · 对方说完后回答'
+  : cloudAsr ? '监听中 · 百炼实时转写' : '监听中 · 本地转写';
+
 /** Mirrors the native stream token so late IPC deliveries cannot appear after
  * muting, or after reopening with a different microphone epoch. */
 export class MicrophoneTranscriptGate {

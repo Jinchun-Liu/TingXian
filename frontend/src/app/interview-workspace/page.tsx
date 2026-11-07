@@ -41,7 +41,7 @@ import { useTranscripts } from '@/contexts/TranscriptContext';
 import { indexedDBService } from '@/services/indexedDBService';
 import { LatencyRecord, TurnLatency, latencyLabel } from '@/lib/interview-latency';
 import { AudioFault, InterviewAudioHealth } from '@/lib/interview-health';
-import { MicrophoneState, MicrophoneTranscriptGate, stopInterviewAudio } from '@/lib/interview-audio';
+import { MicrophoneState, MicrophoneTranscriptGate, stopInterviewAudio, listeningPhase } from '@/lib/interview-audio';
 import { AudioLines, History as HistoryIcon, ChevronRight, Camera, AppWindow, Columns2, Play, Pause, Square, Search, Snowflake, FolderOpen, Settings2, FileText, Trash2 } from 'lucide-react';
 
 
@@ -90,6 +90,7 @@ export default function InterviewPage() {
   const [generating, setGenerating] = useState(false);
   const [frozen, setFrozen] = useState(false);
   const [automatic, setAutomatic] = useState(false);
+  const resumeAutomatic = useRef(false);
   const [queued, setQueued] = useState(0);
   const [audioAllowed, setAudioAllowed] = useState(false);
   const [cloudAllowed, setCloudAllowed] = useState(false);
@@ -137,6 +138,7 @@ export default function InterviewPage() {
   const audioHealth = useRef(new InterviewAudioHealth());
   const [healthView, setHealthView] = useState(() => audioHealth.current.view());
   const healthPauseApplied = useRef(false);
+  const healthResumeAutomatic = useRef(false);
   const [confirmedAnswer, setConfirmedAnswer] = useState('');
   const requests=useRef(new AnswerRequests());
   const capacity=useRef(1);
@@ -166,6 +168,7 @@ export default function InterviewPage() {
     setHealthView(previous => previous.paused === view.paused && previous.message === view.message
       && previous.canResume === view.canResume && previous.advisory === view.advisory ? previous : view);
     if (view.paused) {
+      if (!healthPauseApplied.current) healthResumeAutomatic.current = live.current.automatic;
       // Synchronous guard closes the timer race before React renders.
       live.current.automatic = false; setAutomatic(false);
       if (!healthPauseApplied.current) {
@@ -639,7 +642,7 @@ export default function InterviewPage() {
       if(status.cloud_asr_mode==='aliyun'&&!asrCloudAllowed){setNotice('请勾选本次云转写授权，或在音频设置切回本地。');return;}
       await run(async()=>{
           audioHealth.current.prepareStart(); syncHealth();
-          meeting.reset(); utterances.current.reset(); setQueued(0); setFrozen(false); setAutomatic(cloudAllowed && !!status?.key_configured);
+          meeting.reset(); utterances.current.reset(); setQueued(0); setFrozen(false); setAutomatic(cloudAllowed && !!status?.key_configured); resumeAutomatic.current=false;
           captureSession.current++;
           acceptTranscripts.current = true;
           live.current.automatic = cloudAllowed && !!status?.key_configured;
@@ -647,7 +650,7 @@ export default function InterviewPage() {
           microphoneVersion.current++;
           try {
             applyMicrophoneState(await invoke<MicrophoneState>('interview_audio_start', { recordMicrophone,cloudAsrAllowed:asrCloudAllowed }));
-            setPhase(live.current.automatic?(addressedOnly(meeting.current.current.mode)?'监听中 · 等待点名':'监听中 · 对方说完后回答'):status.cloud_asr_mode==='aliyun'?'监听中 · 百炼实时转写':'监听中 · 本地转写');
+            setPhase(listeningPhase(live.current.automatic,status.cloud_asr_mode==='aliyun',addressedOnly(meeting.current.current.mode)));
           } catch (e) { setAutomatic(false); live.current.automatic = false; audioHealth.current.close(); syncHealth(); throw e; }
           finally { microphoneChanging.current = false; }
         });
@@ -658,8 +661,17 @@ export default function InterviewPage() {
         });
     }else if(recording.isRecording&&(command==='pause'&&!recording.isPaused||command==='resume'&&recording.isPaused)){
       await run(async()=>{
-          if (recording.isPaused) { await invoke('resume_recording'); const enable = cloudAllowed && !audioHealth.current.paused; live.current.automatic = enable; setAutomatic(enable); }
-          else { live.current.automatic = false; setAutomatic(false); await cancel(); await invoke('pause_recording'); }
+          if (recording.isPaused) {
+            try { await invoke('resume_recording'); }
+            catch (e) { setPhase('恢复未确认 · 自动回答保持关闭'); throw e; }
+            const enable = resumeAutomatic.current && live.current.cloudAllowed && !!status?.key_configured && !audioHealth.current.paused;
+            live.current.automatic = enable; setAutomatic(enable);
+            setPhase(listeningPhase(enable,status?.cloud_asr_mode==='aliyun',addressedOnly(meeting.current.current.mode)));
+          } else {
+            resumeAutomatic.current=live.current.automatic; live.current.automatic = false; setAutomatic(false);
+            try { await cancel(); await invoke('pause_recording'); setPhase('采集已暂停'); }
+            catch (e) { setPhase('暂停未确认 · 自动回答保持关闭'); throw e; }
+          }
         });
     }
   });
@@ -698,11 +710,12 @@ export default function InterviewPage() {
         <Button variant="outline" hidden={!recording.isRecording} disabled={!recording.isRecording || busy} onClick={()=>sendCommand('stop')}><Square className="h-4 w-4 mr-1" />停止采集</Button>
 
         </div>
-      {healthView.paused && <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm space-y-2"><p>{healthView.message}</p><Button size="sm" variant="outline" disabled={busy || !cloudAllowed || !recording.isActive || !healthView.canResume} onClick={() => {
-        if (!cloudAllowed || !recording.isActive || !audioHealth.current.resume()) return;
+      {healthView.paused && <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm space-y-2"><p>{healthView.message}</p><Button size="sm" variant="outline" disabled={busy || !recording.isActive || !healthView.canResume} onClick={() => {
+        if (!recording.isActive || !audioHealth.current.resume()) return;
         utterances.current.clear(); setQueued(0); syncHealth();
-        live.current.automatic = true; setAutomatic(true); setPhase('监听已恢复 · 故障期间的发言可手动重问');
-      }}>确认声音恢复，继续自动回答</Button><p className="text-xs">请确认音量和字幕已恢复。故障前排队及故障期间的发言不会自动补发；可编辑后重问。仍异常时点击“停止采集”再开始。</p></div>}
+        const enable = healthResumeAutomatic.current && live.current.cloudAllowed && !!status?.key_configured;
+        live.current.automatic = enable; setAutomatic(enable); setPhase(listeningPhase(enable,status?.cloud_asr_mode==='aliyun',addressedOnly(meeting.current.current.mode)));
+      }}>{healthResumeAutomatic.current && cloudAllowed && status?.key_configured ? '确认声音恢复，继续自动回答' : '确认声音恢复，继续转写'}</Button><p className="text-xs">请确认音量和字幕已恢复。故障前排队及故障期间的发言不会自动补发；可编辑后重问。仍异常时点击“停止采集”再开始。</p></div>}
       {healthView.advisory && <p role="status" className="text-xs text-amber-800">{healthView.advisory}</p>}
       <div className="grid gap-2" hidden={!recording.isActive && !generating && !queued && !frozen}><Button size="sm" variant={frozen ? 'default' : 'outline'} onClick={() => { const next = !frozen; setFrozen(next); if (next) { void cancel().catch(error); setPhase('我在回答 · 已冻结'); } }}>{frozen ? '解除冻结' : '我在回答 / 冻结'}</Button><Button size="sm" variant="outline" disabled={!generating && !queued} onClick={()=>sendCommand('cancel')}>取消当前与队列</Button></div>
         <Button className="w-full" variant="outline" title={status?.vision_ready ? `向 ${status.vision_model} 发送所选整屏和近期对话` : "打开视觉模型配置"} disabled={busy||!!editingSelfId} onClick={()=>void submit(question.trim()||'请识别屏幕中的完整题目，并结合本次双方对话提供答案。',false,undefined,true)}><Camera size={16} aria-hidden="true"/>截屏并回答</Button>

@@ -26,7 +26,7 @@ python3 scripts/package-tingxian-macos.py \
 
 ## PRD v2 Mac 预览配置
 
-`frontend/src-tauri/tauri.macos-preview.conf.json` 将 Mac 测试包标为0.7.0-beta.3，独立于 Windows 配置和原0.6.5默认配置。此版另修复系统声音模式仍进行麦克风预检、唤醒阶段探测无关设备的问题；真实收音仍须单独验收。依赖按根说明安装后，在 frontend 运行：
+`frontend/src-tauri/tauri.macos-preview.conf.json` 将 Mac 测试包标为0.7.0-beta.6，独立于 Windows 配置和原0.6.5默认配置。此版合入背景任务用量/进程恢复、异常流式结束判断，以及暂停/恢复状态和授权保持修复。真实收音、模型质量和长会议仍须单独验收。依赖按根说明安装后，在 frontend 运行：
 
 ```bash
 export CARGO_TARGET_DIR=/private/tmp/tingxian-build-target
