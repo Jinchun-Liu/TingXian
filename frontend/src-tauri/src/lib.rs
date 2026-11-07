@@ -475,6 +475,7 @@ pub mod interview_history;
 pub mod interview_exit;
 mod interview_jobs;
 mod interview_screenshot;
+mod interview_screenshot_preview;
 mod interview_windows;
 pub mod interview_sessions;
 pub mod interview_recovery;
@@ -670,6 +671,9 @@ pub fn run() {
             interview::interview_preferences_save,
             interview::interview_screenshot_answer_start,
             interview_screenshot::interview_screenshot_displays,
+            interview_screenshot_preview::interview_screenshot_preview_create,
+            interview_screenshot_preview::interview_screenshot_preview_discard,
+            interview_screenshot_preview::interview_screenshot_preview_answer_start,
             interview::interview_request_config_get,
             interview::interview_providers_get,
             interview::interview_providers_save,

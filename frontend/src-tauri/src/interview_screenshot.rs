@@ -6,8 +6,21 @@ use tokio_util::sync::CancellationToken;
 #[path = "interview_screenshot_windows.rs"]
 mod windows;
 
-#[derive(Serialize)]
-pub struct Display { id:u32, width:u64, height:u64, primary:bool }
+#[derive(Clone,Debug,PartialEq,Eq,Serialize)]
+pub struct Display { pub(crate) id:u32, pub(crate) width:u64, pub(crate) height:u64, pub(crate) primary:bool }
+
+pub(crate) fn capture_permission_granted()->bool {
+    #[cfg(target_os="macos")]
+    {
+        #[link(name="CoreGraphics",kind="framework")]
+        extern "C" {fn CGPreflightScreenCaptureAccess()->bool;}
+        // Read-only preflight. A newly granted permission still requires a
+        // preview confirmation before the optional fast-send path is reused.
+        unsafe {CGPreflightScreenCaptureAccess()}
+    }
+    #[cfg(not(target_os="macos"))]
+    {true}
+}
 
 #[tauri::command]
 pub fn interview_screenshot_displays()->Result<Vec<Display>,String> {
@@ -72,7 +85,13 @@ async fn capture_mac(display_id:Option<u32>)->Result<Vec<u8>,String> {
     let content=sc::ShareableContent::current().await.map_err(|_|"无法获取屏幕内容，请在 macOS 系统设置 → 隐私与安全性 → 屏幕录制中允许听弦，然后重启应用".to_string())?;
     let displays=content.displays();
     let display=displays.iter().find(|d|d.display_id().0==id).ok_or("没有找到所选屏幕，请检查屏幕录制权限或刷新列表")?;
-    let filter=sc::ContentFilter::with_display_excluding_windows(&display,&ns::Array::new());
+    // The preview dialog must not cover the question in its own screenshot.
+    // This only excludes our windows from this explicit capture; it does not
+    // hide the app from any other program's screen sharing.
+    let windows=content.windows();
+    let own_windows:Vec<_>=windows.iter().filter(|w|w.owning_app().is_some_and(|a|a.process_id()==std::process::id() as i32)).collect();
+    let excluded=ns::Array::from_slice(&own_windows);
+    let filter=sc::ContentFilter::with_display_excluding_windows(&display,&excluded);
     let mut cfg=sc::StreamCfg::new();cfg.set_width(width);cfg.set_height(height);cfg.set_shows_cursor(false);cfg.set_scales_to_fit(true);
     let image=sc::ScreenshotManager::capture_image(&filter,&cfg).await.map_err(|_|"屏幕捕获失败，请检查屏幕录制权限后重试".to_string())?;
     let mut data=cf::DataMut::with_capacity(0);

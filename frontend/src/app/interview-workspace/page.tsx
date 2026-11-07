@@ -23,6 +23,7 @@ import { ConnectionCheck } from '@/components/interview/ConnectionCheck';
 import {AnswerConversation} from '@/components/interview/AnswerConversation';
 import {AnswerRequests,answerPresentation,presentationDefaults,readPresentationPreferences,PresentationPreferences} from '@/lib/interview-presentation';
 import {QuestionComposer} from '@/components/interview/QuestionComposer';
+import {ScreenshotControl,PreparedScreenshot,ScreenshotHandle} from '@/components/interview/ScreenshotControl';
 import { interviewExit } from '@/lib/interview-exit';
 import { DocumentReview } from '@/components/interview/DocumentReview';
 import { FactReview } from '@/components/interview/FactReview';
@@ -44,13 +45,12 @@ import { indexedDBService } from '@/services/indexedDBService';
 import { LatencyRecord, TurnLatency, latencyLabel } from '@/lib/interview-latency';
 import { AudioFault, InterviewAudioHealth } from '@/lib/interview-health';
 import { MicrophoneState, MicrophoneTranscriptGate, stopInterviewAudio, listeningPhase } from '@/lib/interview-audio';
-import { AudioLines, History as HistoryIcon, ChevronRight, Camera, AppWindow, Columns2, Play, Pause, Square, Search, Snowflake, FolderOpen, Settings2, FileText, Trash2 } from 'lucide-react';
+import { AudioLines, History as HistoryIcon, ChevronRight, AppWindow, Columns2, Play, Pause, Square, Search, Snowflake, FolderOpen, Settings2, FileText, Trash2 } from 'lucide-react';
 
 
 type File = { path: string; bytes: number; eligible: boolean; reason: string };
 type Choice = { path: string; kind: string; allow_external: boolean; structured?: StructuredSelection | null };
 type Status = { cloud_asr_mode?:'local'|'aliyun'; workspace_ready?:boolean; key_configured: boolean; model?: string; answer_capacity?:number; vision_ready?:boolean; vision_model?:string; root: string; suggested_root: string; index_version: string; index_documents: number; index_chunks: number; documents: DocumentRecord[]; architecture: string; memory_bytes: number; system_version: string; aliases: string; facts: string; fact_card?: FactCard; whisper_model: string | null; session_active: boolean };
-type ScreenDisplay={id:number;width:number;height:number;primary:boolean};
 
 type ImportEvent = { import_id: string; phase: string; completed: number; total: number; path: string | null; report: unknown; message: string | null };
 type ImportView = ImportEvent & { ready: boolean; cancelPending: boolean };
@@ -144,8 +144,7 @@ export default function InterviewPage() {
   const [confirmedAnswer, setConfirmedAnswer] = useState('');
   const requests=useRef(new AnswerRequests());
   const capacity=useRef(1);
-  const [screenDisplays,setScreenDisplays]=useState<ScreenDisplay[]>([]);
-  const [screenId,setScreenId]=useState<number|null>(null);
+  const screenshotControl=useRef<ScreenshotHandle>(null);
   const [preferences,setPreferences]=useState<PresentationPreferences>(presentationDefaults);
   const [split,setSplit]=useState(false),[windowChanging,setWindowChanging]=useState(false);
   const presentationEpoch=useRef(''),presentationVersion=useRef(0);
@@ -245,6 +244,7 @@ export default function InterviewPage() {
     } catch (e) { if (importId.current === id) { setImportJob(job => job && { ...job, cancelPending: false }); error(e); } }
   };
   const cancel = useCallback(() => {
+    screenshotControl.current?.invalidate();
     if(cancellation.current)return cancellation.current;
     const running=requests.current.clear();
     const cancelledIds=new Set(running.map(j=>j.id));
@@ -261,7 +261,7 @@ export default function InterviewPage() {
     }).finally(()=>{cancellation.current=null;setCancellationPending(false);});
     cancellation.current=pending;return pending;
   }, []);
-  const submit = useCallback(async (q: string, automated = false, turnId?: string, screenshot = false) => {
+  const submit = useCallback(async (q: string, automated = false, turnId?: string, screenshot?: PreparedScreenshot) => {
     if(interviewExit.pending())return;
     if (operationBusyRef.current || connectionCheckingRef.current || cancellation.current || importId.current || clearingIndex.current || sessionOperation.current) { setNotice('请等待当前操作完成后再提交。'); return; }
     if (!q.trim()) return;
@@ -279,7 +279,7 @@ export default function InterviewPage() {
     if(screenshot&&!status?.vision_ready){setSavedSessions(null);setSettingsTab('模型接口');setOpenBackground(false);setOpenVision(true);setSettings(true);setNotice('请先在“截屏视觉模型”中配置支持图片的接口、模型和 Key。尚未截屏或发送。');return;}
     const reserved=usageLedger.current.snapshot().requests.filter(r=>!r.accepted&&r.state==='pending').length;
     if (usageLedger.current.acceptedCalls()+reserved >= live.current.limit) { setNotice('已达到本次会话请求软上限，可手动增加 20 次。'); return; }
-    const id=turnId||crypto.randomUUID();
+    const id=screenshot?.context.questionId||turnId||crypto.randomUUID();
     const revision=requests.current.begin(id,screenshot?1:capacity.current,screenshot?'vision':'text');
     if(revision===null){setNotice('回答通道正在使用，请稍后提交；当前输入保留。');return;}
     setFrozen(false);
@@ -291,21 +291,25 @@ export default function InterviewPage() {
       const next: Turn = { meeting_mode:meeting.current.current.mode, role: automated ? 'remote' : 'manual', id, question: q, suggestion: '', confirmed_answer: null, status: 'generating', sources: [], time: new Date().toLocaleTimeString('zh-CN'), timing: latencyLabel(trace.snapshot()), latency: trace.snapshot() };
       return h.some(t=>t.id===id)?h.map(t=>t.id===id?{...next,time:t.time}:t):[...h,next];
     });
-    if (!automated) setQuestion('');
+    if (!automated && !screenshot) setQuestion('');
     setAnswer(''); setSources([]); setConflicts([]); setNotice(''); setAnswerWarning(''); setTiming(''); setUsage('未知'); setGenerating(true); setPhase('检索与生成中');
     try {
       await memory.current.ensure(spoken.current);await memory.current.flush();
-      await invoke(screenshot?'interview_screenshot_answer_start':'answer_start', { answerFirst:true, questionId: id, revision, meetingMode:meeting.current.current.mode, question: q, history: historyRef.current.filter(t => t.status === 'done' && t.role !== 'self').slice(-3).map(t => ({ question: answerPresentation(t.suggestion,true,t.question).question.slice(0,1500), confirmed_answer: t.confirmed_answer })), dialogue: spoken.current.slice(-12).map(t => ({ source: t.source, text: t.text })),...(screenshot?{displayId:screenId}:{}) });
+      if(screenshot){
+        await invoke('interview_screenshot_preview_answer_start',{context:screenshot.context,previewId:screenshot.image.preview_id,revision});
+      }else await invoke('answer_start', { answerFirst:true, questionId: id, revision, meetingMode:meeting.current.current.mode, question: q, history: historyRef.current.filter(t => t.status === 'done' && t.role !== 'self').slice(-3).map(t => ({ question: answerPresentation(t.suggestion,true,t.question).question.slice(0,1500), confirmed_answer: t.confirmed_answer })), dialogue: spoken.current.slice(-12).map(t => ({ source: t.source, text: t.text })) });
       if(usageLedger.current.accept(id,revision)){setCalls(n=>n+1);setUsageVersion(v=>v+1);}
       if (requests.current.get(id,revision)) setStatus(s => s ? { ...s, session_active: true } : s);
+      return true;
     } catch (e) {
       if(usageLedger.current.finish(id,revision,'error'))setUsageVersion(v=>v+1);
       if(requests.current.finish(id,revision)){
         trace.end('error');setHistory(h=>h.map(t=>t.id===id?{...t,status:'error',latency:trace.snapshot()}:t));
         error(e);setGenerating(requests.current.size>0);setPhase('本题请求失败 · 其他回答继续');
       }
+      if(screenshot)throw e;
     }
-  }, [cloudAllowed, calls, limit, history, editingSelfId, error, status?.vision_ready, screenId]);
+  }, [cloudAllowed, calls, limit, history, editingSelfId, error, status?.vision_ready]);
   submitRef.current = turn => void submit(turn.text, true, turn.id);
 
   const editTurn=useCallback((id:string)=>{
@@ -410,6 +414,7 @@ export default function InterviewPage() {
           ? previous : [...previous.filter(t=>!sameCapturedUtterance(t,event)),event].slice(-60));
         return;
       }
+      if(event.source==='System')screenshotControl.current?.invalidate('对方发言已更新，旧截图未发送，请重新截取。');
       memory.current.dispatch(async()=>{
       await memory.current.transcript(event);
       setTranscripts(previous => [...previous.filter(t => (t.sequence_id !== event.sequence_id || t.capture_session !== event.capture_session) && !(t.is_partial && sameCapturedUtterance(t,event))), event].slice(-60));
@@ -742,17 +747,15 @@ export default function InterviewPage() {
       }}>{healthResumeAutomatic.current && cloudAllowed && status?.key_configured ? '确认声音恢复，继续自动回答' : '确认声音恢复，继续转写'}</Button><p className="text-xs">请确认音量和字幕已恢复。故障前排队及故障期间的发言不会自动补发；可编辑后重问。仍异常时点击“停止采集”再开始。</p></div>}
       {healthView.advisory && <p role="status" className="text-xs text-amber-800">{healthView.advisory}</p>}
       <div className="grid gap-2" hidden={!recording.isActive && !generating && !queued && !frozen}><Button size="sm" variant={frozen ? 'default' : 'outline'} onClick={() => { const next = !frozen; setFrozen(next); if (next) { void cancel().catch(error); setPhase('我在回答 · 已冻结'); } }}>{frozen ? '解除冻结' : '我在回答 / 冻结'}</Button><Button size="sm" variant="outline" disabled={!generating && !queued} onClick={()=>sendCommand('cancel')}>取消当前与队列</Button></div>
-        <Button className="w-full" variant="outline" title={status?.vision_ready ? `向 ${status.vision_model} 发送所选整屏和近期对话` : "打开视觉模型配置"} disabled={busy||!!editingSelfId} onClick={()=>void submit(question.trim()||'请识别屏幕中的完整题目，并结合本次双方对话提供答案。',false,undefined,true)}><Camera size={16} aria-hidden="true"/>截屏并回答</Button>
+        <ScreenshotControl ref={screenshotControl} disabled={busy||!!editingSelfId} canSend={cloudAllowed&&!!status?.vision_ready} contextKey={JSON.stringify([question,meeting.setup.mode,feedGeneration])} onNotice={setNotice}
+          makeContext={()=>({questionId:crypto.randomUUID(),question:question.trim()||'请识别屏幕中的完整题目，并结合本次双方对话提供答案。',history:historyRef.current.filter(t=>t.status==='done'&&t.role!=='self').slice(-3).map(t=>({question:answerPresentation(t.suggestion,true,t.question).question.slice(0,1500),confirmed_answer:t.confirmed_answer})),dialogue:spoken.current.slice(-12).map(t=>({source:t.source,text:t.text})),meetingMode:meeting.current.current.mode})}
+          onSend={async capture=>!!(await submit(capture.context.question,false,undefined,capture))}/>
 
       </section>
       <CallNotice text={split ? meeting.notice : null}/><div className="desk-tools">
         <details className="desk-fold"><summary>屏幕与显示</summary><div>
         <label className="block">对话字号<ChoiceMenu aria-label="对话字号" className="ml-2" value={preferences.fontSize} onValueChange={nextValue =>changePreferences({...preferences,fontSize:nextValue as PresentationPreferences['fontSize']})}><ChoiceOption value="small">小</ChoiceOption><ChoiceOption value="medium">中</ChoiceOption><ChoiceOption value="large">大</ChoiceOption></ChoiceMenu></label>
         <label className="block"><input type="checkbox" checked={preferences.showSelf} onChange={e=>changePreferences({...preferences,showSelf:e.target.checked})} /> 展示我的发言</label>
-        <label className="block">截屏范围<ChoiceMenu aria-label="截屏范围" className="w-full" value={screenId??''} onValueChange={nextValue =>setScreenId(nextValue?Number(nextValue):null)}><ChoiceOption value="">当前主屏幕（完整屏幕）</ChoiceOption>{screenDisplays.map((d,i)=><ChoiceOption key={d.id} value={d.id}>屏幕 {i+1}{d.primary?' · 主屏':''} · {d.width}×{d.height}</ChoiceOption>)}</ChoiceMenu></label>
-        <Button size="sm" variant="outline" disabled={busy} onClick={async()=>{try{const screens=await invoke<ScreenDisplay[]>('interview_screenshot_displays');setScreenDisplays(screens);if(screenId&&!screens.some(d=>d.id===screenId))setScreenId(null);}catch(e){error(e);}}}>刷新屏幕列表</Button>
-
-          <small>截屏会将所选整屏和近期对话发送至视觉模型。</small>
         </div></details>
         {history.length>0&&<details className="desk-fold"><summary>本次会话</summary><div><Button variant="outline" size="sm" disabled={busy || !history.length} onClick={()=>run(saveSessionSnapshot)}>保存当前会话到本机</Button><Button variant="outline" size="sm" onClick={exportSession}>导出本次记录</Button><Button variant="outline" size="sm" disabled={busy || !history.length} onClick={end}>结束会话并保留历史</Button></div></details>}
         <details className="desk-fold"><summary>连接与用量</summary><div>

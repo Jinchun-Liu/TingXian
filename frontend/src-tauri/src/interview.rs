@@ -39,6 +39,7 @@ pub struct InterviewState {
     pub(crate) session: AtomicBool,
     pub(crate) background:crate::interview_background::Work,
     pub(crate) memory:crate::interview_memory::Work,
+    pub(crate) screenshots:Arc<crate::interview_screenshot_preview::PreviewStore>,
     pub(crate) cloud_asr:crate::interview_cloud_asr::Credentials,
     key: Mutex<Option<String>>,
     connection: crate::interview_connection::ConnectionState,
@@ -74,7 +75,7 @@ impl InterviewState {
         for p in &config.answers {if p.enabled && (p.accepts_empty_key() || !self.provider_key(p).await.is_empty()){ready.push(p.id.clone());}}
         ready
     }
-    async fn cancel(&self) { self.active.cancel_all(); self.connection.cancel(None); self.memory.cancel(); }
+    async fn cancel(&self) { self.screenshots.clear(None); self.active.cancel_all(); self.connection.cancel(None); self.memory.cancel(); }
     async fn cancel_answers(&self)->Result<(),String> {
         // Interrupt a connection probe before waiting for its lifecycle lock.
         self.cancel().await;
@@ -676,9 +677,10 @@ pub async fn answer_start(app:tauri::AppHandle,state:State<'_,InterviewState>,qu
 #[tauri::command]
 pub async fn interview_screenshot_answer_start(app:tauri::AppHandle,window:tauri::WebviewWindow,state:State<'_,InterviewState>,question_id:String,revision:u32,question:String,history:Vec<Turn>,dialogue:Option<Vec<interview_core::SpokenTurn>>,display_id:Option<u32>,meeting_mode:Option<String>)->Result<(),String> {
     if window.label()!="main" {return Err("请在主窗口点击截屏并回答".into());}
-    start_answer(app,&state,question_id,revision,question,history,dialogue,Some(display_id),true,meeting_mode).await
+    start_answer(app,&state,question_id,revision,question,history,dialogue,Some(AnswerImage::Capture(display_id)),true,meeting_mode).await
 }
-async fn start_answer(app:tauri::AppHandle,state:&InterviewState,question_id:String,revision:u32,question:String,history:Vec<Turn>,dialogue:Option<Vec<interview_core::SpokenTurn>>,screenshot:Option<Option<u32>>,answer_first:bool,meeting_mode:Option<String>)->Result<(),String> {
+pub(crate) enum AnswerImage {Capture(Option<u32>),Preview(String,String),Bytes(Vec<u8>)}
+pub(crate) async fn start_answer<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:&InterviewState,question_id:String,revision:u32,question:String,history:Vec<Turn>,dialogue:Option<Vec<interview_core::SpokenTurn>>,screenshot:Option<AnswerImage>,answer_first:bool,meeting_mode:Option<String>)->Result<(),String> {
     let meeting_instruction=match meeting_mode.as_deref().unwrap_or("pair") {
         "pair"=>"",
         "panel"=>"多对一面试。多位提问者可能连续补充条件，围绕当前完整问题回应，不推断评委身份。",
@@ -699,8 +701,16 @@ async fn start_answer(app:tauri::AppHandle,state:&InterviewState,question_id:Str
         vec!["vision".to_string()]
     }else if !answer_first {if state.api_key().await.is_empty(){vec![]}else{vec!["answer-1".into()]}}else{state.ready_profiles(&providers).await};
     if ready.is_empty(){return Err("尚未配置启用接口的 API Key；可使用本地检索".into());}
+    if matches!(&screenshot,Some(AnswerImage::Preview(..))) && !crate::interview_screenshot::capture_permission_granted() {
+        state.screenshots.clear(Some(&question_id));return Err("屏幕录制权限已变化，请重新授权并预览".into());
+    }
     let lease=state.active.reserve(&question_id,revision,&ready)?;
     let profile=providers.answers.iter().chain(std::iter::once(&providers.vision)).find(|p|p.id==lease.profile).unwrap().clone();
+    let screenshot=match screenshot {
+        Some(AnswerImage::Preview(id,hash))=>Some(AnswerImage::Bytes(state.screenshots.take(&id,&hash,&crate::interview_screenshot_preview::topology()?,&crate::interview_screenshot_preview::provider_hash(&profile)?,std::time::Instant::now())?)),
+        other=>other,
+    };
+    let preview_context=matches!(&screenshot,Some(AnswerImage::Bytes(_)));
     state.memory.preempt(&profile.endpoint);
     let key=if answer_first{state.provider_key(&profile).await}else{state.api_key().await};
     // Acquire before releasing lifecycle, so clear/exit cannot overtake a
@@ -716,7 +726,12 @@ async fn start_answer(app:tauri::AppHandle,state:&InterviewState,question_id:Str
         let result=async {
             // Capture immediately after the explicit click, before retrieval.
             // Only this local future owns image bytes; no event/history contains them.
-            let screenshot=if let Some(display_id)=screenshot {Some(crate::interview_screenshot::capture(display_id,cancel.clone()).await?)}else{None};
+            let screenshot=match screenshot {
+                Some(AnswerImage::Capture(display_id))=>Some(crate::interview_screenshot::capture(display_id,cancel.clone()).await?),
+                Some(AnswerImage::Bytes(png))=>Some(png),
+                Some(AnswerImage::Preview(..))=>return Err("截图尚未核对，未发送".to_string()),
+                None=>None,
+            };
             if cancel.is_cancelled(){return Err("已取消".to_string());}
             let started=std::time::Instant::now();
             let aliases=index.request_aliases().await?;
@@ -734,7 +749,9 @@ async fn start_answer(app:tauri::AppHandle,state:&InterviewState,question_id:Str
                 }
             }
             let remembered_spoken:Vec<_>=memory_context.as_ref().into_iter().flat_map(|(_,_,w,_)|w.recent_events.iter()).filter(|e|e.closed).filter_map(|e|match e.kind{interview_core::session_memory::EventKind::RemoteSpeech=>Some(interview_core::SpokenTurn{source:"System".into(),text:e.text.clone()}),interview_core::session_memory::EventKind::SelfSpeech|interview_core::session_memory::EventKind::ConfirmedSelf=>Some(interview_core::SpokenTurn{source:"Microphone".into(),text:e.text.clone()}),_=>None}).collect();
-            let spoken=if remembered_spoken.is_empty(){dialogue.unwrap_or_default()}else{remembered_spoken};
+            // A preview's recent dialogue belongs to the question frozen at
+            // capture, not to a different question that arrived while reviewing.
+            let spoken=if preview_context || remembered_spoken.is_empty(){dialogue.unwrap_or_default()}else{remembered_spoken};
             let mut messages=interview_core::messages_with_preferences(&question,&facts,&history,&evidence,&spoken,&prefs)?;
             if let Some((_,_,memory,_))=&memory_context {
                 interview_core::session_memory::append_workset(&mut messages,memory)?;

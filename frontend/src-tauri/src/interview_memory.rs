@@ -178,6 +178,7 @@ pub async fn interview_memory_status<R:tauri::Runtime>(window:WebviewWindow<R>,s
 pub async fn interview_memory_restore<R:tauri::Runtime>(window:WebviewWindow<R>,state:State<'_,InterviewState>,reference:checkpoint::Boundary)->Result<Handle,String>{
     owner(&window)?;crate::interview_exit::ensure_not_exiting(window.app_handle())?;state.memory.cancel();let _lifecycle=state.lifecycle.lock().await;
     if state.session.load(std::sync::atomic::Ordering::SeqCst)||crate::audio::recording_commands::is_recording().await{return Err("请结束当前会话后恢复会话记忆".into());}
+    state.screenshots.clear(None);
     let network=state.source_network();let _network=tokio::time::timeout(std::time::Duration::from_secs(35),network.write()).await.map_err(|_|"旧请求仍在结束")?;
     let db=window.app_handle().state::<crate::state::AppState>();state.memory.restore(db.db_manager.pool(),state.index(window.app_handle()).await?,&reference).await
 }
