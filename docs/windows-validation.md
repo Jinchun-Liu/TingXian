@@ -1,7 +1,8 @@
 # Windows 验收与交接
 
 教育保存回执恢复的最新源码与合成结果见
-[本轮记录](education-save-recovery-validation-2026-11-07.md)，原生与包结果等待本轮 CI。
+[本轮记录](education-save-recovery-validation-2026-11-07.md)：`0527d2d` 的 Windows CI
+`42361975990` 已通过 56 项核心、4 项选定应用测试、构建、安装资源/离线自检和卸载保留。
 现有安装版和普通用户安装阻塞保持原状态。
 
 教育后续修复 `4820b38` 的历史题目重答/修订及保存恢复合成回归见
@@ -9,7 +10,7 @@
 本轮未构建安装包，现有安装版及原普通用户安装阻塞不变。下方安装 CI 属于旧提交。
 
 2026-11-07 教育增量独立分支见[EDU-M0/M1 验收](education-validation-2026-11-07.md)。
-最终源码 395b313 的 [Windows CI](https://github.com/Jinchun-Liu/TingXian/actions/runs/42349094148)
+此前源码 395b313 的 [Windows CI](https://github.com/Jinchun-Liu/TingXian/actions/runs/42349094148)
 已通过 25 组前端脚本、55 项核心与 4 项选定应用测试、CI 安装及离线自检。目标机安装版
 未更新；教育合成/源码检查不改变基础安装、安全软件、音频、真实模型和会议验收状态。
 

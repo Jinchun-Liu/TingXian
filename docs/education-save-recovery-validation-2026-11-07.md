@@ -40,8 +40,8 @@ D 盘当轮可用 106751467520 bytes。GPU 只读核对，未用于本轮测试�
   作答没有重复增加，错误提示清除。原多题重答、修订、重启恢复和退出保护仍通过。
 - 完整 25 个前端脚本、TypeScript、公开源码模式扫描、Windows 打包契约本机通过。
 - 新增 SQLite 原生回归：只读连接核对、未创建记录、已提交原文、被拒输入、
-  不同写入、倒退版本、损坏摘要与行数不增；本机未执行，等待 Windows CI。
-- 展示窗拒绝回执命令的实际 Tauri IPC 回归已补充，等待 Windows CI。
+  不同写入、倒退版本、损坏摘要、非法偏好与行数不增；本机未执行，最终 Windows CI 通过。
+- 展示窗拒绝回执命令的实际 Tauri IPC 回归在最终 Windows CI 通过。
 
 内容包及 rubric 保持两个 `1.0.0` draft；模型仅合成提供方，真实请求 0。
 OpenMAIC `5bd8cc840ee6397d063e1fe6aba974b9f0401593`、ai-teaching-skills
@@ -58,4 +58,42 @@ OpenMAIC `5bd8cc840ee6397d063e1fe6aba974b9f0401593`、ai-teaching-skills
 未重复相同失败。安装 GUI、真实模型质量、真人学习效果仍待测。
 完整 EDU-M0/M1 功能、许可和历史安装包见[首轮记录](education-validation-2026-11-07.md)；
 此前两轮修复见[接续记录](education-validation-2026-11-07-followup.md)。
-Windows CI 及本轮包状态将在取得结果后补充，不能借用旧提交成绩。
+## 最终 Windows CI
+
+最终源码 `0527d2d4594c26ddaafbd07e469c743c14dd1885` 已推送，
+[CI 42361975990](https://github.com/Jinchun-Liu/TingXian/actions/runs/42361975990) 全部成功，
+日志 checkout SHA 与源码一致。之后的文档提交不改变构建源码。
+
+- 25 个前端脚本（含 17 组教育契约和实际 React 面板）、TypeScript、源码扫描与打包契约通过。
+- Windows Rust 核心 56 项全部通过，零失败、零忽略、零过滤；其中含本轮 SQLite 回执/偏好回归。
+- 应用层选定 4 项通过：视频 IPC、窗口退出、教育主窗权限及全局取消排空。
+  教育组 2 项、过滤 299 项；没有声称运行全部应用测试。
+- CPU 安装器构建通过，模拟必需 DLL 写入失败时正确返回 2。
+- CI 实际安装后的 876 项资源摘要一致，离线 ASR/文档/媒体/数据库自检与合成卸载保留通过。
+
+此前 `c904ad8` 的 [CI 42359976983](https://github.com/Jinchun-Liu/TingXian/actions/runs/42359976983)
+也成功，未含后加的偏好校验，只保留为中间证据。最终版本的本机完整前端再次通过。
+两次 CI 都没有更新目标机安装版，不能解除原普通用户安装阻塞。
+
+本地证据 `ci-final.log`、`ci-final-jobs.json`、`ci-artifacts.json` 保留最终日志与工件元数据。
+
+## 已校验的 CI 预览包
+
+以下工件来自最终源码 `0527d2d`，仅为独立 CI 预览，不是新的稳定发布或覆盖旧资产。
+完整 ZIP 官方摘要、CRC、四段长度以及安装器自身 SHA256SUMS 均匹配；下载在 D 盘。
+
+| 项目 | 结果 |
+| --- | --- |
+| 工件 ID | `13570956299` |
+| ZIP 字节数 | `735212601` |
+| ZIP SHA-256 | `3becb928cc89079c73e8115d807d0bfa1d3be4c4adaf3d6e83b9db49a11307db` |
+| 安装器文件名 | `TingXian-0.7.0-beta.1-Windows-x64-setup.exe` |
+| 安装器字节数 | `735003257` |
+| 安装器 SHA-256 | `e26357ea72c61c3f57d301462c198a1ce43d2e54ce87eab3be32e68c20dab2a1` |
+| 数字签名 | `NotSigned`，未签名 CI 预览包 |
+| 本机安装/启动 | 未执行，现有应用和资料保留 |
+
+源码外位置 `artifacts/2026-11-07/education-m1-004/ci-0527d2d/`；
+`download-verification.json` 记录完整校验，数字签名状态另见 `installer-signature.json`。
+当前已完成源码、合成回归和 CI 安装层；目标机普通用户安装 GUI、真实模型与真人学习
+试点仍未验收。基础安装阻塞、可选眼部与数字人冻结边界不变，M2/M3/M4 未开始。
