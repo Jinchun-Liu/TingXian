@@ -1071,17 +1071,30 @@ mod preparation_ipc_tests {
         let index=tauri::async_runtime::block_on(interview_core::Index::open(&dir.join("synthetic.sqlite"))).unwrap();
         let state=InterviewState::default();assert!(state.index.set(index).is_ok());
         let app=tauri::test::mock_builder().manage(state).manage(crate::interview_exit::ExitState::default())
-            .invoke_handler(tauri::generate_handler![interview_background::background_preparation_export,interview_background::background_preparation_import,interview_background::background_preparation_save,interview_background::background_preparation_view])
+            .invoke_handler(tauri::generate_handler![interview_background::background_preparation_export,interview_background::background_preparation_import,interview_background::background_preparation_save,interview_background::background_preparation_view,interview_background::background_preparation_history,interview_background::background_preparation_version_view,interview_background::background_preparation_restore,interview_background::background_preparation_version_export])
             .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
         let main=tauri::WebviewWindowBuilder::new(&app,"main",Default::default()).build().unwrap();
         let display=tauri::WebviewWindowBuilder::new(&app,"display",Default::default()).build().unwrap();
         let invoke=|window:&tauri::WebviewWindow<tauri::test::MockRuntime>,cmd:&str,body:Value|tauri::test::get_ipc_response(window,tauri::webview::InvokeRequest {cmd:cmd.into(),callback:tauri::ipc::CallbackFn(0),error:tauri::ipc::CallbackFn(1),url:"tauri://localhost".parse().unwrap(),body:tauri::ipc::InvokeBody::Json(body),headers:Default::default(),invoke_key:tauri::test::INVOKE_KEY.to_string()});
-        let commands=[("background_preparation_export",json!({})),("background_preparation_import",json!({})),("background_preparation_view",json!({})),("background_preparation_save",json!({"candidate":{},"version":"0","previousHash":null}))];
+        let commands=[("background_preparation_export",json!({})),("background_preparation_import",json!({})),("background_preparation_view",json!({})),("background_preparation_save",json!({"candidate":{},"version":"0","previousHash":null})),("background_preparation_history",json!({"before":null})),("background_preparation_version_view",json!({"id":"a".repeat(64)})),("background_preparation_restore",json!({"id":"a".repeat(64),"version":"0","previousHash":null})),("background_preparation_version_export",json!({"id":"a".repeat(64)}))];
         for (cmd,body) in &commands{assert!(invoke(&display,cmd,body.clone()).is_err());}
         let state=app.state::<InterviewState>();state.session.store(true,Ordering::SeqCst);
         for (cmd,body) in &commands{assert!(invoke(&main,cmd,body.clone()).is_err());}state.session.store(false,Ordering::SeqCst);
         let lock=tauri::async_runtime::block_on(state.lifecycle.clone().lock_owned());for (cmd,body) in &commands{assert!(invoke(&main,cmd,body.clone()).is_err());}drop(lock);
         assert_eq!(invoke(&main,"background_preparation_view",json!({})).unwrap().deserialize::<Value>().unwrap(),Value::Null);
         assert!(invoke(&main,"background_preparation_save",commands[3].1.clone()).is_err());
+        assert!(invoke(&main,"background_preparation_history",json!({"before":"invalid"})).is_err());
+        let history=invoke(&main,"background_preparation_history",json!({"before":null})).unwrap().deserialize::<Value>().unwrap();assert!(history["rows"].as_array().unwrap().is_empty());
+        for (cmd,args) in &commands[5..]{assert!(invoke(&main,cmd,args.clone()).is_err(),"missing version must not be read, restored, or open an export dialog");}
+        // Old single-version records remain inspectable through the new IPC.
+        // Invalid/currently missing source bindings prevent restoration.
+        let raw=json!({"candidate":{"task":{"role":"合成测试岗位","organization":""},"candidate_hash":"b".repeat(64)},"source_names":{},"saved_at":"2026-11-07T00:00:00Z","index_version":"0"}).to_string();
+        let id=interview_core::digest(raw.as_bytes());let index=tauri::async_runtime::block_on(state.index(app.handle())).unwrap();
+        tauri::async_runtime::block_on(sqlx::query("INSERT INTO background_library VALUES('preparation',?)").bind(&raw).execute(&index.pool)).unwrap();
+        let history=invoke(&main,"background_preparation_history",json!({"before":null})).unwrap().deserialize::<Value>().unwrap();assert_eq!(history["legacy_current"]["id"],id);
+        let view=invoke(&main,"background_preparation_version_view",json!({"id":id})).unwrap().deserialize::<Value>().unwrap();assert_eq!(view["candidate"]["task"]["role"],"合成测试岗位");assert_eq!(view["source_binding_valid"],false);
+        assert!(invoke(&main,"background_preparation_restore",json!({"id":id,"version":"0","previousHash":id})).is_err());
+        let raw_after:String=tauri::async_runtime::block_on(sqlx::query_scalar("SELECT value FROM background_library WHERE key='preparation'").fetch_one(&index.pool)).unwrap();assert_eq!(raw_after,raw);
+        tauri::async_runtime::block_on(index.pool.close());
     }
 }

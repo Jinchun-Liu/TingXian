@@ -351,6 +351,34 @@ pub async fn background_preparation_view<R:tauri::Runtime>(window:Window<R>,app:
     state.index(&app).await?.preparation_view().await
 }
 #[tauri::command]
+pub async fn background_preparation_history<R:tauri::Runtime>(window:Window<R>,app:AppHandle<R>,state:State<'_,InterviewState>,before:Option<String>)->Result<Value,String>{
+    let _guard=guard(&window,&app,&state).await?;
+    state.index(&app).await?.preparation_history(before.as_deref()).await
+}
+#[tauri::command]
+pub async fn background_preparation_version_view<R:tauri::Runtime>(window:Window<R>,app:AppHandle<R>,state:State<'_,InterviewState>,id:String)->Result<Value,String>{
+    let _guard=guard(&window,&app,&state).await?;
+    state.index(&app).await?.preparation_version_view(&id).await
+}
+#[tauri::command]
+pub async fn background_preparation_restore<R:tauri::Runtime>(window:Window<R>,app:AppHandle<R>,state:State<'_,InterviewState>,id:String,version:String,previous_hash:Option<String>)->Result<Value,String>{
+    let _guard=guard(&window,&app,&state).await?;
+    if state.background.view()["busy"]==true{return Err("请等待背景整理完成".into());}
+    state.index(&app).await?.preparation_restore(&id,&version,previous_hash.as_deref()).await
+}
+#[tauri::command]
+pub async fn background_preparation_version_export<R:tauri::Runtime>(window:Window<R>,app:AppHandle<R>,state:State<'_,InterviewState>,id:String)->Result<Option<String>,String>{
+    let _guard=guard(&window,&app,&state).await?;
+    let candidate=state.index(&app).await?.preparation_version_export(&id).await?;
+    let picker=app.clone();
+    let folder=tauri::async_runtime::spawn_blocking(move||picker.dialog().file().blocking_pick_folder()).await.map_err(|e|e.to_string())?;
+    let Some(folder)=folder else{return Ok(None)};
+    let path=folder.into_path().map_err(|e|e.to_string())?.join(format!("TingXian-preparation-version-{}.json",uuid::Uuid::new_v4()));
+    let mut file=tokio::fs::OpenOptions::new().create_new(true).write(true).open(&path).await.map_err(|e|e.to_string())?;
+    file.write_all(&serde_json::to_vec_pretty(&candidate).map_err(|e|e.to_string())?).await.map_err(|e|e.to_string())?;
+    file.sync_all().await.map_err(|e|e.to_string())?;Ok(Some(path.to_string_lossy().into_owned()))
+}
+#[tauri::command]
 pub async fn background_settings_apply(window:Window,app:AppHandle,state:State<'_,InterviewState>,version:String,profile_hash:String,changes:Vec<interview_core::background_settings::Change>)->Result<(),String>{
     let _guard=guard(&window,&app,&state).await?;
     state.index(&app).await?.apply_background_settings(&version,&profile_hash,&changes).await?;Ok(())

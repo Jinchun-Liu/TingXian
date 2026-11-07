@@ -63,4 +63,4 @@ AI2 单次 60 秒、零自动网络重试。取消/429/超时/异常 finish_reas
 
 复现入口：`cargo run -p interview-core --example context_measure --offline`；`cargo run -p interview-core --example memory_persistence_measure --offline -- /new/path.sqlite`。后者拒绝覆盖已有文件。详细 V01–V20 与真实待运行门槛见[验证矩阵](context-compaction-validation.md)。本机报告、截图和日志另存交付目录；远端 CI 以当前提交实际状态另记，不能借用 C1 的成功状态。
 
-原任务岗位准备版本历史的桌面入口仍待接入。真实四角色推理、口语质量、费用、云 ASR、视觉、Windows/数字人与长会议等未验收项继续保留。
+原任务岗位准备版本历史的桌面入口随后已接入并通过无模型测试，见[桌面岗位准备](toolkit-preparation-desktop.md)；不改变本补充C5边界。真实四角色推理、口语质量、费用、云 ASR、视觉、Windows/数字人与长会议等未验收项继续保留。

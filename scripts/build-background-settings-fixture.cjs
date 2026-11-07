@@ -15,6 +15,8 @@ function fixture(versions,transport,preparation){
  const documents=versions?[{path:'.背景/'+source+'/项目说明.md',root:'背景资料库',hash:expected,kind:'personal',allow_external:false,chunks:1,metadata:{confirmation:'content_changed',validity:'content_changed',confirmed_at:null,valid_from:null,valid_until:null,updated_at:null}}]:[];
  const provider=id=>({id,name:'合成 '+id,enabled:id==='answer-1',endpoint:'https://synthetic.invalid/chat/completions',protocol:'openai',request:{model:'synthetic-model',connect_timeout_secs:5,first_answer_warning_secs:8,total_timeout_secs:20}});
  let providers={answers:[1,2,3].map(i=>provider('answer-'+i)),vision:provider('vision'),background:provider('background')};
+ let preparationCurrent='b'.repeat(64),restoredPreparation=null;
+ const preparationView=(id)=>({candidate:{...structuredClone(preparation),task:{...preparation.task,role:id===preparationCurrent&&restoredPreparation?restoredPreparation.task.role:id==='c'.repeat(64)?'来源已更新的旧准备':id==='a'.repeat(64)?'接口契约测试准备':preparation.task.role}},source_names:Object.fromEntries(preparation.source_records.flatMap(r=>r.source_refs.map(s=>[s.source_id,'合成项目.md']))),id,index_version:'8',previous_hash:preparationCurrent,current:id===preparationCurrent,saved_at:'2026-11-07T01:00:00Z',source_binding_valid:id!=='c'.repeat(64),local_only:true});
  window.isTauri=true;
  window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'},currentWebview:{label:'main'}},
   transformCallback(fn){callbacks.set(++sequence,fn);return sequence;},unregisterCallback(id){callbacks.delete(id);},
@@ -26,7 +28,17 @@ function fixture(versions,transport,preparation){
    if(preparation){
     if(cmd==='background_preparation_import')return {candidate:preparation,source_names:Object.fromEntries(preparation.source_records.flatMap(r=>r.source_refs.map(s=>[s.source_id,'合成项目.md']))),index_version:'8',previous_hash:null,source_binding_valid:true};
     if(cmd==='background_preparation_save')return;
-    if(cmd==='background_preparation_view')return {candidate:preparation,source_names:Object.fromEntries(preparation.source_records.flatMap(r=>r.source_refs.map(s=>[s.source_id,'合成项目.md']))),source_binding_valid:true,local_only:true};
+    if(cmd==='background_preparation_view')return preparationView(preparationCurrent);
+    if(cmd==='background_preparation_history'){
+     const row=(id,role)=>({id,role,organization:'合成组织',saved_at:'2026-11-07T01:00:00Z',current:id===preparationCurrent});
+     return {rows:args.before?[row('a'.repeat(64),'接口契约测试准备'),row('c'.repeat(64),'来源已更新的旧准备')]:[row(preparationCurrent,restoredPreparation?.task.role||preparation.task.role),...Array.from({length:19},(_,i)=>row((i+1).toString(16).padStart(64,'0'),'测试开发准备 '+(i+1)))],legacy_current:null,next_before:args.before?null:'00000000000000000003',bytes:28000,limit_bytes:268435456};
+    }
+    if(cmd==='background_preparation_version_view')return preparationView(args.id);
+    if(cmd==='background_preparation_version_export')return '/synthetic/preparation-version.json';
+    if(cmd==='background_preparation_restore'){
+     if(args.id==='c'.repeat(64)||args.version!=='8'||args.previousHash!==preparationCurrent)throw Error('来源或当前准备已变化');
+     restoredPreparation=preparationView(args.id).candidate;preparationCurrent='d'.repeat(64);return {...preparationView(preparationCurrent),restored_from:args.id};
+    }
     if(cmd==='background_preparation_export')return '/synthetic/preparation.json';
    }
    if(cmd==='background_changes')return [{id:source,name:'项目说明.md',state:'source_changed',identical_count:0,identical_sources:[]}];

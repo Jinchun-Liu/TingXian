@@ -9,7 +9,10 @@ type Story={id:string;title:string;activity:string;sections:Record<string,{text:
 type Consolidation={conflicts:{text:string;record_ids:string[]}[];parent_candidate:{stories:Story[]};parts:{input_hash:string;requirement_id:string|null;from_story_ids:string[];input_gaps:{id:string;text:string}[];omitted:{record_id:string;reason:string}[];gap_review:{id:string;status:string;reason:string;evidence_ids:string[]}[]}[]};
 type Candidate={candidate_hash:string;task:{role:string;organization:string};role_view:Mapping[];stories:Story[];source_records:Source[];execution_mode:string;consolidation?:Consolidation};
 type Preview={candidate:Candidate;source_names?:Record<string,string>;index_version:string;previous_hash:string|null;source_binding_valid:boolean};
-type Saved={candidate:Candidate;source_names?:Record<string,string>;source_binding_valid:boolean;local_only:true};
+type Saved={candidate:Candidate;source_names?:Record<string,string>;source_binding_valid:boolean;local_only:true;id?:string;current?:boolean;saved_at?:string;index_version?:string|null;previous_hash?:string|null;restored_from?:string|null};
+type HistoryRow={id:string;saved_at:string;role:string;organization:string;current:boolean};
+type HistoryPage={rows:HistoryRow[];legacy_current:HistoryRow|null;next_before:string|null;bytes:number;limit_bytes:number};
+const savedTime=(value:string)=>{const date=new Date(value);return Number.isNaN(date.getTime())?value:date.toLocaleString('zh-CN');};
 const sections=[['context','情境'],['task','任务'],['action','本人行动'],['result','结果'],['learning','复盘']] as const;
 const activity:Record<string,string>={unknown:'完成状态待核对',planned:'计划中',in_progress:'进行中',completed:'已完成'};
 function RequirementView({row,citations,locked}:{row:Mapping;citations:(ids:string[])=>ReactNode;locked:boolean}){
@@ -44,8 +47,9 @@ function ConsolidationView({candidate,citations,locked}:{candidate:Candidate;cit
 }
 export function PreparationLibrary({locked,revision,onBusy}:{locked:boolean;revision?:string;onBusy:(busy:boolean)=>void}){
   const [preview,setPreview]=useState<Preview|null>(null),[saved,setSaved]=useState<Saved|null>(null),[message,setMessage]=useState(''),[busy,setBusy]=useState(false),[page,setPage]=useState(0);
+  const [history,setHistory]=useState<HistoryPage|null>(null),[historyPage,setHistoryPage]=useState(0),[historyCursors,setHistoryCursors]=useState<(string|null)[]>([null]);
   const epoch=useRef(0),running=useRef(false),alive=useRef(false);
-  useEffect(()=>{alive.current=true;epoch.current++;setPreview(null);setSaved(null);setPage(0);setMessage('');return()=>{alive.current=false;epoch.current++;};},[revision]);
+  useEffect(()=>{alive.current=true;epoch.current++;setPreview(null);setSaved(null);setHistory(null);setHistoryPage(0);setHistoryCursors([null]);setPage(0);setMessage('');return()=>{alive.current=false;epoch.current++;};},[revision]);
   const op=async(fn:(current:()=>boolean)=>Promise<void>)=>{
     if(locked||running.current)return;running.current=true;setBusy(true);setMessage('');onBusy(true);
     const request=epoch.current,current=()=>alive.current&&request===epoch.current;
@@ -60,16 +64,39 @@ export function PreparationLibrary({locked,revision,onBusy}:{locked:boolean;revi
     {source.source_refs.map((ref,i)=><blockquote key={i} className="whitespace-pre-wrap break-words">{names[ref.source_id]||`来源 ${ref.source_id.slice(0,8)}`} · {ref.locator}<p>{ref.quote}</p></blockquote>)}
   </div>:null;})}</details>;
   const off=locked||busy;
+  const loadHistory=async(current:()=>boolean,before:string|null,target:number)=>{
+    const value=await invoke<HistoryPage>('background_preparation_history',{before});
+    if(current()){setHistory(value);setHistoryPage(target);setHistoryCursors(c=>[...c.slice(0,target),before]);}
+  };
+  const versions=history?[...(history.legacy_current?[history.legacy_current]:[]),...history.rows].filter((row,i,all)=>all.findIndex(r=>r.id===row.id)===i):[];
   return <details className="border-t pt-3"><summary className="font-medium">岗位准备</summary>
     <div className="flex flex-wrap gap-2 py-3">
       <Button size="sm" variant="outline" disabled={off} onClick={()=>void op(async current=>{const path=await invoke<string|null>('background_preparation_export');if(current()&&path)setMessage('已导出：'+path);})}>导出整理资料</Button>
       <Button size="sm" variant="outline" disabled={off} onClick={()=>void op(async current=>{const value=await invoke<Preview|null>('background_preparation_import');if(current()&&value){setPreview(value);setSaved(null);setPage(0);}})}>导入准备候选</Button>
       <Button size="sm" variant="outline" disabled={off||!!preview} onClick={()=>void op(async current=>{const value=await invoke<Saved|null>('background_preparation_view');if(current()){setSaved(value);setPage(0);if(!value)setMessage('还没有保存的岗位准备。');}})}>查看已保存</Button>
+      <Button size="sm" variant="outline" disabled={off||!!preview} onClick={()=>void op(current=>loadHistory(current,null,0))}>版本历史</Button>
     </div>
     <p className="text-xs text-slate-500">导出已整理且当前有效的资料，配合四角色工具生成候选后导回。候选仅保存在本机，不写入事实或自动用于答题。</p>
+    {history&&<section aria-label="岗位准备版本历史" className="my-3 rounded border p-3 space-y-3">
+      <div className="flex items-center justify-between gap-2"><h4 className="font-medium">版本历史</h4><Button size="sm" variant="ghost" disabled={off} onClick={()=>setHistory(null)}>收起历史</Button></div>
+      {!versions.length&&<p className="text-sm text-slate-500">暂无保存版本。</p>}
+      <div className="max-h-64 overflow-auto divide-y">{versions.map(row=><div key={row.id} className="flex items-center justify-between gap-3 py-2">
+        <div className="min-w-0"><p className="break-words text-sm">{row.role}{row.organization?` · ${row.organization}`:''}{row.current&&<span className="ml-2 text-xs text-slate-500">当前</span>}</p><time className="text-xs text-slate-500" dateTime={row.saved_at}>{savedTime(row.saved_at)}</time></div>
+        <Button size="sm" variant="outline" aria-label={`查看准备版本 ${row.id.slice(0,8)}`} disabled={off||!!preview} onClick={()=>void op(async current=>{const value=await invoke<Saved>('background_preparation_version_view',{id:row.id});if(current()){setSaved(value);setPage(0);}})}>查看</Button>
+      </div>)}</div>
+      {(historyPage>0||history.next_before)&&<div className="flex items-center justify-between gap-3"><Button size="sm" variant="outline" disabled={off||!!preview||historyPage===0} onClick={()=>void op(current=>loadHistory(current,historyCursors[historyPage-1],historyPage-1))}>较新版本</Button><span className="text-xs">第 {historyPage+1} 页</span><Button size="sm" variant="outline" disabled={off||!!preview||!history.next_before} onClick={()=>void op(current=>loadHistory(current,history.next_before,historyPage+1))}>更早版本</Button></div>}
+    </section>}
     {candidate&&<div className="space-y-3 pt-3">
       <div className="flex flex-wrap items-center justify-between gap-2"><h4 className="font-medium">{candidate.task.role}{candidate.task.organization?` · ${candidate.task.organization}`:''}</h4>{candidate.execution_mode==='fixture'&&<span className="text-xs">合成示例</span>}</div>
       {saved?.source_binding_valid===false&&<p role="alert" className="text-amber-700">来源已变化。以下是旧候选，请重新导出整理。</p>}
+      {saved?.id&&!preview&&<div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-slate-500">{saved.current?'当前版本':'历史版本'}{saved.saved_at?` · ${savedTime(saved.saved_at)}`:''}</span>
+        <Button size="sm" variant="outline" disabled={off} onClick={()=>void op(async current=>{const path=await invoke<string|null>('background_preparation_version_export',{id:saved.id});if(current()&&path)setMessage('已导出此版本：'+path);})}>导出此版本</Button>
+        {!saved.current&&<Button size="sm" variant="outline" disabled={off||!saved.source_binding_valid||!saved.index_version} onClick={()=>void op(async current=>{
+          const value=await invoke<Saved>('background_preparation_restore',{id:saved.id,version:saved.index_version,previousHash:saved.previous_hash??null});
+          if(current()){setSaved(value);setHistory(null);setPage(0);setMessage('已恢复为当前岗位准备，个人事实未改变。');}
+        })}>恢复为当前准备</Button>}
+      </div>}
       <div className="max-h-[70vh] space-y-4 overflow-auto pr-2">
         <ConsolidationView key={candidate.candidate_hash} candidate={candidate} citations={citations} locked={off}/>
         {candidate.role_view.map(row=><RequirementView key={candidate.candidate_hash+row.id} row={row} citations={citations} locked={off}/>)}
@@ -81,7 +108,7 @@ export function PreparationLibrary({locked,revision,onBusy}:{locked:boolean;revi
       {candidate.stories.length>10&&<div className="flex items-center gap-3"><Button size="sm" variant="outline" disabled={off||!page} onClick={()=>setPage(p=>p-1)}>上一页故事</Button><span>{page+1} / {Math.ceil(candidate.stories.length/10)}</span><Button size="sm" variant="outline" disabled={off||(page+1)*10>=candidate.stories.length} onClick={()=>setPage(p=>p+1)}>下一页故事</Button></div>}
       {preview&&<div className="flex flex-wrap gap-2"><Button size="sm" disabled={off} onClick={()=>void op(async current=>{
         await invoke('background_preparation_save',{candidate:preview.candidate,version:preview.index_version,previousHash:preview.previous_hash});
-        if(current()){setSaved({candidate:preview.candidate,source_names:preview.source_names,source_binding_valid:true,local_only:true});setPreview(null);setMessage('已保存岗位准备，个人事实未改变。');}
+        if(current()){setSaved({candidate:preview.candidate,source_names:preview.source_names,source_binding_valid:true,local_only:true});setPreview(null);setHistory(null);setMessage('已保存岗位准备，个人事实未改变。');}
       })}>保存岗位准备</Button><Button size="sm" variant="outline" disabled={off} onClick={()=>{setPreview(null);setPage(0);}}>取消导入</Button></div>}
     </div>}
     {message&&<p role="status" className="pt-2 break-words text-sm">{message}</p>}

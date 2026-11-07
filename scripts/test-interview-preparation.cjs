@@ -1,7 +1,9 @@
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
 const req=require('node:module').createRequire(path.resolve(__dirname,'../frontend/package.json'));
 const React=req('react'),{act,create}=req('react-test-renderer'),ts=req('typescript');
-const calls=[],busy=[];let gate=null,resolveGate,error=null,cancel=false;
+const calls=[],busy=[];let gate=null,resolveGate,error=null,cancel=false,restored=false;
+const oldId='a'.repeat(64),currentId='b'.repeat(64),staleId='c'.repeat(64),restoredId='d'.repeat(64);
+const row=(id,role)=>({id,role,organization:'合成组织',saved_at:'2026-11-07T01:00:00Z',current:id===(restored?restoredId:currentId)});
 const candidate={candidate_hash:'candidate',execution_mode:'fixture',task:{role:'测试开发',organization:'合成组织'},
  role_view:[{id:'req-1',text:'契约测试',matches:[{record_id:'r1',relevance:'supporting',reason:'只能证明本地测试'}],references:[],gaps:[{text:'生产经验待补'}]}],
  source_records:[{record_id:'r1',claim:'计划补充测试，未完成',claim_status:'user_asserted',activity_status:'planned',manual_revision:{basis:'本人核对'},source_refs:[{source_id:'source',locator:'行1',quote:'旧原文，尚未核实'}]}],
@@ -14,6 +16,11 @@ const invoke=async(command,args)=>{
  if(command==='background_preparation_view')return {candidate:structuredClone(candidate),source_binding_valid:false,local_only:true};
  if(command==='background_preparation_save')return;
  if(command==='background_preparation_export')return '/synthetic/preparation.json';
+ if(command==='background_preparation_history')return {rows:args.before?[row(oldId,'早期岗位')]:[row(restored?restoredId:currentId,'当前岗位'),row(staleId,'已失效岗位'),...Array.from({length:18},(_,i)=>row((i+1).toString(16).padStart(64,'0'),'历史岗位'+i))],legacy_current:null,next_before:args.before?null:'00000000000000000003',bytes:2048,limit_bytes:268435456};
+ if(command==='background_preparation_version_view')return {candidate:{...structuredClone(candidate),task:{role:args.id===staleId?'已失效岗位':'早期岗位',organization:'合成组织'}},id:args.id,current:false,saved_at:'2026-11-07T01:00:00Z',index_version:'8',previous_hash:currentId,source_binding_valid:args.id!==staleId,local_only:true};
+ if(command==='background_preparation_version_export')return cancel?null:'/synthetic/history-version.json';
+ if(command==='background_preparation_restore'){restored=true;return {candidate:structuredClone(candidate),id:restoredId,current:true,saved_at:'2026-11-08T01:00:00Z',index_version:'8',previous_hash:restoredId,restored_from:args.id,source_binding_valid:true,local_only:true};}
+
  throw Error('Unexpected command '+command);
 };
 const mod={exports:{}};
@@ -36,8 +43,18 @@ const text=n=>typeof n==='string'?n:(n?.children||[]).map(text).join('');
  gate=new Promise(r=>resolveGate=r);await act(async()=>{button('导入准备候选').props.onClick();button('导入准备候选').props.onClick();});const count=calls.length;
  await act(async()=>tree.update(React.createElement(Component,{...props,revision:'8'})));gate=null;await act(async()=>resolveGate());assert.equal(calls.length,count);assert(!button('保存岗位准备'),'old source import returned after refresh');
  await click('导入准备候选');await click('取消导入');assert(!button('保存岗位准备'));
- await act(async()=>tree.update(React.createElement(Component,{...props,locked:true,revision:'8'})));assert(tree.root.findAllByType('button').every(b=>b.props.disabled));
+ await click('版本历史');assert.equal(tree.root.findAllByType('button').filter(b=>b.props['aria-label']?.startsWith('查看准备版本')).length,20);
+ await click('更早版本');assert.equal(calls.at(-1).args.before,'00000000000000000003');assert(text(tree.toJSON()).includes('早期岗位'));assert(button('更早版本').props.disabled);
+ await click('查看');assert.equal(calls.at(-1).args.id,oldId);assert(button('恢复为当前准备'));assert(text(tree.toJSON()).includes('历史版本'));
+ error='当前准备已变化';await click('恢复为当前准备');assert(text(tree.toJSON()).includes('当前准备已变化'));assert(button('恢复为当前准备'),'failed restore must preserve selected history');error=null;
+ await click('恢复为当前准备');assert.deepEqual(calls.at(-1).args,{id:oldId,version:'8',previousHash:currentId});assert(!button('恢复为当前准备'));assert(text(tree.toJSON()).includes('已恢复为当前岗位准备，个人事实未改变'));
+ await click('版本历史');const selectStale=tree.root.findAllByType('button').find(b=>b.props['aria-label']===`查看准备版本 ${staleId.slice(0,8)}`);await act(async()=>selectStale.props.onClick());assert(button('恢复为当前准备').props.disabled);assert(text(tree.toJSON()).includes('来源已变化'));
+ cancel=true;await click('导出此版本');assert(!text(tree.toJSON()).includes('已导出此版本'));cancel=false;await click('导出此版本');assert.equal(calls.at(-1).args.id,staleId);assert(text(tree.toJSON()).includes('已导出此版本'));
+ await click('更早版本');await click('较新版本');assert.equal(calls.at(-1).args.before,null);assert(button('较新版本').props.disabled);
+ await click('导入准备候选');assert(button('版本历史').props.disabled);assert(tree.root.findAllByType('button').filter(b=>b.props['aria-label']?.startsWith('查看准备版本')).every(b=>b.props.disabled),'history cannot replace an unsaved import');await click('取消导入');
+ gate=new Promise(r=>resolveGate=r);await act(async()=>{button('版本历史').props.onClick();});await act(async()=>tree.update(React.createElement(Component,{...props,revision:'9'})));gate=null;await act(async()=>resolveGate());assert(!button('更早版本'),'late list cannot repopulate changed library');
+ await act(async()=>tree.update(React.createElement(Component,{...props,locked:true,revision:'9'})));assert(tree.root.findAllByType('button').every(b=>b.props.disabled));
  await act(async()=>tree.unmount());assert.equal(busy.at(-1),false);
  assert(calls.every(c=>c.command.startsWith('background_preparation_')),'candidate changed facts, providers or runtime');
- console.log('PASS preparation UI: explicit export/import, original and manual quotes, gaps, paging, save CAS, stale import/history, session lock, no fact/model commands');
+ console.log('PASS preparation UI: explicit export/import, original and manual quotes, gaps, paging, save/restore CAS, 20-item history paging, stale source export, late list isolation, unsaved draft protection, session lock, no fact/model commands');
 })().catch(e=>{console.error(e);process.exitCode=1;});
