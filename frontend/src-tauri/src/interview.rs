@@ -334,6 +334,30 @@ pub async fn profile_document_segments<R:tauri::Runtime>(app:tauri::AppHandle<R>
     state.index(&app).await?.document_segments(&path,&expected_root,&expected_hash).await
 }
 #[tauri::command]
+pub async fn profile_document_records<R:tauri::Runtime>(window:tauri::WebviewWindow<R>,app:tauri::AppHandle<R>,state:State<'_,InterviewState>,path:String,expected_root:String,expected_hash:String)->Result<Vec<interview_core::assertions::RecordSegment>,String> {
+    if window.label()!="main" {return Err("请在主窗口核对资料".into());}
+    state.index(&app).await?.document_records(&path,&expected_root,&expected_hash).await
+}
+#[tauri::command]
+pub async fn profile_record_revise<R:tauri::Runtime>(window:tauri::WebviewWindow<R>,app:tauri::AppHandle<R>,state:State<'_,InterviewState>,update:interview_core::assertions::AssertionUpdate)->Result<interview_core::assertions::AssertionRecord,String> {
+    if window.label()!="main" {return Err("请在主窗口修订资料".into());}
+    let _guard=state.lifecycle.try_lock().map_err(|_|"请先完成或取消当前资料操作")?;
+    crate::interview_exit::ensure_not_exiting(&app)?;
+    if state.session.load(Ordering::SeqCst) {return Err("请先结束会话再修订资料".into());}
+    let _network=state.network.try_write().map_err(|_|"请先取消在途回答再修订资料")?;
+    state.index(&app).await?.revise_record(update).await
+}
+#[tauri::command]
+pub async fn profile_record_history<R:tauri::Runtime>(window:tauri::WebviewWindow<R>,app:tauri::AppHandle<R>,state:State<'_,InterviewState>,source:interview_core::FactSourceRef,before:Option<i64>)->Result<interview_core::assertions::AssertionHistory,String> {
+    if window.label()!="main" {return Err("请在主窗口查看修订历史".into());}
+    state.index(&app).await?.assertion_history(source,before).await
+}
+#[tauri::command]
+pub async fn profile_document_revision_history<R:tauri::Runtime>(window:tauri::WebviewWindow<R>,app:tauri::AppHandle<R>,state:State<'_,InterviewState>,path:String,root:String,offset:i64)->Result<interview_core::assertions::DocumentAssertionHistory,String> {
+    if window.label()!="main" {return Err("请在主窗口查看修订历史".into());}
+    state.index(&app).await?.document_assertion_history(&path,&root,offset).await
+}
+#[tauri::command]
 pub async fn profile_index_clear<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>)->Result<crate::interview_index::IndexClearReport,String> {
     let _guard=state.lifecycle.try_lock().map_err(|_|"请先完成或取消当前操作，再清除资料索引")?;
     if state.session.load(Ordering::SeqCst) {return Err("会话期间索引已锁定，请先结束会话再清除索引".into());}
@@ -692,6 +716,26 @@ pub async fn profile_source_exclude<R:tauri::Runtime>(window:tauri::WebviewWindo
 #[cfg(test)]
 mod source_withdrawal_tests {
     use super::*;
+    #[tokio::test]
+    async fn interview_record_revision_is_main_only_session_locked_and_provenance_bound() {
+        let root=std::env::temp_dir().join(format!("tingxian-assertion-ipc-{}",uuid::Uuid::new_v4()));std::fs::create_dir(&root).unwrap();
+        let index=Index::open(&root.join("synthetic.sqlite")).await.unwrap();
+        sqlx::query("INSERT INTO documents VALUES('fictional.md','hash-A','personal',0)").execute(&index.pool).await.unwrap();
+        sqlx::query("INSERT INTO chunks VALUES('C1','fictional.md','行1','虚构原文')").execute(&index.pool).await.unwrap();
+        let state=InterviewState::default();assert!(state.index.set(index).is_ok());
+        let app=tauri::test::mock_builder().manage(state).build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let main=tauri::WebviewWindowBuilder::new(&app,"main",Default::default()).build().unwrap();
+        let display=tauri::WebviewWindowBuilder::new(&app,"display",Default::default()).build().unwrap();
+        let update=||interview_core::assertions::AssertionUpdate {source:interview_core::FactSourceRef{source_id:"C1".into(),path:"fictional.md".into(),root:"".into(),hash:"hash-A".into()},expected_revision:0,claim:"虚构计划尚未完成".into(),activity:interview_core::assertions::Activity::Planned,reason:"本人确认计划".into(),confirmed:true};
+        assert!(profile_record_revise(display,app.handle().clone(),app.state(),update()).await.is_err());
+        let state=app.state::<InterviewState>();state.session.store(true,Ordering::SeqCst);
+        assert!(profile_record_revise(main.clone(),app.handle().clone(),app.state(),update()).await.is_err());state.session.store(false,Ordering::SeqCst);
+        let lease=state.network.read().await;
+        assert!(profile_record_revise(main.clone(),app.handle().clone(),app.state(),update()).await.is_err());drop(lease);
+        let revised=profile_record_revise(main.clone(),app.handle().clone(),app.state(),update()).await.unwrap();assert_eq!(revised.source.text,"虚构原文");
+        assert!(profile_record_revise(main.clone(),app.handle().clone(),app.state(),update()).await.is_err());
+        let records=profile_document_records(main,app.handle().clone(),app.state(),"fictional.md".into(),"".into(),"hash-A".into()).await.unwrap();assert_eq!(records[0].user_assertion.as_ref().unwrap().revision,1);
+    }
     #[tokio::test]
     async fn interview_source_withdrawal_cancels_inflight_and_waits_before_acknowledging() {
         let root=std::env::temp_dir().join(format!("tingxian-source-policy-{}",uuid::Uuid::new_v4()));

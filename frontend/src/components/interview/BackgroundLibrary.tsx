@@ -7,7 +7,8 @@ import {BackgroundChanges} from '@/components/interview/BackgroundChanges';
 type Profile={overview:string;role:string;aliases:string};
 type Metrics={peak_prompt_tokens:number|null;sum_prompt_tokens?:number|null;sum_completion_tokens?:number|null;unknown_calls?:number;calls:number};
 type Draft={id:string;job?:string;profile:Profile;documents:{id:string;name:string;count:number}[];failures:[string,string][];metrics:Metrics|null};
-type Report={documents:number;chunks:number;baseline:number;full_budget:number;rag_budget:number;fits_full:boolean;version:string;state:null|{profile:Profile;share:boolean;metrics:Metrics|null};measurement:null|{version:string;model:string;chunks:number;metrics:Metrics}};
+type ContextEstimates={raw_extract_text_bytes:number;deduplicated_current_user_claim_bytes:number;manual_current_text_and_framing_bytes:number;manual_history_storage_bytes:number;fts_storage_bytes:number;summary_text_bytes:number;output_reserved_tokens:number};
+type Report={context_estimates?:ContextEstimates;documents:number;chunks:number;baseline:number;full_budget:number;rag_budget:number;fits_full:boolean;version:string;state:null|{profile:Profile;share:boolean;metrics:Metrics|null};measurement:null|{version:string;model:string;chunks:number;metrics:Metrics}};
 type Job={id:string;model?:string;status:string;total:number;completed:number;failed:number;skipped:number;unknown_calls:number;metrics?:Metrics};
 type JobFile={name:string;status:string;reason:string;done:number;total:number};
 type View={library:Report;model:string;ready:boolean;jobs?:Job[];work:{busy:boolean;progress:string;draft:Draft|null}};
@@ -103,9 +104,10 @@ export function BackgroundLibrary({locked,onBusy,onApplied,onModels,revision,act
         <dt>单次文字问答</dt><dd>≤ 约 {num(v.library.rag_budget)} tokens</dd>
         <dt>调试窗口</dt><dd>{num(v.library.baseline)} tokens（含输出）</dd>
       </dl>
+      {v.library.context_estimates&&<dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 border-t py-2">{Object.entries({'提取原文':v.library.context_estimates.raw_extract_text_bytes,'去重个人声明':v.library.context_estimates.deduplicated_current_user_claim_bytes,'当前修订与引用':v.library.context_estimates.manual_current_text_and_framing_bytes,'修订历史存储':v.library.context_estimates.manual_history_storage_bytes,'全文索引存储':v.library.context_estimates.fts_storage_bytes,'背景摘要':v.library.context_estimates.summary_text_bytes}).map(([label,bytes])=><div className="contents" key={label}><dt>{label}</dt><dd>{num(bytes)} B</dd></div>)}<dt>输出预留</dt><dd>{num(v.library.context_estimates.output_reserved_tokens)} tokens</dd></dl>}
       <p>{v.library.fits_full?'整库估算在 256K 基线以内。':'整库估算超过 256K，使用分批整理和检索问答。'} 单次文字问答建议选择至少 64K 的窗口。</p>
       <p className="mt-1 text-xs text-slate-500">本机按 UTF-8 字节保守估算，含提示和输出预留。模型计量会分批发送允许外发的片段并读取 API token 用量。</p>
-      {v.library.measurement&&<p>{v.library.measurement.version!==v.library.version?'上版资料库':'本版资料库'} · {v.library.measurement.model}：{num(v.library.measurement.metrics.sum_prompt_tokens??0)} 输入 tokens（{v.library.measurement.chunks} 段，含 {v.library.measurement.metrics.calls} 次提示开销）。</p>}
+      {v.library.measurement&&<p>{v.library.measurement.version!==v.library.version?'上版资料库':'本版资料库'} · {v.library.measurement.model}：{v.library.measurement.metrics.sum_prompt_tokens==null?'未知':num(v.library.measurement.metrics.sum_prompt_tokens)} 输入 tokens（{v.library.measurement.chunks} 段，含 {v.library.measurement.metrics.calls} 次提示开销）。</p>}
       {(draft?.metrics||v.library.state?.metrics)?.peak_prompt_tokens!=null&&<p>上次整理单请求输入峰值：{num((draft?.metrics||v.library.state?.metrics)!.peak_prompt_tokens!)} tokens</p>}
       <Button size="sm" variant="outline" disabled={off||!v.ready||!v.library.chunks} onClick={()=>generate(true)}>用背景模型计量可外发资料</Button>
     </details>}

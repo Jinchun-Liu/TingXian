@@ -766,7 +766,7 @@ export default function InterviewPage() {
       {split && <div className="desk-split-composer">
         {(notice||answerWarning) && <div role="status">{notice||answerWarning}</div>}
         {composer}
-        {phase.startsWith('仅本地') && <div className="text-xs space-y-2"><ConflictNotice conflicts={conflicts} onReview={()=>{setSettingsTab('事实与术语');setSettings(true);}} />{sources.map(source => <details key={source.source_id}><summary>{source.path} · {source.location} · {sourceStatusLabel(source.metadata)}</summary><p className="whitespace-pre-wrap">{source.text}</p></details>)}</div>}
+        {phase.startsWith('仅本地') && <div className="text-xs space-y-2"><ConflictNotice conflicts={conflicts} onReview={()=>{setSettingsTab('事实与术语');setSettings(true);}} />{sources.map(source => <details key={source.source_id}><summary>{source.path} · {source.location} · {sourceStatusLabel(source.metadata)}</summary><p className="whitespace-pre-wrap">{source.user_assertion?<>{source.user_assertion.claim}<br/>本人声明 · v{source.user_assertion.revision}<br/>原文：{source.text}</>:source.text}</p></details>)}</div>}
         {(transcripts.length>0 || history.length>0) && transcriptTools}
       </div>}
     </aside>
@@ -830,7 +830,7 @@ export default function InterviewPage() {
     {!split && <div className="desk-reading" hidden={panelOpen}>
       <AnswerConversation key={feedGeneration} history={history} preferences={preferences} onEdit={editTurn} />
       <div className="desk-compose-dock">{composer}
-        {phase.startsWith('仅本地') && <div className="text-xs space-y-2"><ConflictNotice conflicts={conflicts} onReview={()=>{setSettingsTab('事实与术语');setSettings(true);}} />{sources.map(source => <details key={source.source_id}><summary>{source.path} · {source.location} · {sourceStatusLabel(source.metadata)}</summary><p className="whitespace-pre-wrap">{source.text}</p></details>)}</div>}
+        {phase.startsWith('仅本地') && <div className="text-xs space-y-2"><ConflictNotice conflicts={conflicts} onReview={()=>{setSettingsTab('事实与术语');setSettings(true);}} />{sources.map(source => <details key={source.source_id}><summary>{source.path} · {source.location} · {sourceStatusLabel(source.metadata)}</summary><p className="whitespace-pre-wrap">{source.user_assertion?<>{source.user_assertion.claim}<br/>本人声明 · v{source.user_assertion.revision}<br/>原文：{source.text}</>:source.text}</p></details>)}</div>}
       </div>
       {(transcripts.length>0 || history.length>0) && transcriptTools}
     </div>}

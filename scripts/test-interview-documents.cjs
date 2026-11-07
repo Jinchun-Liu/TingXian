@@ -9,12 +9,13 @@ function load(relative) {
   const req=name=>{
     if(name==='@/components/ui/button')return {Button:props=>React.createElement('button',props)};
     if(name==='@tauri-apps/api/core')return {invoke:async(name,args)=>{
-      calls.push({name,args});assert.equal(name,'profile_document_segments');
+      calls.push({name,args});assert.equal(name,'profile_document_records');
       if(failPreview)throw Error('资料已更新，请刷新');
       return Array.from({length:12},(_,i)=>({location:'段落 '+(i+1),text:'合成内容 '+(i+1)}));
     }};
     if(name.startsWith('@/lib/'))return load(name.slice(2)+'.ts');
     if(name==='@/components/interview/BackgroundVersions')return load('components/interview/BackgroundVersions.tsx');
+    if(name==='@/components/interview/RecordRevision')return {RecordRevision:({segment})=>React.createElement('p',{},segment.text)};
     return frontend(name);
   };
   new Function('require','module','exports',code)(req,module,module.exports);return module.exports;
@@ -30,7 +31,7 @@ const onSave=async update=>{saves.push(update);if(failSave)throw Error('资料�
   const checkbox=()=>tree.root.findByProps({type:'checkbox'});
   const setDate=async(label,value)=>act(async()=>{tree.root.findByProps({'aria-label':'synthetic.md '+label}).props.onChange({target:{value}});});
   assert.equal(checkbox().props.checked,false);assert.equal(saves.length,0);
-  await click('查看已导入片段');assert.deepEqual(calls[0],{name:'profile_document_segments',args:{path:document.path,expectedRoot:document.root,expectedHash:document.hash}});
+  await click('查看已导入片段');assert.deepEqual(calls[0],{name:'profile_document_records',args:{path:document.path,expectedRoot:document.root,expectedHash:document.hash}});
   assert.ok(text(tree.toJSON()).includes('合成内容 12'),'review must show all imported segments');
   assert.equal(checkbox().props.checked,false,'preview alone must not confirm');
   await setDate('有效期开始','2026-11-03');await setDate('有效期结束','2026-11-02');
@@ -42,7 +43,7 @@ const onSave=async update=>{saves.push(update);if(failSave)throw Error('资料�
   const changed={...document,hash:'content-B',metadata:{...document.metadata,confirmation:'content_changed',validity:'content_changed',confirmed_at:'2026-11-03T00:00:00.000Z'}};
   await act(async()=>tree.update(React.createElement(DocumentReview,{key:'changed',document:changed,locked:true,onSave})));
   assert.equal(checkbox().props.checked,false);assert.ok(text(tree.toJSON()).includes('内容已变化'));
-  assert.ok(tree.root.findAllByType('input').every(n=>n.props.disabled));assert.ok(tree.root.findAllByType('button').every(n=>n.props.disabled));
+  assert.ok(tree.root.findAllByType('input').every(n=>n.props.disabled));assert.ok(tree.root.findAllByType('button').filter(n=>text(n)!=='查看全部修订').every(n=>n.props.disabled));
   const exclusions=[];
   await act(async()=>tree.update(React.createElement(DocumentReview,{key:'exclude',document,locked:true,exclusionLocked:false,onSave,onExclude:async v=>{exclusions.push(v);}})));
   assert.equal(button('排除检索').props.disabled,false,'withdrawal remains available during a session');

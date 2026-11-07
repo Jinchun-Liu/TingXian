@@ -23,6 +23,10 @@ pub struct Evidence {
     #[serde(default)] pub hash: String,
     #[serde(default)] pub root: String,
     #[serde(default)] pub metadata: crate::DocumentStatus,
+    #[serde(default)] pub user_assertion: Option<crate::assertions::UserAssertion>,
+}
+impl Evidence {
+    pub fn current_text(&self)->&str {self.user_assertion.as_ref().map(|a|a.claim.as_str()).unwrap_or(&self.text)}
 }
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ImportReport {
@@ -102,6 +106,7 @@ impl Index {
             INSERT OR IGNORE INTO fact_revisions(version,previous_version,text,source_note,sources_json,reason,confirmed_at,recorded_at)
                 VALUES(0,NULL,COALESCE((SELECT value FROM settings WHERE key='facts'),''),'旧版事实卡；来源仍以原正文为准，未重新确认','[]','迁移基线，不代表新增用户确认',NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
             INSERT OR IGNORE INTO settings VALUES('version','0');").execute(&pool).await.map_err(|e| e.to_string())?;
+        sqlx::raw_sql(crate::assertions::SCHEMA).execute(&pool).await.map_err(|e|e.to_string())?;
         Ok(Self { pool, jieba: Arc::new(Jieba::new()), gate: Arc::new(Mutex::new(())) })
     }
     pub async fn setting(&self, key: &str) -> Result<String> {
@@ -272,13 +277,14 @@ impl Index {
         let _gate=self.gate.lock().await;
         let mut merged=std::collections::HashMap::<String,Evidence>::new();
         let today=chrono::Local::now().date_naive();
-        let excluded=crate::source_policy::EXCLUDED_SQL;let summary=crate::source_policy::SUMMARY_BLOCKED_SQL;
+        let current=crate::source_policy::CURRENT_SQL;let excluded=crate::source_policy::EXCLUDED_SQL;let summary=crate::source_policy::summary_blocked_sql();
         for (query,weight) in queries {
             // Rank the compact FTS rows first. Joining full excerpts/metadata
             // before LIMIT copies and looks up every matching document. The
             // atomic import/cleanup gate keeps FTS IDs and source rows aligned.
-            let rows=sqlx::query(&format!("WITH matches AS MATERIALIZED (SELECT search.id,bm25(search) AS score FROM search JOIN chunks sc ON sc.id=search.id JOIN documents d ON d.path=sc.path WHERE search MATCH ? AND NOT {excluded} AND NOT {summary} ORDER BY score LIMIT 40) SELECT c.id,c.path,c.location,c.text,d.hash,d.kind,d.allow_external,CASE WHEN d.path GLOB '.背景/*' THEN '背景资料库' ELSE COALESCE((SELECT value FROM settings WHERE key='root'),'') END AS current_root,matches.score,{} FROM matches JOIN chunks c ON c.id=matches.id JOIN documents d ON d.path=c.path {} ORDER BY matches.score",crate::document_meta::META_COLUMNS,crate::document_meta::META_JOIN))
-                .bind(query).fetch_all(&self.pool).await.map_err(|e|e.to_string())?;
+            let assertion_join=crate::assertions::JOIN;
+            let rows=sqlx::query(&format!("WITH original_matches AS MATERIALIZED (SELECT c.id,bm25(search) AS score FROM search JOIN chunks c ON c.id=search.id JOIN documents d ON d.path=c.path {assertion_join} WHERE search MATCH ? AND a.record_id IS NULL AND {current} AND NOT {excluded} AND NOT {summary} ORDER BY score LIMIT 40), assertion_matches AS MATERIALIZED (SELECT c.id,bm25(assertion_search) AS score FROM assertion_search JOIN chunks c JOIN documents d ON d.path=c.path {assertion_join} WHERE assertion_search MATCH ? AND assertion_search.id=a.record_id AND {current} AND NOT {excluded} AND NOT {summary} ORDER BY score LIMIT 40), matches AS (SELECT * FROM original_matches UNION ALL SELECT * FROM assertion_matches) SELECT c.id,c.path,c.location,c.text,d.hash,d.kind,d.allow_external,CASE WHEN d.path GLOB '.背景/*' THEN '背景资料库' ELSE COALESCE((SELECT value FROM settings WHERE key='root'),'') END AS current_root,matches.score,a.value AS assertion_json,{} FROM matches JOIN chunks c ON c.id=matches.id JOIN documents d ON d.path=c.path {assertion_join} {} ORDER BY matches.score LIMIT 40",crate::document_meta::META_COLUMNS,crate::document_meta::META_JOIN))
+                .bind(&query).bind(&query).fetch_all(&self.pool).await.map_err(|e|e.to_string())?;
             // Query lengths and added alias IDFs have different score scales.
             // Normalize each result set before applying the 2:1 weighting.
             let scale=rows.iter().map(|r|r.get::<f64,_>("score").abs()).fold(0.0,f64::max).max(f64::MIN_POSITIVE);
@@ -286,7 +292,8 @@ impl Index {
                 let id:String=r.get("id");let score=r.get::<f64,_>("score")/scale*weight;
                 if let Some(existing)=merged.get_mut(&id){existing.score+=score;continue;}
                 let hash:String=r.get("hash");let metadata=crate::document_meta::status(&r,&hash,today);
-                merged.insert(id.clone(),Evidence {source_id:id,path:r.get("path"),location:r.get("location"),text:r.get("text"),kind:r.get("kind"),allow_external:r.get("allow_external"),score,root:r.get("current_root"),hash,metadata});
+                let user_assertion=crate::assertions::parse(r.get("assertion_json"))?;
+                merged.insert(id.clone(),Evidence {source_id:id,path:r.get("path"),location:r.get("location"),text:r.get("text"),kind:r.get("kind"),allow_external:r.get("allow_external"),score,root:r.get("current_root"),hash,metadata,user_assertion});
             }
         }
         let mut candidates=merged.into_values().collect::<Vec<_>>();
@@ -295,7 +302,7 @@ impl Index {
             .then_with(||a.source_id.cmp(&b.source_id)));
         let mut texts=HashSet::new();let mut result=vec![];
         for evidence in candidates.into_iter().take(40) {
-            if !texts.insert(digest(evidence.text.as_bytes())) {continue;}
+            if !texts.insert(digest(evidence.current_text().as_bytes())) {continue;}
             result.push(evidence);
         }
         Ok(result)

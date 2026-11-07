@@ -1,6 +1,6 @@
 //! Synthetic-only checks for local discrepancy hints and request boundaries.
 use interview_core::*;
-fn source(id:&str,text:&str)->Evidence {Evidence {source_id:id.into(),path:format!("{id}.md"),root:"/synthetic/private/root".into(),hash:format!("hash-{id}"),location:"段落1".into(),text:text.into(),kind:"personal".into(),allow_external:true,score:0.0,metadata:Default::default()}}
+fn source(id:&str,text:&str)->Evidence {Evidence {source_id:id.into(),path:format!("{id}.md"),root:"/synthetic/private/root".into(),hash:format!("hash-{id}"),location:"段落1".into(),text:text.into(),kind:"personal".into(),allow_external:true,score:0.0,metadata:Default::default(),user_assertion:None}}
 fn fact(text:&str,confirmed:bool)->FactCard {FactCard {fact_id:"personal-fact-card".into(),version:4,previous_version:Some(3),text:text.into(),source_note:"local-only note".into(),sources:vec![],reason:"synthetic".into(),confirmed_at:confirmed.then(||"2026-11-03T00:00:00.000Z".into()),recorded_at:"2026-11-03T00:00:00.000Z".into()}}
 #[test]
 fn dates_compare_same_subject_field_and_shared_precision_only() {

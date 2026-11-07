@@ -3,7 +3,7 @@ use interview_core::*;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use std::io::Write;
-fn evidence(id:&str,text:&str)->Evidence {Evidence {source_id:id.into(),path:format!("fictional-{id}.md"),root:"/fictional".into(),hash:format!("fictional-{id}"),location:"synthetic paragraph".into(),text:text.into(),kind:"personal".into(),allow_external:true,score:0.0,metadata:Default::default()}}
+fn evidence(id:&str,text:&str)->Evidence {Evidence {source_id:id.into(),path:format!("fictional-{id}.md"),root:"/fictional".into(),hash:format!("fictional-{id}"),location:"synthetic paragraph".into(),text:text.into(),kind:"personal".into(),allow_external:true,score:0.0,metadata:Default::default(),user_assertion:None}}
 fn card(text:&str,confirmed:bool)->FactCard {FactCard {fact_id:"personal-fact-card".into(),version:1,previous_version:Some(0),text:text.into(),source_note:"Fictional test only".into(),sources:vec![],reason:"Synthetic test".into(),confirmed_at:confirmed.then(||"2026-11-03T00:00:00.000Z".into()),recorded_at:"2026-11-03T00:00:00.000Z".into()}}
 #[tokio::main]
 async fn main()->std::result::Result<(),Box<dyn std::error::Error>> {

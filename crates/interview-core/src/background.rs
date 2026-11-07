@@ -59,10 +59,20 @@ impl Index {
         // Text chat upper budget includes worst-case 4-byte Unicode, output,
         // role/framing overhead. Not a provider tokenizer or an image estimate.
         let rag=ANSWER_CHARS as u64*4+OUTPUT+2048;
-        let full=rag+all;
+        let manual_bytes:i64=sqlx::query_scalar("SELECT COALESCE(SUM(length(CAST(json_extract(value,'$.claim') AS BLOB))+length(CAST(json_extract(value,'$.reason') AS BLOB))+256),0) FROM current_record_assertions").fetch_one(&self.pool).await.map_err(|e|e.to_string())?;
+        let history_bytes:i64=sqlx::query_scalar("SELECT COALESCE(SUM(length(CAST(value AS BLOB))),0) FROM record_assertions").fetch_one(&self.pool).await.map_err(|e|e.to_string())?;
+        let summary_bytes:i64=sqlx::query_scalar("SELECT COALESCE(SUM(length(CAST(text AS BLOB))),0) FROM chunks WHERE path='.背景/综合背景'").fetch_one(&self.pool).await.map_err(|e|e.to_string())?;
+        let index_bytes:i64=sqlx::query_scalar("SELECT (SELECT COALESCE(SUM(length(CAST(tokens AS BLOB))),0) FROM search)+(SELECT COALESCE(SUM(length(CAST(tokens AS BLOB))),0) FROM assertion_search)").fetch_one(&self.pool).await.map_err(|e|e.to_string())?;
+        let raw_bytes:i64=sqlx::query_scalar("SELECT COALESCE(SUM(length(CAST(text AS BLOB))),0) FROM chunks WHERE path!='.背景/综合背景'").fetch_one(&self.pool).await.map_err(|e|e.to_string())?;
+        let current=crate::source_policy::CURRENT_SQL;let excluded=crate::source_policy::EXCLUDED_SQL;let join=crate::assertions::JOIN;
+        let fact_bytes:i64=sqlx::query_scalar(&format!("SELECT COALESCE(SUM(length(CAST(text AS BLOB))),0) FROM (SELECT DISTINCT COALESCE(json_extract(a.value,'$.claim'),c.text) AS text FROM chunks c JOIN documents d ON d.path=c.path {join} WHERE d.kind IN ('personal','evidence') AND {current} AND NOT {excluded} AND d.path!='.背景/综合背景')")).fetch_one(&self.pool).await.map_err(|e|e.to_string())?;
+        // Full-library estimate deliberately includes originals and current
+        // declarations. Historical revisions and FTS bytes are storage only.
+        let full=rag+all+manual_bytes as u64;
         let measurement:Option<String>=sqlx::query_scalar("SELECT value FROM background_library WHERE key='measurement'").fetch_optional(&self.pool).await.map_err(|e|e.to_string())?;
         let measurement:Value=measurement.map(|s|serde_json::from_str(&s)).transpose().map_err(|e|e.to_string())?.unwrap_or(Value::Null);
         Ok(json!({"documents":docs,"chunks":row.get::<i64,_>("chunks"),"full_budget":full,"rag_budget":rag,
+            "context_estimates":{"method":"UTF-8 bytes; conservative token ceiling, not provider tokenizer","raw_extract_text_bytes":raw_bytes,"deduplicated_current_user_claim_bytes":fact_bytes,"manual_current_text_and_framing_bytes":manual_bytes,"manual_history_storage_bytes":history_bytes,"fts_storage_bytes":index_bytes,"summary_text_bytes":summary_bytes,"one_request_text_ceiling":rag-OUTPUT,"output_reserved_tokens":OUTPUT,"actual_usage":null},
             "measurement":measurement,"baseline":BASELINE,"fits_full":full<=BASELINE,"state":state,"version":self.setting("version").await?}))
     }
     pub async fn background_inputs(&self,measure:bool)->Result<Vec<Value>>{
@@ -79,14 +89,22 @@ impl Index {
         Ok(out)
     }
     pub async fn background_input_page(&self,measure:bool,cursor:i64)->Result<(i64,Vec<Value>)>{
-        let excluded=crate::source_policy::EXCLUDED_SQL;let summary=crate::source_policy::SUMMARY_BLOCKED_SQL;
-        let rows=sqlx::query(&format!("SELECT c.rowid AS seq,c.path,c.location,c.text,d.kind,d.hash,(SELECT json_extract(value,'$.hash') FROM background_library WHERE key=substr(c.path,5,64)) AS source_hash,{} FROM chunks c JOIN documents d ON d.path=c.path {} WHERE c.rowid>? AND d.allow_external=1 AND NOT {excluded} AND NOT {summary} AND (? OR c.path!='.背景/综合背景') ORDER BY c.rowid LIMIT 256",crate::document_meta::META_COLUMNS,crate::document_meta::META_JOIN)).bind(cursor).bind(measure).fetch_all(&self.pool).await.map_err(|e|e.to_string())?;
+        let current=crate::source_policy::CURRENT_SQL;let excluded=crate::source_policy::EXCLUDED_SQL;let summary=crate::source_policy::summary_blocked_sql();
+        let rows=sqlx::query(&format!("SELECT c.rowid AS seq,c.id,c.path,c.location,c.text,d.kind,d.hash,a.value AS assertion_json,(SELECT json_extract(value,'$.hash') FROM background_library WHERE key=substr(c.path,5,64)) AS source_hash,{} FROM chunks c JOIN documents d ON d.path=c.path {} {} WHERE c.rowid>? AND d.allow_external=1 AND {current} AND NOT {excluded} AND NOT {summary} AND (? OR c.path!='.背景/综合背景') ORDER BY c.rowid LIMIT 256",crate::document_meta::META_COLUMNS,crate::document_meta::META_JOIN,crate::assertions::JOIN)).bind(cursor).bind(measure).fetch_all(&self.pool).await.map_err(|e|e.to_string())?;
         let mut next=cursor;let mut out=vec![];
         for r in rows {
             let path:String=r.get("path");
             let (id,name)=path.strip_prefix(PREFIX).and_then(|p|p.split_once('/')).unwrap_or(("",path.as_str()));
             let status=crate::document_meta::status(&r,&r.get::<String,_>("hash"),chrono::Local::now().date_naive());
-            let item=json!({"id":id,"file":name,"kind":r.get::<String,_>("kind"),"location":r.get::<String,_>("location"),"quote":r.get::<String,_>("text"),"source_hash":r.get::<Option<String>,_>("source_hash"),"source_status":status});
+            let mut item=json!({"id":id,"file":name,"kind":r.get::<String,_>("kind"),"location":r.get::<String,_>("location"),"quote":r.get::<String,_>("text"),"source_hash":r.get::<Option<String>,_>("source_hash").unwrap_or_else(||r.get("hash")),"source_status":status});
+            if let Some(assertion)=crate::assertions::parse(r.get("assertion_json"))? {
+                item["original_source"]=json!({"source_id":r.get::<String,_>("id"),"source_hash":item["source_hash"],"extraction_hash":r.get::<String,_>("hash"),"location":item["location"]});
+                // This quote comes from the separate manual declaration, not
+                // from the source file. Never borrow the file's hash for it.
+                item["quote"]=json!(assertion.claim);
+                item["source_hash"]=json!(digest(assertion.claim.as_bytes()));
+                item["origin"]=json!("user_asserted");item["user_assertion"]=json!(assertion);
+            }
             if contains_credential(&item.to_string()){return Err("既有材料含凭证格式，未发送".into())}
             next=r.get("seq");out.push(item);
         }

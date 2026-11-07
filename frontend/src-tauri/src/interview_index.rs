@@ -22,14 +22,14 @@ where F:FnOnce(&Path)->Result<PathBuf,String> + Send + 'static {
     let old_version=old_version.parse::<i64>().map_err(|_|"索引版本无效，已停止清理")?;
     let root:Option<String>=sqlx::query_scalar("SELECT value FROM settings WHERE key='root'").fetch_optional(&mut *tx).await.map_err(|e|e.to_string())?;
     let mut rows=Map::new();
-    for table in ["documents","chunks","search","document_metadata","background_library"] {
+    for table in ["documents","chunks","search","document_metadata","background_library","record_assertions","assertion_search"] {
         let values=crate::interview_history::rows_to_json(sqlx::query(&format!("SELECT * FROM {table}")).fetch_all(&mut *tx).await.map_err(|e|e.to_string())?)?;
         rows.insert(table.into(),json!(values));
     }
     let documents=rows["documents"].as_array().unwrap().len();
     let chunks=rows["chunks"].as_array().unwrap().len();
     let metadata_records=rows["document_metadata"].as_array().unwrap().len();
-    if rows["background_library"].as_array().unwrap().is_empty() && metadata_records==0 && documents==0 && chunks==0 && rows["search"].as_array().unwrap().is_empty() {
+    if rows["record_assertions"].as_array().unwrap().is_empty() && rows["assertion_search"].as_array().unwrap().is_empty() && rows["background_library"].as_array().unwrap().is_empty() && metadata_records==0 && documents==0 && chunks==0 && rows["search"].as_array().unwrap().is_empty() {
         tx.rollback().await.map_err(|e|e.to_string())?;
         return Ok(IndexClearReport {archive_path:None,documents,chunks,metadata_records,version:old_version});
     }
@@ -38,9 +38,9 @@ where F:FnOnce(&Path)->Result<PathBuf,String> + Send + 'static {
     let trashed=tokio::task::spawn_blocking(move || {
         let meta=fs::symlink_metadata(&root_path).map_err(|e|e.to_string())?;
         if !meta.is_dir() || meta.file_type().is_symlink() {return Err("索引归档位置不是普通目录，已停止清理".into());}
-        let archive=json!({"kind":"meetily-profile-index-backup","format_version":2,
+        let archive=json!({"kind":"meetily-profile-index-backup","format_version":3,
             "created_at":chrono::Utc::now().to_rfc3339(),"index_version":old_version,"profile_root":root,
-            "scope":"Imported documents, chunks, FTS and document review metadata only; facts/settings/original files/conversations are preserved",
+            "scope":"Imported documents, chunks, FTS, document reviews and manual assertion revisions; fact cards/settings/original files/conversations are preserved",
             "database_rows":rows});
         let bytes=serde_json::to_vec_pretty(&archive).map_err(|e|e.to_string())?;
         let hash=interview_core::digest(&bytes);
@@ -69,7 +69,7 @@ where F:FnOnce(&Path)->Result<PathBuf,String> + Send + 'static {
         Ok::<PathBuf,String>(destination)
     }).await.map_err(|e|format!("索引备份任务失败，未清理：{e}"))??;
     let result=async {
-        for table in ["search","chunks","documents","document_metadata","background_library"] {sqlx::query(&format!("DELETE FROM {table}")).execute(&mut *tx).await.map_err(|e|e.to_string())?;}
+        for table in ["assertion_search","record_assertions","search","chunks","documents","document_metadata","background_library"] {sqlx::query(&format!("DELETE FROM {table}")).execute(&mut *tx).await.map_err(|e|e.to_string())?;}
         sqlx::query("UPDATE settings SET value=? WHERE key='version'").bind(version.to_string()).execute(&mut *tx).await.map_err(|e|e.to_string())?;
         Ok::<(),String>(())
     }.await;
@@ -102,12 +102,26 @@ mod tests {
     fn selection()->Vec<Selection> {vec![Selection{path:"fact.md".into(),kind:"technical".into(),allow_external:false,structured:None}]}
     async fn snapshot(index:&Index)->Vec<String> {
         let mut result=vec![];
-        for query in ["SELECT path||hash||kind||allow_external FROM documents ORDER BY path","SELECT id||path||location||text FROM chunks ORDER BY id","SELECT id||tokens FROM search ORDER BY id","SELECT key||value FROM settings ORDER BY key","SELECT key||value FROM background_library ORDER BY key"] {
+        for query in ["SELECT path||hash||kind||allow_external FROM documents ORDER BY path","SELECT id||path||location||text FROM chunks ORDER BY id","SELECT id||tokens FROM search ORDER BY id","SELECT key||value FROM settings ORDER BY key","SELECT key||value FROM background_library ORDER BY key","SELECT record_id||revision||value FROM record_assertions ORDER BY record_id,revision","SELECT id||tokens FROM assertion_search ORDER BY id"] {
             result.extend(sqlx::query(query).fetch_all(&index.pool).await.unwrap().iter().map(|r|r.get::<String,_>(0)));
         }result.push(serde_json::to_string(&crate::interview_history::rows_to_json(sqlx::query("SELECT * FROM document_metadata ORDER BY root,path").fetch_all(&index.pool).await.unwrap()).unwrap()).unwrap());result
     }
     fn simulated_move(destination:PathBuf)->impl FnOnce(&Path)->Result<PathBuf,String> {
         move |path| {let target=destination.join(path.file_name().unwrap());fs::rename(path,&target).map_err(|e|e.to_string())?;Ok(target)}
+    }
+    #[tokio::test]
+    async fn manual_revisions_are_archived_and_trash_failure_leaves_them_usable(){
+        let (root,index)=fixture().await;
+        let doc=index.documents().await.unwrap().remove(0);
+        let segment=index.document_records(&doc.path,&doc.root,&doc.hash).await.unwrap().remove(0);
+        index.revise_record(interview_core::assertions::AssertionUpdate{source:interview_core::FactSourceRef{source_id:segment.source_id,path:doc.path,root:doc.root,hash:doc.hash},expected_revision:0,claim:"synthetic manual plan".into(),reason:"synthetic clarification".into(),activity:interview_core::assertions::Activity::Planned,confirmed:true}).await.unwrap();
+        let before=snapshot(&index).await;
+        assert!(clear_index_with(&index,&root.join("app"),|_|Err("synthetic Trash unavailable".into())).await.is_err());assert_eq!(snapshot(&index).await,before);
+        let report=clear_index_with(&index,&root.join("app"),simulated_move(root.join("synthetic-trash"))).await.unwrap();
+        let archive:serde_json::Value=serde_json::from_slice(&fs::read(Path::new(report.archive_path.as_ref().unwrap()).join("index.json")).unwrap()).unwrap();
+        assert_eq!(archive["database_rows"]["record_assertions"].as_array().unwrap().len(),1);
+        assert_eq!(archive["database_rows"]["assertion_search"].as_array().unwrap().len(),1);
+        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM record_assertions").fetch_one(&index.pool).await.unwrap(),0);
     }
     #[tokio::test]
     async fn verified_backup_precedes_clear_and_originals_facts_history_survive() {
@@ -116,7 +130,7 @@ mod tests {
         let report=clear_index_with(&index,&root.join("app"),simulated_move(root.join("synthetic-trash"))).await.unwrap();
         assert_eq!((report.documents,report.chunks,report.metadata_records,report.version),(1,1,1,3));
         let archive:serde_json::Value=serde_json::from_slice(&fs::read(Path::new(report.archive_path.as_ref().unwrap()).join("index.json")).unwrap()).unwrap();
-        assert_eq!(archive["kind"],"meetily-profile-index-backup");assert_eq!(archive["index_version"],2);assert_eq!(archive["format_version"],2);
+        assert_eq!(archive["kind"],"meetily-profile-index-backup");assert_eq!(archive["index_version"],2);assert_eq!(archive["format_version"],3);
         assert_eq!(archive["database_rows"]["document_metadata"][0]["confirmed"],1);
         assert_eq!(archive["database_rows"]["document_metadata"][0]["valid_until"],"2026-12-31");
         assert_eq!(archive["database_rows"]["background_library"][0]["value"],"{\"quote\":\"synthetic archived source\"}");

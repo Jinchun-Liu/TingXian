@@ -15,6 +15,16 @@ class Response:
     def __exit__(self,*a): pass
     def read(self,n): return self.body[:n]
 class Test(unittest.TestCase):
+    def test_manual_assertion_provenance_survives_synthesis_dedup(self):
+        row={"id":"fictional","file":"demo.md","source_hash":"claim-hash","kind":"practice","location":"行1","quote":"计划验证 null 和零","origin":"user_asserted","user_assertion":{"revision":2,"activity":"planned"},"original_source":{"source_hash":"file-hash","source_id":"B1"}}
+        parts=m.merge_inputs([row],[],10000)
+        source=parts[0]["sources"][0]
+        self.assertEqual(source["origin"],"user_asserted")
+        self.assertEqual(source["original_source"]["source_hash"],"file-hash")
+        self.assertEqual(source["source_hash"],"claim-hash")
+        self.assertEqual(source["user_assertion"]["activity"],"planned")
+        self.assertEqual(parts[0]["kind"],"practice")
+
     def test_unusable_response_keeps_usage_and_does_not_cache_a_result(self):
         for label,response in [
             ("truncated",{"choices":[{"finish_reason":"length","message":{"content":"{unfinished"}}]}),

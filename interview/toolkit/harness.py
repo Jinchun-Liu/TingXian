@@ -107,6 +107,15 @@ def compile_policy(registry, context, preview=False):
     for rule in selected:
         key = canonical({k: rule[k] for k in ("action", "scope", "exceptions")})
         groups.setdefault(key, []).append(rule)
+    def render(items):
+        lines, exceptions = [], {}
+        seen = set()
+        for item in items:
+            identity = canonical({k: item[k] for k in ("action", "scope", "exceptions")})
+            if identity in seen:continue
+            seen.add(identity);lines.append(item["action"])
+            exceptions[(canonical(item["scope"]),canonical(item["exceptions"]))] = '；'.join(item["exceptions"])
+        return "\n".join([*lines,*exceptions.values()])
     lines, exceptions = [], {}
     for group in groups.values():
         r = group[0]
@@ -121,6 +130,10 @@ def compile_policy(registry, context, preview=False):
     return {"schema_version": "tingxian-policy-pack-1", "policy_version": registry["policy_version"],
             "registry_sha256": registry["registry_sha256"], "pack_sha256": digest(identity),
             "preview_only": preview, "rule_ids": [r["id"] for r in selected], "text": compact,
+            "method_rule_ids": [r["id"] for r in selected if not r["id"].startswith("SP:")],
+            "style_rule_ids": [r["id"] for r in selected if r["id"].startswith("SP:")],
+            "method_text": render([r for r in selected if not r["id"].startswith("SP:")]),
+            "style_text": render([r for r in selected if r["id"].startswith("SP:")]),
             "uncompacted_same_rules": uncompact, "token_estimate": token_estimate(compact),
             "uncompacted_token_estimate": token_estimate(uncompact),
             "source_map": {r["id"]: {k: r[k] for k in ("source_refs", "handoff_locator", "origin", "scope", "exceptions")} for r in selected},

@@ -79,6 +79,14 @@ class Tests(unittest.TestCase):
         self.assertIsNone(h.audit_team(run)["bottom_level_api_requests"])
         run["attempts"]=[{"id":"failed-1","role":"lead","candidate_id":"v1","input_tokens":100,"output_tokens":None,"reasoning_tokens":None,"cost_cny":None}]
         audit=h.audit_team(run);self.assertIsNone(audit["known_cost_cny"]);self.assertEqual(audit["unknown_cost_requests"],1)
+    def test_spoken_guidance_can_be_inspected_without_duplicating_it_in_method_text(self):
+        registry=h.load_registry(ROOT/"interview/toolkit/registry.json")
+        pack=h.compile_policy(registry,h.route("幂等键",role="测试开发"),preview=True)
+        self.assertTrue(pack["style_rule_ids"])
+        self.assertTrue(all(not r.startswith("SP:") for r in pack["method_rule_ids"]))
+        self.assertNotIn("不编造笑声",pack["method_text"])
+        self.assertIn("不编造笑声",pack["style_text"])
+        self.assertEqual(set(pack["rule_ids"]),set(pack["method_rule_ids"]+pack["style_rule_ids"]))
     def test_real_adapter_cannot_invoke_in_fixture_runner(self):
         a=Fixture();a.fixture_only=False
         with self.assertRaises(ValueError):h.execute_fixture_team({"evidence_ids":[]},a)

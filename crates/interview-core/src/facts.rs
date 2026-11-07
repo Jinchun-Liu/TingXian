@@ -17,6 +17,7 @@ pub struct FactSource {
     pub location: String,
     pub text: String,
     pub kind: String,
+    #[serde(default)] pub user_assertion: Option<crate::assertions::UserAssertion>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FactCard {
@@ -82,13 +83,13 @@ impl Index {
         for source in update.sources {
             if !ids.insert(source.source_id.clone()) {return Err("事实来源重复，请重新选择".into());}
             if source.root!=crate::background::doc_root(&source.path,&root) {return Err("来源目录已改变，请重新检索并核对事实来源".into());}
-            let row=sqlx::query("SELECT c.path,c.location,c.text,d.hash,d.kind FROM chunks c JOIN documents d ON d.path=c.path WHERE c.id=?")
+            let row=sqlx::query(&format!("SELECT c.path,c.location,c.text,d.hash,d.kind,a.value FROM chunks c JOIN documents d ON d.path=c.path {} WHERE c.id=?",crate::assertions::JOIN))
                 .bind(&source.source_id).fetch_optional(&mut *tx).await.map_err(|e|e.to_string())?.ok_or("事实来源已退出索引，请重新检索")?;
             let path:String=row.get("path");let hash:String=row.get("hash");let kind:String=row.get("kind");
             if path!=source.path || hash!=source.hash {return Err("来源内容已改变，请重新检索并核对事实来源".into());}
             if !["personal","evidence"].contains(&kind.as_str()) {return Err("练习、岗位与技术资料不能作为个人经历证明；请使用原始证据或本人直接核对的依据".into());}
             // Store the indexed snapshot, never text or kind supplied by the UI.
-            sources.push(FactSource {reference:source,location:row.get("location"),text:row.get("text"),kind});
+            sources.push(FactSource {reference:source,location:row.get("location"),text:row.get("text"),kind,user_assertion:crate::assertions::parse(row.get("value"))?});
         }
         let version=previous.version.checked_add(1).ok_or("事实版本已达上限")?;
         let now=Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis,true);

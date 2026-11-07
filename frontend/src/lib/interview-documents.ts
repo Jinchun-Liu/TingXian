@@ -11,3 +11,6 @@ export function sourceStatusLabel(metadata?: DocumentMetadata) {
   const validity = {unknown:'时效未设置',current:'在设定有效期内',expired:'已过期',not_yet_valid:'尚未生效',content_changed:'旧日期需重新核对',invalid:'日期无效，需核对'}[metadata.validity];
   return `${confirmation} · ${validity}${metadata.valid_from || metadata.valid_until ? `（${metadata.valid_from || '未设开始'} 至 ${metadata.valid_until || '未设结束'}）` : ''}`;
 }
+
+export type UserAssertion = {record_id:string;revision:number;previous_version:number|null;origin:'user_asserted';claim:string;activity:'unknown'|'planned'|'in_progress'|'completed';reason:string;recorded_at:string};
+export type RecordSegment = {source_id:string;location:string;text:string;user_assertion:UserAssertion|null};

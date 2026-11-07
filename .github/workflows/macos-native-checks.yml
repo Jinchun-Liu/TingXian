@@ -83,6 +83,8 @@ jobs:
           cargo test --locked -p meetily --lib audio::capture::core_audio::startup_tests -- --nocapture
       - name: Session recovery and interview regressions
         run: cargo test --locked -p meetily --lib interview -- --nocapture
+      - name: Manual assertion editor
+        run: node scripts/test-record-revision.cjs
       - name: Offline toolkit contracts
         run: python3 -B scripts/test-toolkit-harness.py
       - name: Portable background worker process recovery

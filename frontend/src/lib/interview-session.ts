@@ -4,7 +4,7 @@ import type {SourceConflict} from './interview-conflicts';
 import type {LatencyRecord} from './interview-latency';
 import type {TranscriptInput} from './interview-scheduler';
 import {parseUsageSnapshot,UsageSnapshot} from '@/lib/interview-usage';
-export type Source = { source_id: string; path: string; location: string; text: string; kind: string; allow_external: boolean; hash?: string; root?: string; metadata?: DocumentMetadata };
+export type Source = { source_id: string; path: string; location: string; text: string; kind: string; allow_external: boolean; hash?: string; root?: string; user_assertion?: import('./interview-documents').UserAssertion | null; metadata?: DocumentMetadata };
 export type Turn = { passive?:boolean; meeting_mode?:string; scenario?:ConversationScenario; restored_from?: string; role: 'remote' | 'self' | 'manual'; sequence_id?: number; utterance_id?: number | null; microphone_epoch?: number | null; capture_session?: number; id: string; question: string; confirmed_answer: string | null; suggestion: string; status: 'listening' | 'queued' | 'generating' | 'done' | 'error' | 'cancelled' | 'recorded'; sources: Source[]; conflicts?: SourceConflict[]; fact_version?: number; time: string; timing: string; latency?: LatencyRecord };
 export type SessionSnapshot={version:1;history:Turn[];transcripts:TranscriptInput[];spoken_dialogue:TranscriptInput[];current:{question:string;answer:string};calls:number;usage:string;usage_ledger?:UsageSnapshot|null};
 export type SavedSession={id:number;saved_at:string;turns:number;calls:number};
@@ -15,6 +15,8 @@ const nullableString=(v:any)=>v===null || typeof v==='string';
 const number=(v:any)=>typeof v==='number' && Number.isFinite(v);
 function sourceValid(v:any):boolean {
   if(!strings(v,['source_id','path','location','text','kind']) || typeof v.allow_external!=='boolean')return false;
+  const a=v.user_assertion;
+  if(a!=null && (!strings(a,['record_id','origin','claim','reason','recorded_at']) || a.origin!=='user_asserted' || !number(a.revision) || !['unknown','planned','in_progress','completed'].includes(a.activity)))return false;
   const m=v.metadata;
   return m==null || (object(m) && ['unreviewed','confirmed','content_changed'].includes(m.confirmation)
     && ['unknown','current','expired','not_yet_valid','content_changed','invalid'].includes(m.validity)

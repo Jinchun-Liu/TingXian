@@ -39,7 +39,9 @@ async fn changed_scope_is_reindexed_and_invalidates_review_even_when_file_unchan
     let changed=select(&root,"facts.json",&["/new","/new"]).await;
     assert_eq!(index.import(root.to_str().unwrap(),vec![changed],&python()).await.unwrap().unchanged,0);
     let second=index.documents().await.unwrap().remove(0);assert_ne!(first.hash,second.hash);assert_eq!(second.metadata.confirmation,Confirmation::ContentChanged);
-    assert!(index.document_segments(&first.path,&first.root,&first.hash).await.is_err());assert!(index.search("棕熊","").await.unwrap().is_empty());assert!(!index.search("海豚","").await.unwrap().is_empty());
+    assert!(index.document_segments(&first.path,&first.root,&first.hash).await.is_err());assert!(index.search("棕熊","").await.unwrap().is_empty());assert!(index.search("海豚","").await.unwrap().is_empty(),"changed selection requires re-review");
+    index.update_document(DocumentUpdate {path:second.path.clone(),expected_root:second.root.clone(),expected_hash:second.hash.clone(),confirmed:true,valid_from:None,valid_until:None}).await.unwrap();
+    assert!(!index.search("海豚","").await.unwrap().is_empty());
     // Parent selection absorbs duplicate/descendant scopes, preserving a
     // stable revision for equivalent explicit choices.
     let all=select(&root,"facts.json",&["","/new"]).await;

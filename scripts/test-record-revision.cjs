@@ -1,0 +1,33 @@
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const frontend=require('node:module').createRequire(path.resolve(__dirname,'../frontend/package.json'));
+const React=frontend('react'),{act,create}=frontend('react-test-renderer'),ts=frontend('typescript');
+const calls=[];let fail=false,resolve;
+const compiled=ts.transpileModule(fs.readFileSync(path.resolve(__dirname,'../frontend/src/components/interview/RecordRevision.tsx'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
+const mod={exports:{}};
+const req=name=>{
+ if(name==='@/components/ui/button')return {Button:p=>React.createElement('button',p)};
+ if(name==='@/components/ui/choice-menu')return {ChoiceMenu:p=>React.createElement('select',{...p,onChange:e=>p.onValueChange(e.target.value)},p.children),ChoiceOption:p=>React.createElement('option',p)};
+ if(name==='@tauri-apps/api/core')return {invoke:async(cmd,args)=>{calls.push({cmd,args});if(cmd==='profile_record_history')return {versions:[],next_before:null};if(fail)throw Error('已有新版本，请刷新后比较');return await new Promise(r=>{resolve=r;});}};
+ return frontend(name);
+};new Function('require','module','exports',compiled)(req,mod,mod.exports);
+const {RecordRevision}=mod.exports;
+const text=n=>typeof n==='string'?n:(n?.children||[]).map(text).join('');
+const document={path:'fictional.md',root:'/fictional',hash:'hash-1',kind:'personal',allow_external:false,metadata:{}};
+const segment={source_id:'S1',location:'行1',text:'原文不可覆盖',user_assertion:null};
+(async()=>{
+ let tree;const saved=[];await act(async()=>{tree=create(React.createElement(RecordRevision,{document,segment,locked:false,onSaved:v=>saved.push(v)}));});
+ const button=name=>tree.root.findAllByType('button').find(n=>text(n)===name);
+ const click=async name=>{assert.ok(!button(name).props.disabled);await act(async()=>button(name).props.onClick());};
+ const input=async(label,value)=>{await act(async()=>tree.root.findAll(n=>typeof n.type==='string'&&n.props['aria-label']===label)[0].props.onChange({target:label==='确认本人修订'?{checked:value}:{value}}));};
+ await click('修订这条');assert.equal(button('保存修订').props.disabled,true);
+ await input('本人声明','计划验证 null 与数字零，尚未完成');await input('修订依据','本人重新核对');await input('完成状态','planned');await input('确认本人修订',true);
+ assert.equal(button('保存修订').props.disabled,false);await input('本人声明','计划验证 null 与数字零，尚未开始');assert.equal(button('保存修订').props.disabled,true,'editing invalidates confirmation');await input('确认本人修订',true);
+ let pending;await act(async()=>{pending=button('保存修订').props.onClick();});
+ assert.equal(button('保存修订').props.disabled,true);assert.equal(button('取消').props.disabled,true);
+ assert.deepEqual(calls[0].args.update,{source:{source_id:'S1',path:'fictional.md',root:'/fictional',hash:'hash-1'},expected_revision:0,claim:'计划验证 null 与数字零，尚未开始',activity:'planned',reason:'本人重新核对',confirmed:true});
+ const record={record_id:'R1',revision:1,origin:'user_asserted',claim:calls[0].args.update.claim,activity:'planned',reason:'本人重新核对',recorded_at:'2026-11-07T00:00:00Z'};
+ await act(async()=>{resolve(record);await pending;});assert.equal(saved.length,1);assert.ok(text(tree.toJSON()).includes('原文不可覆盖'));assert.ok(text(tree.toJSON()).includes('本人声明 · v1'));
+ await click('修订这条');await input('修订依据','再次修改');await input('确认本人修订',true);fail=true;await click('保存修订');assert.ok(text(tree.toJSON()).includes('已有新版本'));assert.equal(calls[1].args.update.expected_revision,1);
+ await act(async()=>tree.update(React.createElement(RecordRevision,{document,segment,locked:true})));assert.equal(button('保存修订').props.disabled,true);assert.ok(tree.root.findAllByType('textarea').every(n=>n.props.disabled));
+ await act(async()=>tree.unmount());console.log('PASS: manual declaration preview, explicit reconfirmation, current revision identity, single write, stale edit preserved, session lock');
+})().catch(e=>{console.error(e);process.exitCode=1;});

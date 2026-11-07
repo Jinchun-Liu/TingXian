@@ -60,10 +60,12 @@ async fn dates_are_validated_explicit_and_dedup_prefers_current_reviewed_source(
     index.update_document(update(&docs[1],false,Some((today+Duration::days(1)).to_string()),None)).await.unwrap();
     assert_eq!(index.documents().await.unwrap()[1].metadata.validity,Validity::NotYetValid);
     assert_eq!(index.documents().await.unwrap()[1].metadata.confirmation,Confirmation::Unreviewed);
+    assert!(index.search("syntheticneedle","").await.unwrap().is_empty(),"expired and future sources must not enter default retrieval");
+    index.update_document(update(&docs[0],true,None,None)).await.unwrap();
     let evidence=index.search("syntheticneedle","").await.unwrap();
     let messages=messages("synthetic technical question","",&[],&evidence).unwrap();
     let payload:serde_json::Value=serde_json::from_str(messages[1]["content"].as_str().unwrap()).unwrap();
-    assert_eq!(payload["evidence"][0]["source_status"]["validity"],"expired");
+    assert_eq!(payload["evidence"][0]["source_status"]["validity"],"unknown");
     assert!(!messages.to_string().contains(&docs[0].root));assert!(!messages.to_string().contains(&docs[0].hash));
     let mut private=evidence.clone();private[0].allow_external=false;
     let private_messages=interview_core::messages("synthetic question","",&[],&private).unwrap();

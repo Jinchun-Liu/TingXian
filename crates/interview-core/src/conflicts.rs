@@ -96,7 +96,7 @@ fn differs(a:&Claim,b:&Claim)->bool {
 pub fn detect_conflicts(evidence:&[Evidence],facts:Option<&FactCard>)->Vec<SourceConflict> {
     let mut all=vec![];
     for e in evidence.iter().take(40).filter(|e|["personal","evidence"].contains(&e.kind.as_str())) {
-        for claim in claims(&e.text) {
+        for claim in claims(e.current_text()) {
             let side=ConflictSide {source_id:Some(e.source_id.clone()),fact_version:None,path:e.path.clone(),location:e.location.clone(),quote:claim.quote.clone(),value:claim.value.clone()};all.push((claim,side));
         }
     }
@@ -125,7 +125,7 @@ pub(crate) fn choose_evidence(mut candidates:Vec<Evidence>,question:&str,facts:O
         && !["假设","如果","会怎么","如何设计","怎么设计"].iter().any(|s|q.contains(s));
     if personal {
         let anchors=q.split(|c:char|!c.is_ascii_alphanumeric() && c!='_').filter(|s|s.len()>=3 && s.chars().any(char::is_alphabetic)).collect::<Vec<_>>();
-        let priority=candidates.iter().filter(|e|["personal","evidence"].contains(&e.kind.as_str()) && (anchors.is_empty() || anchors.iter().any(|a|compact(&e.text).contains(a)))).take(3).map(|e|e.source_id.clone()).collect::<HashSet<_>>();
+        let priority=candidates.iter().filter(|e|["personal","evidence"].contains(&e.kind.as_str()) && (anchors.is_empty() || anchors.iter().any(|a|compact(e.current_text()).contains(a)))).take(3).map(|e|e.source_id.clone()).collect::<HashSet<_>>();
         candidates.sort_by_key(|e|!priority.contains(&e.source_id));
     }
     let conflicts=detect_conflicts(&candidates,facts);let query=compact(question);let mut selected=vec![];let mut ids=HashSet::new();

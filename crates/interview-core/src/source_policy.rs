@@ -8,7 +8,12 @@ use sqlx::Row;
 pub const EXCLUDED_SQL: &str = "EXISTS (SELECT 1 FROM background_library x WHERE x.key GLOB 'excluded/*' AND json_extract(x.value,'$.excluded')=1 AND json_extract(x.value,'$.root')=CASE WHEN d.path GLOB '.背景/*' THEN '背景资料库' ELSE COALESCE((SELECT value FROM settings WHERE key='root'),'') END AND json_extract(x.value,'$.path')=d.path)";
 // Until the summary is regenerated with a dependency map, fail closed: it may
 // contain any revoked source. It remains visible for local historical review.
-pub const SUMMARY_BLOCKED_SQL: &str = "(d.path='.背景/综合背景' AND EXISTS (SELECT 1 FROM background_library x WHERE x.key GLOB 'excluded/*' AND json_extract(x.value,'$.excluded')=1))";
+// Unknown dates remain eligible. Reviewed content that changed, is expired,
+// not yet effective, or has invalid date bounds needs explicit re-review.
+pub const CURRENT_SQL: &str = "NOT EXISTS(SELECT 1 FROM document_metadata m WHERE m.path=d.path AND m.root=CASE WHEN d.path GLOB '.背景/*' THEN '背景资料库' ELSE COALESCE((SELECT value FROM settings WHERE key='root'),'') END AND (m.reviewed_hash!=d.hash OR (m.valid_from IS NOT NULL AND (date(m.valid_from) IS NULL OR date(m.valid_from)!=m.valid_from OR m.valid_from>date('now','localtime'))) OR (m.valid_until IS NOT NULL AND (date(m.valid_until) IS NULL OR date(m.valid_until)!=m.valid_until OR m.valid_until<date('now','localtime'))) OR m.valid_from>m.valid_until))";
+pub fn summary_blocked_sql()->String {
+    format!("(d.path='.背景/综合背景' AND (EXISTS(SELECT 1 FROM background_library x WHERE x.key GLOB 'excluded/*' AND json_extract(x.value,'$.excluded')=1) OR EXISTS(SELECT 1 FROM record_assertions) OR EXISTS(SELECT 1 FROM documents d WHERE NOT {CURRENT_SQL})))")
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,9 +29,12 @@ impl Index {
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM background_library WHERE key GLOB 'excluded/*' AND json_extract(value,'$.excluded')=1)")
             .fetch_one(&self.pool).await.map_err(|e| e.to_string())
     }
+    pub async fn has_invalid_sources(&self)->Result<bool> {
+        sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM documents d WHERE NOT {CURRENT_SQL})")).fetch_one(&self.pool).await.map_err(|e|e.to_string())
+    }
     pub async fn request_history(&self, history: &[crate::Turn]) -> Result<Vec<crate::Turn>> {
         let mut turns=history.to_vec();
-        if self.has_withdrawn_sources().await? {
+        if self.has_withdrawn_sources().await? || self.has_manual_assertions().await? || self.has_invalid_sources().await? {
             // Suggestions may quote any withdrawn source and have no dependency
             // graph. Actual utterances remain actual user-supplied context.
             for turn in &mut turns {turn.suggested_answer=None;}
@@ -59,9 +67,13 @@ impl Index {
     pub async fn request_fact_card(&self) -> Result<FactCard> {
         let facts = self.fact_card().await?;
         for source in &facts.sources {
-            let row = sqlx::query(&format!("SELECT d.hash,CASE WHEN d.path GLOB '.背景/*' THEN '背景资料库' ELSE COALESCE((SELECT value FROM settings WHERE key='root'),'') END AS root,{EXCLUDED_SQL} AS excluded FROM documents d WHERE d.path=?"))
+            let current:Option<String>=sqlx::query_scalar(&format!("SELECT a.value FROM chunks c JOIN documents d ON c.path=d.path {} WHERE c.id=?",crate::assertions::JOIN))
+                .bind(&source.reference.source_id).fetch_optional(&self.pool).await.map_err(|e|e.to_string())?.flatten();
+            if crate::assertions::parse(current)?!=source.user_assertion {return Err("事实卡引用的片段有新的本人修订，请核对事实卡；本次未发送".into());}
+
+            let row = sqlx::query(&format!("SELECT d.hash,CASE WHEN d.path GLOB '.背景/*' THEN '背景资料库' ELSE COALESCE((SELECT value FROM settings WHERE key='root'),'') END AS root,{EXCLUDED_SQL} AS excluded,{CURRENT_SQL} AS current FROM documents d WHERE d.path=?"))
                 .bind(&source.reference.path).fetch_optional(&self.pool).await.map_err(|e| e.to_string())?;
-            if !row.is_some_and(|r| !r.get::<bool,_>("excluded") && r.get::<String,_>("hash")==source.reference.hash && r.get::<String,_>("root")==source.reference.root) {
+            if !row.is_some_and(|r| !r.get::<bool,_>("excluded") && r.get::<bool,_>("current") && r.get::<String,_>("hash")==source.reference.hash && r.get::<String,_>("root")==source.reference.root) {
                 return Err("事实卡引用的来源已撤回或更新，请先核对事实卡；本次未发送".into());
             }
         }

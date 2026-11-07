@@ -19,3 +19,5 @@
 附带 `assets/example/source.txt` 和 `profile.json` 全部是虚构案例：保留旧材料与新说明的冲突，不以文件时间判定哪份真实；接口练习不代表生产经验。`scripts/self_test.py` 会按运行目录生成对应 id/cards，不预置与机器路径绑定的 id。
 
 桌面长任务或 `status --state <job.sqlite>` 的用量摘要独立于资料包。`calls`是请求尝试次数；`sum_prompt_tokens`与`sum_completion_tokens`各自累计服务商已返回的合法值，完全未知为null，零值仍为0。`unknown_calls`包括任一用量缺失的请求，不能当作免费请求。输出截断或JSON错误仍记录已返回的用量；继续任务可能重发未获得合法结果的部分。摘要不是费用账单，也不能将累计token当作单请求上下文大小。2.0.2沿用原断点表和规则签名，不自动重发已完成的有效分块。
+
+2.0.3 的桌面既有资料整理可收到 `origin=user_asserted` 的本人修订：quote/source_hash 属于手动声明，original_source 才是原始资料定位，activity 保留计划/进行中/本人声明完成的差别。这些字段属于内部整理输入，不扩展 v1/v2 导入包，也不允许 Agent 据此改写原文。

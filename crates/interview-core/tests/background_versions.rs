@@ -9,7 +9,7 @@ async fn repeat_changes_versions_review_and_model_scope_survive_reopen(){
  apply(&index,&b,true).await;
  let original=index.documents().await.unwrap().into_iter().find(|d|d.path.ends_with("旧资料.md")).unwrap();
  index.update_document(DocumentUpdate{path:original.path.clone(),expected_root:original.root.clone(),expected_hash:original.hash.clone(),confirmed:true,valid_from:Some("2020-01-01".into()),valid_until:Some("2020-12-31".into())}).await.unwrap();
- let input=index.background_inputs(false).await.unwrap();assert_eq!(input[0]["source_hash"],b.documents[0].hash);assert_eq!(input[0]["source_status"]["validity"],"expired");
+ assert!(index.background_inputs(false).await.unwrap().is_empty(),"expired sources are historical-only");
  assert_eq!(index.background_changes(&b,&index.setting("version").await.unwrap()).await.unwrap()[0]["state"],"unchanged");
  apply(&index,&b,true).await;
  assert_eq!(index.documents().await.unwrap().iter().find(|d|d.path==original.path).unwrap().metadata.confirmation,Confirmation::Confirmed);
@@ -28,7 +28,9 @@ async fn repeat_changes_versions_review_and_model_scope_survive_reopen(){
  let old=history["rows"].as_array().unwrap().iter().find(|r|r["current"]==false).unwrap()["revision"].as_str().unwrap();
  let records=reopened.background_version_records(&b.documents[0].id,&updated.hash,old,0).await.unwrap();assert!(records["rows"][0]["quote"].as_str().unwrap().contains('无'));assert_eq!(records["current"],false);
  assert!(reopened.background_version_records(&copy.documents[0].id,&updated.hash,old,0).await.is_err());
- let input=reopened.background_inputs(false).await.unwrap();assert_eq!(input.len(),1,"private duplicate or archived version escaped into model context");assert!(input[0]["quote"].as_str().unwrap().contains('有'));assert_eq!(input[0]["source_status"]["confirmation"],"content_changed");
+ assert!(reopened.background_inputs(false).await.unwrap().is_empty(),"changed content requires new review");
+ reopened.update_document(DocumentUpdate{path:updated.path.clone(),expected_root:updated.root.clone(),expected_hash:updated.hash.clone(),confirmed:true,valid_from:None,valid_until:None}).await.unwrap();
+ let input=reopened.background_inputs(false).await.unwrap();assert_eq!(input.len(),1,"private duplicate or archived version escaped into model context");assert!(input[0]["quote"].as_str().unwrap().contains('有'));assert_eq!(input[0]["source_status"]["confirmation"],"confirmed");
  let mut edited=b.clone();edited.documents[0].records[0].note="本次重新解释，仍需本人核实".into();assert_eq!(reopened.background_changes(&edited,&reopened.setting("version").await.unwrap()).await.unwrap()[0]["state"],"extraction_changed");
  assert_eq!(reopened.fact_card().await.unwrap().version,0,"archive became confirmed personal facts");
 }
