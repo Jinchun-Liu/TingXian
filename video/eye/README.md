@@ -7,8 +7,9 @@ It has no capture, audio, recording preference, UI, cloud or face-replacement AP
 The Windows `EyePipeOutput` now connects a prepared Session's corrected results
 to the existing authenticated video pipe. It has a single pending corrected frame,
 a separate conversion/send lane, explicit operation tickets and nonblocking
-revocation. The own synthetic two-process tests read actual MF samples; the
-NVIDIA worker, application UI and installed component are not connected yet.
+revocation. Own synthetic two-process tests read actual MF samples. The streaming
+worker now uses this sink under Rust supervision; real SDK stream execution,
+application UI and installed-component integration remain unverified.
 See [output integration](../windows/EYE-OUTPUT.md).
 
 `EyeCorrectionProvider` accepts packed BGR8 frames and returns a separate corrected
@@ -26,8 +27,8 @@ buffer or an error. `Session` owns explicit preparation and generation admission
   Cleanup uncertainty permanently blocks this process from restarting.
 - Provider calls use one worker execution lane. The session owns no threads.
   The host must join that lane after stop before destruction, and supervise it in
-  a killable process for hangs/crashes. An explicit native offline worker now uses
-  `video-worker-control`; live capture, preview and output integration remain pending.
+  a killable process for hangs/crashes. Native offline and streaming workers use
+  `video-worker-control`; live capture, preview and installed output remain pending.
 - Sink callbacks run under the generation lock and must be short, non-reentrant,
   synchronous and `noexcept`. They acknowledge handoff, not meeting receipt.
 
@@ -57,6 +58,25 @@ file/model paths, PIDs, device selection, credentials or webview input. Vendor
 stdout is separate from the bounded report channel. Reports must match the
 generation, expected provider, dimensions and actual output length; a partial
 result cannot claim completion. The no-media inspection protocol is unchanged.
+
+`begin_stream_if_current` provides a native-only streaming intent and `StreamFeed`.
+The caller supplies 720p BGR with original monotonic capture time. One pending
+frame is replaced by the latest, separate from the writer's current frame; no
+capture API, runtime discovery, automatic device registration or start is added.
+The `--eye-stream-v1` protocol returns a transient `NativeOutputEndpoint` through
+the inherited report pipe. Only a native preview/output owner may consume it;
+never send its activation blob to a webview, command line, log or saved setting.
+`Ready` means prepared, not previewing or delivering to a meeting. `finish` ends
+explicitly; dropping the feed or stopping closes admission. Queue replacement,
+cancelled writes and completed pipe writes are separately counted. Pipe writes
+and output submission are not presentation acknowledgements.
+
+Input has a five-second idle deadline and one-second partial-frame deadline.
+Readiness has a 30-second host limit; each stream run has a two-hour upper bound.
+Output disconnection faults the session; it cannot silently reconnect or fall
+back to raw input. The supervisor retires its writer after the child exits,
+verifies thread completion after I/O cancellation, and blocks restart if OS
+cleanup cannot be confirmed. See [stream validation](../../docs/eye-stream-validation-2026-11-07.md).
 
 Both the watcher and the processing lane check the actual owner/stop handles.
 The controller rechecks cancellation while holding its completion lock, so a
