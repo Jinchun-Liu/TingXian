@@ -615,6 +615,7 @@ pub fn run() {
             education::education_list,
             education::education_load,
             education::education_save,
+            education::education_save_receipt,
             education::education_cancel,
             education::education_preview,
             education::education_generate,

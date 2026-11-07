@@ -17,6 +17,7 @@ function result(s,r,change={}){return {text:JSON.stringify(output(s,r)),model_ve
 function harness(){const calls=[],saved=new Map();let fail=false,saveGate=null,modelGate=null;
   const c=new EducationController({invoke:async(name,args)=>{calls.push({name,args:e.clone(args??{})});
     if(name==='education_cancel')return;
+    if(name==='education_save_receipt')return null;
     if(name==='education_save'){if(saveGate)await saveGate.promise;if(fail)throw Error('synthetic disk failure');const current=saved.get(args.document.id),revision=(current?.store_revision??0)+1;assert.equal(args.expected,current?.store_revision??0);saved.set(args.document.id,{...e.clone(args.document),store_revision:revision});return revision;}
     if(name==='education_load')return e.clone(saved.get(args.id));
     if(name==='education_preview')return {budget:16000,model:'synthetic-fixture-only',endpoint:'http://127.0.0.1/unused',profile_stamp:'synthetic-profile-pin',scope_epoch:7,output_reserve:4096,context_limit:32768,estimate:'synthetic'};
@@ -93,6 +94,55 @@ let groups=0;async function check(name,run){await run();groups++;console.log('PA
   await check('failed and concurrent saves retain new input; no silent overwrite after acknowledgement',async()=>{
     const h=harness();h.c.edit({question:'合成',text:answer});h.setFail(true);await assert.rejects(h.c.persist());assert.equal(h.c.dirty,true);assert.equal(h.c.study.draft.text,answer);h.setFail(false);
     const gate=deferred();h.setSaveGate(gate);const saving=h.c.persist();await Promise.resolve();h.c.edit({text:'保存过程的新输入'});gate.resolve();await saving;assert.equal(h.c.dirty,false);assert.equal(h.saved.get(h.c.study.id).draft.text,'保存过程的新输入');h.c.dispose();
+  });
+  await check('lost save acknowledgement reconciles the exact snapshot before newer edits',async()=>{
+    // Mirror the native store's optimistic revision and exact-payload replay
+    // contract. Cover both sides of an ambiguous commit, with no provider calls.
+    for(const committed of [true,false]){
+      let stored=null,fail=true,failReceipt=false;const writes=[],calls=[];
+      const c=new EducationController({invoke:async(name,args)=>{
+        calls.push({name,args:e.clone(args??{})});if(name==='education_cancel')return;
+        assert.ok(['education_save','education_save_receipt'].includes(name),'recovery must not dispatch a model or replace from disk');
+        const candidate={...e.clone(args.document),store_revision:stored?.store_revision??0};
+        if(name==='education_save_receipt'){
+          if(failReceipt)throw Error('synthetic receipt unavailable');
+          if(stored&&JSON.stringify(candidate)===JSON.stringify(stored))return stored.store_revision;
+          assert.equal(args.expected,stored?.store_revision??0,'a different writer must not be overwritten');return null;
+        }
+        if(stored&&JSON.stringify(candidate)===JSON.stringify(stored))return stored.store_revision;
+        assert.equal(args.expected,stored?.store_revision??0,'new content must use the acknowledged revision');
+        if(!fail||committed){stored={...candidate,store_revision:(stored?.store_revision??0)+1};writes.push(e.clone(stored));}
+        if(fail)throw Error('synthetic save acknowledgement lost');
+        return stored.store_revision;
+      }});
+      c.edit({question:'合成：事务提交后响应超时',text:'初次待保存输入'});
+      await assert.rejects(c.persist(),/acknowledgement lost/);const first=calls.find(x=>x.name==='education_save').args;
+      assert.equal(c.dirty,true);assert.equal(c.study.store_revision,0);
+      c.edit({text:'回执失败后仍继续填写的新输入'});fail=false;failReceipt=true;
+      await assert.rejects(c.persist(),/receipt unavailable/);assert.equal(c.dirty,true);assert.equal(calls.filter(x=>x.name==='education_save').length,1,'no write before the uncertain commit is reconciled');
+      failReceipt=false;
+      await c.persist();
+      const receipts=calls.filter(x=>x.name==='education_save_receipt');assert.deepEqual(receipts.map(x=>x.args),[first,first],'read-only reconciliation must identify the exact failed snapshot');
+      assert.deepEqual(writes.map(s=>s.draft.text),committed?['初次待保存输入','回执失败后仍继续填写的新输入']:['回执失败后仍继续填写的新输入']);
+      assert.equal(stored.store_revision,committed?2:1);assert.equal(c.study.store_revision,stored.store_revision);assert.equal(c.dirty,false);assert.equal(c.error,'');
+      assert.equal((await e.restoreStudy(stored)).draft.text,'回执失败后仍继续填写的新输入');
+      c.dispose();await c.persist();
+    }
+  });
+  await check('rejected drafts can be corrected; conflicting receipts never overwrite another version',async()=>{
+    let rejectDraft=true,conflict=false,revision=0;const saved=[],calls=[];
+    const c=new EducationController({invoke:async(name,args)=>{
+      calls.push(name);if(name==='education_cancel')return;
+      if(name==='education_save_receipt'){if(conflict)throw Error('synthetic other writer conflict');return null;}
+      assert.equal(name,'education_save');if(rejectDraft)throw Error('synthetic invalid draft rejected');
+      assert.equal(args.expected,revision);saved.push(e.clone(args.document));return ++revision;
+    }});
+    c.edit({question:'合成恢复',text:'被拒绝的输入'});await assert.rejects(c.persist(),/rejected/);
+    c.edit({text:'已改正的输入'});rejectDraft=false;await c.persist();assert.deepEqual(saved.map(s=>s.draft.text),['已改正的输入']);
+    rejectDraft=true;c.edit({text:'保留本人的后续草稿'});await assert.rejects(c.persist());rejectDraft=false;conflict=true;
+    const writes=calls.filter(n=>n==='education_save').length;await assert.rejects(c.persist(),/other writer conflict/);
+    assert.equal(calls.filter(n=>n==='education_save').length,writes);assert.equal(c.dirty,true);assert.equal(c.study.draft.text,'保留本人的后续草稿');
+    conflict=false;await c.persist();c.dispose();await c.persist();
   });
   await check('actual controller preview, save-before-send, replay, explicit restore and zero automatic resends',async()=>{
     const h=harness();h.c.study=await study();h.c.changed();const id=h.c.study.id,a=h.c.study.attempts[0].id;await h.c.prepare(a);await h.c.send();await h.c.send().catch(()=>{});assert.equal(h.calls.filter(c=>c.name==='education_generate').length,1);assert.equal(h.c.study.feedback.length,1);assert.equal(h.c.study.tasks[0].usage,null);

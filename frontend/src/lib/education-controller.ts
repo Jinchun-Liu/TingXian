@@ -6,6 +6,10 @@ export type Preview={request:Request;budget:number;model:string;endpoint:string;
 export class EducationController {
   study=newStudy();dirty=false;saving=false;error='';preview:Preview|null=null;preparing=false;assistActive=false;
   private serial=0;private savePromise:Promise<void>|null=null;private timer:ReturnType<typeof setTimeout>|null=null;
+  // A failed IPC reply does not prove the transaction failed. Reconcile this
+  // exact snapshot read-only before submitting edits made since the failure.
+  private unacknowledgedSave:{document:Study;expected:number;serial:number}|null=null;
+  private saveError='';
   private listeners=new Set<()=>void>();private pending=new Map<string,Request>();private cancelled:Promise<unknown>=Promise.resolve();
   constructor(private bridge:Bridge){}
   subscribe=(fn:()=>void)=>{this.listeners.add(fn);return()=>{this.listeners.delete(fn);};};
@@ -21,9 +25,23 @@ export class EducationController {
     if(!this.dirty)return;
     this.saving=true;this.notify();
     this.savePromise=(async()=>{
-      while(this.dirty){const serial=this.serial,document=clone(this.study),expected=this.study.store_revision;
-        try{const revision=await this.bridge.invoke<number>('education_save',{document,expected});if(!Number.isSafeInteger(revision)||revision<expected)throw Error('保存回执无效');this.study.store_revision=revision;if(serial===this.serial)this.dirty=false;}
-        catch(e){this.error='保存未完成，当前输入仍保留：'+String(e);throw e;}
+      while(this.dirty){
+        try{
+          if(this.unacknowledgedSave){
+            const {document,expected,serial}=this.unacknowledgedSave;
+            const receipt=await this.bridge.invoke<number|null>('education_save_receipt',{document,expected});
+            if(receipt!==null){if(!Number.isSafeInteger(receipt)||receipt<expected)throw Error('保存核对回执无效');this.study.store_revision=receipt;if(serial===this.serial)this.dirty=false;}
+            this.unacknowledgedSave=null;
+          }
+          if(this.dirty){
+            const serial=this.serial,document=clone(this.study),expected=this.study.store_revision;
+            this.unacknowledgedSave={serial,document,expected};
+            const revision=await this.bridge.invoke<number>('education_save',{document,expected});
+            if(!Number.isSafeInteger(revision)||revision<expected)throw Error('保存回执无效');
+            this.study.store_revision=revision;this.unacknowledgedSave=null;if(serial===this.serial)this.dirty=false;
+          }
+          if(this.error===this.saveError)this.error='';this.saveError='';
+        }catch(e){this.saveError='保存未完成，当前输入仍保留：'+String(e);this.error=this.saveError;throw e;}
       }
     })();
     try{await this.savePromise;}finally{this.savePromise=null;this.saving=false;this.notify();}

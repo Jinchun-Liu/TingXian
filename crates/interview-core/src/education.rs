@@ -171,6 +171,24 @@ pub async fn load(pool:&SqlitePool,id:&str)->Result<Value>{
     let payload:String=row.get("payload");if digest(payload.as_bytes())!=row.get::<String,_>("sha256"){return Err("教育记录摘要不一致，原文件保留".into());}
     let value:Value=serde_json::from_str(&payload).map_err(|_|"教育记录格式损坏，原文件保留")?;validate_document(&value)?;Ok(value)
 }
+/// Read-only recovery after an ambiguous save reply. Some(revision) proves the
+/// exact submitted snapshot is current; None proves the expected revision is
+/// unchanged. A different writer or damaged record must never be overwritten.
+/// Do not validate the submitted draft here: a rejected draft may have been
+/// corrected since the failed save, and must not poison the recovery queue.
+pub async fn save_receipt(pool:&SqlitePool,mut document:Value,expected:u64)->Result<Option<u64>>{
+    let id=document["id"].as_str().filter(|id|valid_id(id)).ok_or("保存核对标识无效")?.to_owned();
+    let row=sqlx::query("SELECT revision,payload,sha256 FROM study_revisions WHERE id=? ORDER BY revision DESC LIMIT 1").bind(&id).fetch_optional(pool).await.map_err(|_|"保存结果尚未核对，当前输入保留")?;
+    let Some(row)=row else{return if expected==0{Ok(None)}else{Err("原教育记录不存在，当前输入保留".into())};};
+    let payload:String=row.get("payload");if digest(payload.as_bytes())!=row.get::<String,_>("sha256"){return Err("教育记录摘要不一致，原文件保留".into());}
+    let previous:Value=serde_json::from_str(&payload).map_err(|_|"教育记录格式损坏，原文件保留")?;
+    let current=row.get::<i64,_>("revision") as u64;
+    if current<expected{return Err("教育记录版本已变化，当前输入保留".into());}
+    document["store_revision"]=json!(current);
+    if previous==document{return Ok(Some(current));}
+    if current==expected{return Ok(None);}
+    Err("记录已有其他更新，当前输入保留；未覆盖保存版本".into())
+}
 pub async fn list(pool:&SqlitePool)->Result<Vec<Value>>{
     let rows=sqlx::query("SELECT s.id,s.revision,json_extract(s.payload,'$.draft.question') AS question,json_extract(s.payload,'$.status') AS status FROM study_revisions s JOIN (SELECT id,MAX(revision) revision FROM study_revisions GROUP BY id) h ON s.id=h.id AND s.revision=h.revision ORDER BY s.rowid DESC LIMIT 200").fetch_all(pool).await.map_err(|_|"教育记录列表读取失败")?;
     Ok(rows.into_iter().map(|r|json!({"id":r.get::<String,_>("id"),"revision":r.get::<i64,_>("revision"),"question":r.get::<String,_>("question"),"status":r.get::<String,_>("status")})).collect())
@@ -215,6 +233,33 @@ mod tests {
         pool.close().await;let pool=open(&db).await.unwrap();assert_eq!(load(&pool,"study-1").await.unwrap()["draft"]["text"],"保存后的新输入");assert_eq!(list(&pool).await.unwrap().len(),1);
         assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM study_revisions").fetch_one(&pool).await.unwrap(),2);assert_eq!(std::fs::read(&legacy).unwrap(),original);
         sqlx::query("PRAGMA query_only=ON").execute(&pool).await.unwrap();let mut failed=load(&pool,"study-1").await.unwrap();failed["draft"]["text"]=json!("磁盘错误演练保留的输入");assert!(save(&pool,failed,2).await.is_err());assert_eq!(load(&pool,"study-1").await.unwrap()["draft"]["text"],"保存后的新输入");
+        pool.close().await;
+    }
+    #[tokio::test]
+    async fn ambiguous_save_receipts_are_read_only_and_do_not_hide_other_writers(){
+        let root=tempfile::Builder::new().prefix("education-receipt-").tempdir().unwrap().keep();
+        let pool=open(&root.join("合成回执.sqlite")).await.unwrap();let first=document();
+        assert_eq!(save_receipt(&pool,first.clone(),0).await.unwrap(),None);
+        assert!(save_receipt(&pool,first.clone(),1).await.is_err(),"missing prior data is not an uncommitted first save");
+        assert_eq!(save(&pool,first.clone(),0).await.unwrap(),1);
+        // Simulate losing that successful return: the caller still expects 0.
+        sqlx::query("PRAGMA query_only=ON").execute(&pool).await.unwrap();
+        assert_eq!(save_receipt(&pool,first.clone(),0).await.unwrap(),Some(1));
+        let mut rejected=load(&pool,"study-1").await.unwrap();rejected["mode"]=json!("invalid");
+        assert!(save(&pool,rejected.clone(),1).await.is_err());
+        assert_eq!(save_receipt(&pool,rejected,1).await.unwrap(),None,"a rejected draft must not poison recovery");
+        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM study_revisions").fetch_one(&pool).await.unwrap(),1);
+        sqlx::query("PRAGMA query_only=OFF").execute(&pool).await.unwrap();
+        let mut next=first.clone();next["draft"]["text"]=json!("回执丢失后继续填写");
+        assert_eq!(save(&pool,next.clone(),1).await.unwrap(),2);
+        assert_eq!(save_receipt(&pool,next.clone(),1).await.unwrap(),Some(2));
+        assert!(save_receipt(&pool,first.clone(),0).await.is_err(),"a different current snapshot is never silently adopted");
+        assert!(save_receipt(&pool,next.clone(),3).await.is_err(),"a lower revision cannot acknowledge a later write");
+        assert!(save(&pool,first.clone(),0).await.is_err());
+        assert_eq!(load(&pool,"study-1").await.unwrap()["draft"]["text"],"回执丢失后继续填写");
+        sqlx::query("UPDATE study_revisions SET sha256='damaged' WHERE revision=2").execute(&pool).await.unwrap();
+        assert!(save_receipt(&pool,next,1).await.is_err(),"a damaged receipt must not be acknowledged");
+        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM study_revisions").fetch_one(&pool).await.unwrap(),2);
         pool.close().await;
     }
     #[tokio::test]

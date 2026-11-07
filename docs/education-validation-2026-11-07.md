@@ -1,5 +1,7 @@
 # EDU-M0/M1 教育增量验收
 
+最新保存回执丢失与继续输入的修复见[保存恢复验收](education-save-recovery-validation-2026-11-07.md)。
+
 后续接手复核及两项 M1 修复见[接续记录](education-validation-2026-11-07-followup.md)。
 下文为原提交与原预览包的验收，不能替代后续修复的安装验证。
 

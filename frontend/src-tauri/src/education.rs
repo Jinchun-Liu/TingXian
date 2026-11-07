@@ -20,6 +20,8 @@ pub async fn education_load<R:tauri::Runtime>(window:WebviewWindow<R>,state:Stat
 #[tauri::command]
 pub async fn education_save<R:tauri::Runtime>(window:WebviewWindow<R>,state:State<'_,EducationState>,document:Value,expected:u64)->Result<u64,String>{owner(&window)?;core::save(state.pool(window.app_handle()).await?,document,expected).await}
 #[tauri::command]
+pub async fn education_save_receipt<R:tauri::Runtime>(window:WebviewWindow<R>,state:State<'_,EducationState>,document:Value,expected:u64)->Result<Option<u64>,String>{owner(&window)?;core::save_receipt(state.pool(window.app_handle()).await?,document,expected).await}
+#[tauri::command]
 pub fn education_cancel<R:tauri::Runtime>(window:WebviewWindow<R>,state:State<'_,EducationState>,session_id:String,generation:u64)->Result<(),String>{owner(&window)?;state.tasks.cancel(&session_id,generation);Ok(())}
 #[tauri::command]
 pub async fn education_preview<R:tauri::Runtime>(window:WebviewWindow<R>,state:State<'_,EducationState>,interview:State<'_,crate::interview::InterviewState>,request:Request)->Result<Value,String>{
@@ -76,13 +78,13 @@ mod tests{
     #[test]
     fn education_ipc_rejects_display_and_quit_cancels_without_restart(){
         let app=tauri::test::mock_builder().manage(EducationState::default()).manage(crate::interview::InterviewState::default()).manage(crate::interview_exit::ExitState::default())
-            .invoke_handler(tauri::generate_handler![education_list,education_load,education_save,education_cancel,education_preview,education_generate])
+            .invoke_handler(tauri::generate_handler![education_list,education_load,education_save,education_save_receipt,education_cancel,education_preview,education_generate])
             .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
         let main=tauri::WebviewWindowBuilder::new(&app,"main",Default::default()).build().unwrap();
         let display=tauri::WebviewWindowBuilder::new(&app,"interview-conversation",Default::default()).build().unwrap();
         let request=json!({"task_id":"task-1","session_id":"study-1","generation":2,"lane":"interactive","input_json":"{}","input_hash":"invalid","profile_id":"answer-1","context_limit":32768,"confirmed":true});
         let invoke=|window:&tauri::WebviewWindow<tauri::test::MockRuntime>,cmd:&str|tauri::test::get_ipc_response(window,tauri::webview::InvokeRequest{cmd:cmd.into(),callback:tauri::ipc::CallbackFn(0),error:tauri::ipc::CallbackFn(1),url:if cfg!(windows){"http://tauri.localhost"}else{"tauri://localhost"}.parse().unwrap(),body:tauri::ipc::InvokeBody::Json(json!({"id":"study-1","document":{},"expected":0,"sessionId":"study-1","generation":3,"request":request})),headers:Default::default(),invoke_key:tauri::test::INVOKE_KEY.into()});
-        for cmd in ["education_list","education_load","education_save","education_cancel","education_preview","education_generate"]{assert_eq!(invoke(&display,cmd).err(),Some(json!("展示窗不能读取或操作教育记录")),"{cmd}");}
+        for cmd in ["education_list","education_load","education_save","education_save_receipt","education_cancel","education_preview","education_generate"]{assert_eq!(invoke(&display,cmd).err(),Some(json!("展示窗不能读取或操作教育记录")),"{cmd}");}
         assert!(app.state::<EducationState>().pool.get().is_none(),"rejected display must never open storage");
         assert!(invoke(&main,"education_preview").is_err());assert!(app.state::<EducationState>().pool.get().is_none());
         let r:Request=serde_json::from_value(request.clone()).unwrap();let lease=app.state::<EducationState>().tasks.begin(&r).unwrap();

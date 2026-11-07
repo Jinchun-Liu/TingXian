@@ -3,12 +3,13 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('n
 const req=require('node:module').createRequire(path.resolve(__dirname,'../frontend/package.json'));
 const React=req('react'),{act,create}=req('react-test-renderer'),ts=req('typescript');
 global.crypto=require('node:crypto').webcrypto;global.window={addEventListener(){},removeEventListener(){}};
-const records=new Map(),calls=[],guards=new Set();let failSave=false,sessionGate=null;
+const records=new Map(),calls=[],guards=new Set();let failSave=false,loseSaveReply=false,sessionGate=null;
 const oldSnapshot={version:1,history:[{id:'old-q',role:'remote',question:'合成旧题',suggestion:'AI 草稿',confirmed_answer:null,status:'done',sources:[],time:'00:01',timing:''}],transcripts:[],spoken_dialogue:[],current:{question:'',answer:''},calls:0,usage:'未知'};
 async function invoke(name,args){calls.push(name);
   if(name==='education_cancel')return;
   if(name==='education_list')return [...records.values()].map(s=>({id:s.id,question:s.draft.question,revision:s.store_revision,status:s.status}));
-  if(name==='education_save'){if(failSave)throw Error('synthetic disk failure');const d=structuredClone(args.document);assert.equal(args.expected,records.get(d.id)?.store_revision??0);d.store_revision=args.expected+1;records.set(d.id,d);return d.store_revision;}
+  if(name==='education_save'){if(failSave)throw Error('synthetic disk failure');const d=structuredClone(args.document);assert.equal(args.expected,records.get(d.id)?.store_revision??0);d.store_revision=args.expected+1;records.set(d.id,d);if(loseSaveReply){loseSaveReply=false;throw Error('synthetic lost save reply');}return d.store_revision;}
+  if(name==='education_save_receipt'){const stored=records.get(args.document.id),candidate={...structuredClone(args.document),store_revision:stored?.store_revision??0};if(stored&&JSON.stringify(stored)===JSON.stringify(candidate))return stored.store_revision;assert.equal(args.expected,stored?.store_revision??0);return null;}
   if(name==='education_load')return structuredClone(records.get(args.id));
   if(name==='interview_providers_get')return {config:{answers:[],background:{enabled:false}},key_configured:{}};
   if(name==='tingxian_session_preview')return sessionGate?await sessionGate:structuredClone(oldSnapshot);
@@ -43,6 +44,8 @@ async function click(name){assert.ok(button(name),name);await act(async()=>{butt
   await click('新练习');await change('打开练习记录',first.id);assert.equal(field('我的练习回答').props.value,'第二次作答修订：加入租户与请求体哈希验证。');assert.equal(field('选定资料文字').props.value,'尚未加入发送范围的合成片段');
   await change('复盘字号','24');assert.equal(tree.root.findByProps({className:'education-content'}).props.style.fontSize,24);
   failSave=true;await change('我的练习回答','磁盘失败时保留的文字');await click('保存草稿');assert.match(text(tree.toJSON()),/保存未完成/);assert.equal(field('我的练习回答').props.value,'磁盘失败时保留的文字');await assert.rejects([...guards][0](),/disk failure/);assert.equal(closed,0);failSave=false;await click('重试保存');
+  loseSaveReply=true;await change('我的练习回答','已提交但回执丢失的草稿');await click('保存草稿');assert.match(text(tree.toJSON()),/保存未完成/);
+  await change('我的练习回答','回执丢失后继续输入的草稿');await click('重试保存');assert.equal(records.get(first.id).draft.text,'回执丢失后继续输入的草稿');assert.doesNotMatch(text(tree.toJSON()),/保存未完成/);assert.equal(records.get(first.id).attempts.length,2,'save recovery must not duplicate attempts');
   const oldGeneration=records.get(first.id).generation;await act(async()=>{tree.update(React.createElement(EducationPanel,{...props,scopeEpoch:'1'}));await settle();});await click('保存草稿');assert.ok(records.get(first.id).generation>oldGeneration);
   const seed={key:'old-session',sourceRef:'saved:synthetic',turnId:'q-old',history:[{id:'q-old',role:'remote',question:'原会话问题',suggestion:'AI 编造经历不可作为初答',confirmed_answer:null,sources:[]}]};
   await act(async()=>{tree.update(React.createElement(EducationPanel,{...props,seed}));await settle();});assert.equal(field('我的练习回答').props.value,'');assert.match(text(tree.toJSON()),/缺少本人作答/);assert.equal(button('保存初答').props.disabled,true);
