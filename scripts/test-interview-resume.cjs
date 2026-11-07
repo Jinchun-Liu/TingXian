@@ -93,7 +93,18 @@ async function exercise(page){
   await click('保存当前会话到本机');const saved=calls.filter(c=>c.name==='interview_session_save').at(-1).args.snapshot;
   assert.equal(saved.history.length,0);assert.equal(saved.calls,0);assert.deepEqual(saved.cloud_asr_usage,cloudUsage);
   const before=calls.filter(c=>c.name==='interview_session_save').length;failUsage=true;await click('保存当前会话到本机');assert.equal(calls.filter(c=>c.name==='interview_session_save').length,before,'usage sync failure was silently saved as complete');
-  failUsage=false;await act(async()=>tree.unmount());
-  console.log(`PASS ${page}: pause/resume state, manual off, consent, cloud-only usage save/sync failure, local recovery, no model calls`);
+  failUsage=false;
+  health={...health,session_id:38,fault:null};
+  await click(page==='interview'?'开始持续转写':'开始持续聆听');
+  await act(async()=>tree.root.findByProps({'aria-label':'参会模式'}).props.onValueChange('groups'));
+  await act(async()=>tree.root.findByProps({'aria-label':'点名称呼'}).props.onChange({target:{value:'小林'}}));
+  const delayed={source:'System',native_session_id:38,sequence_id:1,utterance_id:1,text:'小林，请稍后总结。',is_partial:false,timestamp:'12:00',audio_start_time:0,audio_end_time:1};
+  await act(async()=>listeners.get('transcript-update')({payload:delayed}));
+  await act(async()=>listeners.get('interview-utterance-end')({payload:{source:'System',native_session_id:38,utterance_id:1,success:true}}));
+  assert.ok(text(tree.toJSON()).includes('稍后发言 · 小林'),'completed delay must produce a reminder');
+  assert.equal(calls.filter(c=>/answer_start|connection_test/.test(c.name)).length,0);
+  await click('停止采集');assert.ok(!text(tree.toJSON()).includes('稍后发言 · 小林'),'stop retained stale reminder');
+  await act(async()=>tree.unmount());
+  console.log(`PASS ${page}: pause/resume state, manual off, consent, cloud-only usage save/sync failure, local recovery, deferred reminder cleared on stop, no model calls`);
 }
 (async()=>{await exercise('interview');await exercise('interview-workspace');})().catch(e=>{console.error(e);process.exitCode=1;});

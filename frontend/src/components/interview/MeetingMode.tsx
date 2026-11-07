@@ -1,7 +1,7 @@
 'use client';
 import {ChoiceMenu, ChoiceOption} from '@/components/ui/choice-menu';
 import {useCallback,useEffect,useRef,useState} from 'react';
-import {addressedOnly,initialMeeting,MeetingAddress,meetingModes,MeetingSetup,readMeeting} from '@/lib/meeting-mode';
+import {addressedOnly,initialMeeting,MeetingAddress,meetingModes,MeetingSetup,meetingNotice,readMeeting} from '@/lib/meeting-mode';
 const storageKey='tingxian-meeting-v1';
 
 export function useMeetingMode(clearQueue:()=>void) {
@@ -9,12 +9,13 @@ export function useMeetingMode(clearQueue:()=>void) {
   const current=useRef(initialMeeting);
   const gate=useRef(new MeetingAddress());
   const [notice,setNotice]=useState('');
+  const deferred=useRef(false);
   const timer=useRef<ReturnType<typeof setTimeout>>();
   useEffect(()=>{
     try {const saved=readMeeting(JSON.parse(localStorage.getItem(storageKey)||'null'));current.current=saved;setSetup(saved);}catch{}
     return ()=>clearTimeout(timer.current);
   },[]);
-  const reset=useCallback(()=>{gate.current.reset();clearTimeout(timer.current);setNotice('');},[]);
+  const reset=useCallback(()=>{gate.current.reset();deferred.current=false;clearTimeout(timer.current);setNotice('');},[]);
   const change=(next:MeetingSetup)=>{
     clearQueue();reset();current.current=next;setSetup(next);
     try{localStorage.setItem(storageKey,JSON.stringify(next));}catch{}
@@ -30,13 +31,15 @@ export function useMeetingMode(clearQueue:()=>void) {
   };
   const decide=useCallback((text:string)=>{
     const result=gate.current.decide(current.current,text);
-    if(result.alert){
-      setNotice('正在叫你 · '+result.alert);clearTimeout(timer.current);
-      timer.current=setTimeout(()=>setNotice(''),12000);
+    const reminder=meetingNotice(result);
+    if(reminder && !(result.reminder==='collective' && deferred.current)){
+      deferred.current=reminder.persistent;
+      setNotice(reminder.text);clearTimeout(timer.current);
+      if(reminder.text && !reminder.persistent)timer.current=setTimeout(()=>setNotice(''),12000);
     }
     return result.answer;
   },[]);
-  return {setup,current,change,applyNames,notice,decide,reset,interrupt:()=>gate.current.reset()};
+  return {setup,current,change,applyNames,notice,decide,reset,interrupt:reset};
 }
 export function MeetingControls({setup,change}:{setup:MeetingSetup;change:(value:MeetingSetup)=>void}){
   return <div className="meeting-controls">

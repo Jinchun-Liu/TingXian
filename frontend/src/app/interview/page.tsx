@@ -617,6 +617,7 @@ export default function InterviewPage() {
     }else if(command==='stop'&&recording.isRecording){
       await run(async()=>{
           live.current.automatic = false; setAutomatic(false); await cancel(); await stopInterviewAudio();
+          meeting.reset();
           microphoneGate.current.close(); audioHealth.current.close(); syncHealth(); setHistory(h => h.map(t => t.status === 'listening' ? {...t,status:'recorded'} : t)); setMicLevel(0); setLevel(0); setPhase('采集已停止 · 可直接重新开始');
         });
     }else if(recording.isRecording&&(command==='pause'&&!recording.isPaused||command==='resume'&&recording.isPaused)){
