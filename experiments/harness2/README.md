@@ -67,3 +67,7 @@ env -i PATH=/usr/bin:/bin PYTHONDONTWRITEBYTECODE=1 \
 先补人工标注与评分器、独立模型适配和调用前预算接线，再以经用户确认的模型/费用上限运行 6 题 A/B/C0。完成开发集并冻结策略后，才进入 12 题 × 4 组 × 3 次的真正盲测。正式资料导入、Codex/Claude Code 安装回导、Windows、复杂问答/视觉、真实会议及长期经验激活均需后续验收。方案中的预算建议不视为消费授权。
 
 参考：[官方源码](https://github.com/google-research/harness2/tree/6868817518876de8fd170c6a8354daca273b6191)。本试验不替代上游完整实验，也不宣称复现论文结果。
+
+## 真实模型小试
+
+默认 `run_p0.py` 始终无 API。独立子目录 [pilot](pilot/README.md) 是后续 P1 的真实模型入口，要求明确预算授权和专用进程凭证；不会由 P0 自动启动。
