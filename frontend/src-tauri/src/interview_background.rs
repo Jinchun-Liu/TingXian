@@ -62,6 +62,15 @@ async fn read_job_request(app:&AppHandle,id:&str)->Result<Value,String>{
     if !req["api"]["key"].is_null(){return Err("整理清单不应保存凭证".into());}
     Ok(req)
 }
+async fn job_usage(db:&mut sqlx::SqliteConnection)->Result<Value,String>{
+    // Compatible with existing checkpoints: response validity and known usage are independent.
+    let row=sqlx::query("SELECT count(*) AS calls,count(prompt) AS measured_calls,sum(prompt) AS sum_prompt_tokens,max(prompt) AS peak_prompt_tokens,count(completion) AS completion_measured_calls,sum(completion) AS sum_completion_tokens,max(completion) AS peak_completion_tokens,coalesce(sum(prompt IS NULL OR completion IS NULL),0) AS unknown_calls FROM attempts")
+        .fetch_one(db).await.map_err(|_|"断点用量无效")?;
+    Ok(json!({"calls":row.get::<i64,_>("calls"),"measured_calls":row.get::<i64,_>("measured_calls"),
+        "sum_prompt_tokens":row.get::<Option<i64>,_>("sum_prompt_tokens"),"peak_prompt_tokens":row.get::<Option<i64>,_>("peak_prompt_tokens"),
+        "completion_measured_calls":row.get::<i64,_>("completion_measured_calls"),"sum_completion_tokens":row.get::<Option<i64>,_>("sum_completion_tokens"),
+        "peak_completion_tokens":row.get::<Option<i64>,_>("peak_completion_tokens"),"unknown_calls":row.get::<i64,_>("unknown_calls")}))
+}
 async fn jobs_view(app:&AppHandle,work:&Work)->Result<Vec<Value>,String>{
     let root=jobs_dir(app)?;
     let mut entries=match tokio::fs::read_dir(&root).await{Ok(v)=>v,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(vec![]),Err(_)=>return Err("无法读取整理任务目录".into())};
@@ -78,8 +87,8 @@ async fn jobs_view(app:&AppHandle,work:&Work)->Result<Vec<Value>,String>{
             let status:Option<String>=sqlx::query_scalar("SELECT value FROM meta WHERE key='status'").fetch_optional(&mut db).await.map_err(|_|"断点状态无效")?;
             let model:Option<String>=sqlx::query_scalar("SELECT json_extract(value,'$.api.model') FROM meta WHERE key='request'").fetch_optional(&mut db).await.map_err(|_|"断点模型无效")?;
             let row=sqlx::query("SELECT count(*) AS total,coalesce(sum(status='completed'),0) AS completed,coalesce(sum(status='failed'),0) AS failed,coalesce(sum(status='skipped'),0) AS skipped FROM files WHERE active=1").fetch_one(&mut db).await.map_err(|_|"断点文件清单无效")?;
-            let unknown:i64=sqlx::query_scalar("SELECT count(*) FROM attempts WHERE status IN ('pending','unknown')").fetch_one(&mut db).await.map_err(|_|"断点用量无效")?;
-            Ok::<Value,String>(json!({"id":id,"model":model,"status":if active.as_deref()==Some(id){"running"}else if status.as_deref()==Some("complete"){"complete"}else{"interrupted"},"total":row.get::<i64,_>("total"),"completed":row.get::<i64,_>("completed"),"failed":row.get::<i64,_>("failed"),"skipped":row.get::<i64,_>("skipped"),"unknown_calls":unknown}))
+            let metrics=job_usage(&mut db).await?;
+            Ok::<Value,String>(json!({"id":id,"model":model,"status":if active.as_deref()==Some(id){"running"}else if status.as_deref()==Some("complete"){"complete"}else{"interrupted"},"total":row.get::<i64,_>("total"),"completed":row.get::<i64,_>("completed"),"failed":row.get::<i64,_>("failed"),"skipped":row.get::<i64,_>("skipped"),"unknown_calls":metrics["unknown_calls"],"metrics":metrics}))
         }.await;
         out.push(item.unwrap_or_else(|_|json!({"id":id,"status":"unreadable","total":0,"completed":0,"failed":0,"skipped":0,"unknown_calls":0})));
     }
@@ -316,6 +325,20 @@ pub async fn background_export_skill(window:Window,app:AppHandle)->Result<Option
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[tokio::test]
+    async fn checkpoint_usage_keeps_partial_and_failed_response_metering(){
+        let mut db=sqlx::SqliteConnection::connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE attempts(id INTEGER PRIMARY KEY,status TEXT NOT NULL,budget INTEGER NOT NULL,prompt INTEGER,completion INTEGER)").execute(&mut db).await.unwrap();
+        let empty=job_usage(&mut db).await.unwrap();
+        assert_eq!(empty["calls"],0);assert!(empty["sum_prompt_tokens"].is_null());assert_eq!(empty["unknown_calls"],0);
+        for (status,prompt,completion) in [("returned",Some(120),Some(8192)),("returned",Some(30),None),("returned",None,Some(0)),("unknown",None,None),("pending",None,None)]{
+            sqlx::query("INSERT INTO attempts(status,budget,prompt,completion) VALUES(?,10000,?,?)").bind(status).bind(prompt).bind(completion).execute(&mut db).await.unwrap();
+        }
+        let measured=job_usage(&mut db).await.unwrap();
+        assert_eq!(measured["calls"],5);assert_eq!(measured["unknown_calls"],4);
+        assert_eq!(measured["sum_prompt_tokens"],150);assert_eq!(measured["peak_prompt_tokens"],120);
+        assert_eq!(measured["sum_completion_tokens"],8192);assert_eq!(measured["completion_measured_calls"],2);
+    }
     #[test]
     fn exported_skill_is_self_contained_and_does_not_overwrite(){
         let dir=std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());std::fs::create_dir(&dir).unwrap();

@@ -34,3 +34,11 @@ Harness 2.0.1 按 `(kind, quote)` 合并完全相同引文，`sources` 保留各
 核心测试覆盖重复导入、确认失效、旧库升级、同内容副本、授权隔离、重开数据库历史可见、旧哈希拒绝、归档上限事务回滚。原生合成清理测试包含历史归档。Python 覆盖跨批引用合并、来源时效/冲突标记和预算拆组；前端覆盖迟到隔离、显式查看、分页与未知旧时间。
 
 未验证：安装版异常中断、真实模型对矛盾资料的判断质量、真实 Codex/Claude Code 推理和导回、Windows 原生 UI/归档。
+
+## 任务用量兼容补充（工具包2.0.2）
+
+沿用 `attempts(id,status,budget,prompt,completion)`，不迁移表、不改变模型/来源/规则签名。`status=returned` 仅表示响应已返回，不表示有可用答案或完整用量。截断、无有效choice、内容JSON失败时，先记录合法usage，再拒绝产物；输出不进入缓存。请求中断则保持pending/unknown，用户继续才会重新尝试未取得合法结果的部分。
+
+`background_status.jobs[].metrics` 新增可选的用量摘要：`calls`为尝试次数，`sum_prompt_tokens`/`sum_completion_tokens`为各自已知值的和，完全未知为null而非0；`measured_calls`与`completion_measured_calls`分别记录有对应字段的请求数。`unknown_calls`为任一字段缺失的请求数；兼容旧的顶层同名字段。峰值与累计数不能混同，usage不等于货币账单。Windows合并时保留这些字段及来源/权限边界。
+
+独立worker通过真实回环HTTP和进程终止测试验证缓存复用、排他锁、未知用量及完成后不重发；这不替代安装版应用崩溃、真实API或Windows验收。

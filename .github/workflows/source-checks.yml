@@ -30,6 +30,7 @@ jobs:
       - run: node scripts/test-background-ui.cjs
       - run: python3 -m pip install -r interview/requirements.txt
       - run: python3 scripts/test-background-harness.py
+      - run: python3 scripts/test-background-process-recovery.py
       - run: node scripts/test-public-source.cjs
       - run: python3 scripts/test-interview-monitor.py
       - run: pnpm exec tsc --noEmit --incremental false

@@ -75,3 +75,5 @@ jobs:
           cargo test --locked -p meetily --lib audio::capture::core_audio::startup_tests -- --nocapture
       - name: Session recovery and interview regressions
         run: cargo test --locked -p meetily --lib interview -- --nocapture
+      - name: Portable background worker process recovery
+        run: python3 scripts/test-background-process-recovery.py

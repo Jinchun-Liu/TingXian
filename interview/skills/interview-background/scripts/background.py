@@ -131,6 +131,21 @@ def profile(value):
 
 class ProviderFailure(RuntimeError): pass
 
+def token_count(value):
+    return value if isinstance(value,int) and not isinstance(value,bool) and value>=0 else None
+
+def usage_counts(usage):
+    usage=usage if isinstance(usage,dict) else {}
+    return token_count(usage.get("prompt_tokens")),token_count(usage.get("completion_tokens"))
+
+def usage_metrics(db):
+    row=db.execute("""SELECT count(*),count(prompt),sum(prompt),max(prompt),max(budget),
+        sum(CASE WHEN prompt IS NULL OR completion IS NULL THEN 1 ELSE 0 END),
+        count(completion),sum(completion),max(completion) FROM attempts""").fetchone()
+    return dict(calls=row[0],measured_calls=row[1],sum_prompt_tokens=row[2],peak_prompt_tokens=row[3],
+                peak_budget=row[4] or 0,unknown_calls=row[5] or 0,completion_measured_calls=row[6],
+                sum_completion_tokens=row[7],peak_completion_tokens=row[8])
+
 class Checkpoint:
     """Credential-free, process-locked journal. A failed write never starts an API call."""
     def __init__(self, path, request):
@@ -198,11 +213,10 @@ class Checkpoint:
         with self.db:
             return self.db.execute("INSERT INTO attempts(status,budget) VALUES('pending',?)",(budget,)).lastrowid
     def measured(self,attempt,usage):
-        valid=lambda n:n if isinstance(n,int) and not isinstance(n,bool) and n>=0 else None
-        with self.db: self.db.execute("UPDATE attempts SET status='returned',prompt=?,completion=? WHERE id=?",(valid(usage.get("prompt_tokens")),valid(usage.get("completion_tokens")),attempt))
+        prompt,completion=usage_counts(usage)
+        with self.db: self.db.execute("UPDATE attempts SET status='returned',prompt=?,completion=? WHERE id=?",(prompt,completion,attempt))
     def metrics(self):
-        row=self.db.execute("SELECT count(*),count(prompt),sum(prompt),max(prompt),max(budget),sum(CASE WHEN status IN ('pending','unknown') THEN 1 ELSE 0 END) FROM attempts").fetchone()
-        return dict(calls=row[0],measured_calls=row[1],sum_prompt_tokens=row[2],peak_prompt_tokens=row[3],peak_budget=row[4] or 0,unknown_calls=row[5] or 0)
+        return usage_metrics(self.db)
 
 def checkpoint_status(path):
     path=Path(path)
@@ -210,7 +224,7 @@ def checkpoint_status(path):
     with sqlite3.connect(path.resolve().as_uri()+"?mode=ro",uri=True) as db:
         metadata=dict(db.execute("SELECT key,value FROM meta"))
         rows=db.execute("SELECT id,name,hash,status,reason,done,total FROM files WHERE active=1 ORDER BY name").fetchall()
-        return {"status":metadata.get("status","interrupted"),"request":json.loads(metadata["request"]),
+        return {"status":metadata.get("status","interrupted"),"request":json.loads(metadata["request"]),"metrics":usage_metrics(db),
                 "files":[dict(zip(("id","name","hash","status","reason","done","total"),r)) for r in rows]}
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -244,6 +258,10 @@ def complete(cfg,system,data,metrics,meter=False,ledger=None):
     if cfg["key"]: headers["Authorization"]="Bearer "+cfg["key"]
     req=urllib.request.Request(cfg["endpoint"],data=dumps(payload).encode(),headers=headers)
     attempt=ledger.attempt(bound) if ledger else None
+    # Count attempts before transport: disconnects can still be billed by a provider.
+    metrics["calls"]=metrics.get("calls",0)+1
+    metrics["peak_budget"]=max(metrics.get("peak_budget",0),bound)
+    metrics["unknown_calls"]=metrics.get("unknown_calls",0)+1
     try:
         tls=ssl.create_default_context()
         if sys.platform=="darwin" and Path("/etc/ssl/cert.pem").is_file():
@@ -253,18 +271,29 @@ def complete(cfg,system,data,metrics,meter=False,ledger=None):
             raw=resp.read(2*1024*1024+1)
     except urllib.error.HTTPError as e: raise ProviderFailure(f"资料接口 HTTP {e.code}") from None
     if len(raw)>2*1024*1024: raise ValueError("模型响应过大")
-    res=json.loads(raw); choice=res["choices"][0]
-    if not meter and choice.get("finish_reason")=="length": raise ValueError("模型输出被截断，请更换模型或拆分输入")
-    usage=res.get("usage") or {}
+    res=json.loads(raw)
+    if not isinstance(res,dict): raise ValueError("模型响应格式无效")
+    usage=res.get("usage")
+    # Metering is independent of whether the model produced a usable answer.
+    # Persist it before checking choices, truncation or content JSON.
     if ledger: ledger.measured(attempt,usage)
-    actual=usage.get("prompt_tokens")
-    if isinstance(actual,int) and not isinstance(actual,bool) and actual>=0:
-        metrics["measured_calls"]=metrics.get("measured_calls",0)+1
-        metrics["sum_prompt_tokens"]=metrics.get("sum_prompt_tokens",0)+actual
-        metrics["peak_prompt_tokens"]=max(metrics["peak_prompt_tokens"] or 0,actual)
-    metrics["calls"]+=1; metrics["peak_budget"]=max(metrics["peak_budget"],bound)
+    prompt,completion=usage_counts(usage)
+    for name,value,count_key in [("prompt",prompt,"measured_calls"),("completion",completion,"completion_measured_calls")]:
+        if value is not None:
+            metrics[count_key]=metrics.get(count_key,0)+1
+            metrics["sum_"+name+"_tokens"]=(metrics.get("sum_"+name+"_tokens") or 0)+value
+            metrics["peak_"+name+"_tokens"]=max(metrics.get("peak_"+name+"_tokens") or 0,value)
+    if prompt is not None and completion is not None: metrics["unknown_calls"]-=1
+    choices=res.get("choices")
+    if not isinstance(choices,list) or not choices or not isinstance(choices[0],dict):
+        raise ValueError("模型响应缺少有效回答")
+    choice=choices[0]
+    if not meter and choice.get("finish_reason")=="length": raise ValueError("模型输出被截断，请更换模型或拆分输入；已返回用量仍计入任务")
     if meter: return None
-    content=choice["message"]["content"].strip()
+    message=choice.get("message")
+    if not isinstance(message,dict) or not isinstance(message.get("content"),str):
+        raise ValueError("模型未返回文字回答")
+    content=message["content"].strip()
     if content.startswith("\x60\x60\x60"):
         content=re.sub(r"^\x60{3}(?:json)?\s*|\s*\x60{3}$","",content)
     return json.loads(content)
@@ -387,6 +416,7 @@ def process_job(req,emit,ledger):
         for key,(_,name) in files.items(): ledger.file(key,name)
     for i,(key,(p,name)) in enumerate(files.items(),1):
         emit({"progress":f"{i}/{len(files)} · {name}"})
+        h="";parts=[];done=0
         try:
             overhead=128+len(dumps({"file":name,"segments":[]}).encode())+4
             h,parts=source(p,name,min(PART,input_limit(req["api"],MAP,overhead))); rs=[]
@@ -398,6 +428,7 @@ def process_job(req,emit,ledger):
             if ledger: ledger.file(key,name,h,"processing",total=len(parts))
             for n,part in enumerate(parts,1):
                 rs.extend(call(MAP,{"file":name,"segments":part},lambda v:records(v,part),h))
+                done=n
                 if ledger: ledger.file(key,name,h,"processing",done=n,total=len(parts))
             if not rs: raise ValueError("未找到相关背景")
             if source(p,name)[0]!=h: raise ValueError("处理期间来源已变化，请重试此文件")
@@ -410,7 +441,7 @@ def process_job(req,emit,ledger):
         except Exception as e:
             reason=str(e) if isinstance(e,ValueError) else type(e).__name__
             errors.append([name,reason])
-            if ledger: ledger.file(key,name,status="failed",reason=reason)
+            if ledger: ledger.file(key,name,h,status="failed",reason=reason,done=done,total=len(parts))
         if packed_bytes>MAX_PACK: raise ValueError("整理结果超过 16 MiB，请缩小范围")
     if not docs: raise ValueError("没有成功处理的文件："+str(errors[:5])[:650])
     limit=min(74_000,input_limit(req["api"],REDUCE))

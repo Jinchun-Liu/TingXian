@@ -5,10 +5,10 @@ import {Button} from '@/components/ui/button';
 import {BackgroundSettings} from '@/components/interview/BackgroundSettings';
 import {BackgroundChanges} from '@/components/interview/BackgroundChanges';
 type Profile={overview:string;role:string;aliases:string};
-type Metrics={peak_prompt_tokens:number|null;sum_prompt_tokens?:number;calls:number};
+type Metrics={peak_prompt_tokens:number|null;sum_prompt_tokens?:number|null;sum_completion_tokens?:number|null;unknown_calls?:number;calls:number};
 type Draft={id:string;job?:string;profile:Profile;documents:{id:string;name:string;count:number}[];failures:[string,string][];metrics:Metrics|null};
 type Report={documents:number;chunks:number;baseline:number;full_budget:number;rag_budget:number;fits_full:boolean;version:string;state:null|{profile:Profile;share:boolean;metrics:Metrics|null};measurement:null|{version:string;model:string;chunks:number;metrics:Metrics}};
-type Job={id:string;model?:string;status:string;total:number;completed:number;failed:number;skipped:number;unknown_calls:number};
+type Job={id:string;model?:string;status:string;total:number;completed:number;failed:number;skipped:number;unknown_calls:number;metrics?:Metrics};
 type JobFile={name:string;status:string;reason:string;done:number;total:number};
 type View={library:Report;model:string;ready:boolean;jobs?:Job[];work:{busy:boolean;progress:string;draft:Draft|null}};
 type Selection={id:string;label:string;count:number;folder:boolean};
@@ -77,7 +77,8 @@ export function BackgroundLibrary({locked,onBusy,onApplied,onModels,revision,act
           <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={off||job.status==='unreadable'} onClick={()=>void invoke<JobFile[]>('background_job_details',{job:job.id}).then(files=>setJobFiles({id:job.id,files})).catch(e=>setMsg(String(e)))}>查看进度</Button>
             <Button size="sm" disabled={off||!v.ready||job.status==='unreadable'} onClick={()=>generate(false,job.id)}>继续并核对</Button>
             <Button size="sm" variant="outline" disabled={off} onClick={()=>op(async()=>{await invoke('background_job_trash',{job:job.id});if(draft?.job===job.id){setEdit(null);draftKey.current='';}setJobFiles(null);await sync();})}>移入废纸篓</Button></div></div>
-        {job.unknown_calls>0&&<p className="text-xs">{job.unknown_calls} 次中断请求用量未知，继续可能产生新的调用。</p>}
+        {job.metrics&&<p className="text-xs">请求 {num(job.metrics.calls)} 次 · 已知输入 {job.metrics.sum_prompt_tokens==null?'未知':num(job.metrics.sum_prompt_tokens)} / 输出 {job.metrics.sum_completion_tokens==null?'未知':num(job.metrics.sum_completion_tokens)} tokens</p>}
+        {job.unknown_calls>0&&<p className="text-xs">{job.unknown_calls} 次请求的部分或全部用量未知；继续可能产生新的调用。</p>}
         {jobFiles?.id===job.id&&<ul className="max-h-52 overflow-auto text-xs space-y-1">{jobFiles.files.map(f=><li key={f.name}>{f.name} · {({queued:'等待',processing:'未完成',completed:'完成',failed:'失败',skipped:'跳过'} as Record<string,string>)[f.status]||f.status}{f.total>0?` · ${f.done}/${f.total} 段`:''}{f.reason?` · ${f.reason}`:''}</li>)}</ul>}
       </li>)}</ul>
     </details>}

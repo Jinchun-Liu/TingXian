@@ -15,6 +15,72 @@ class Response:
     def __exit__(self,*a): pass
     def read(self,n): return self.body[:n]
 class Test(unittest.TestCase):
+    def test_unusable_response_keeps_usage_and_does_not_cache_a_result(self):
+        for label,response in [
+            ("truncated",{"choices":[{"finish_reason":"length","message":{"content":"{unfinished"}}]}),
+            ("missing_choice",{"choices":[]}),
+            ("bad_json",{"choices":[{"message":{"content":"{unfinished"}}]}),
+        ]:
+            with self.subTest(label=label):
+                root=Path(tempfile.mkdtemp());checkpoint=root/"job.sqlite"
+                cfg={"model":"fixture","key":"","endpoint":"http://localhost/chat/completions","timeout":1}
+                response["usage"]={"prompt_tokens":123,"completion_tokens":8192}
+                metrics={}
+                with m.Checkpoint(checkpoint,{"api":cfg}) as ledger:
+                    with patch.object(m.urllib.request.OpenerDirector,"open",return_value=Response(m.dumps(response).encode())):
+                        with self.assertRaises(ValueError):m.complete(cfg,m.MAP,{"segments":[]},metrics,ledger=ledger)
+                    saved=ledger.metrics()
+                    self.assertEqual(saved["calls"],1);self.assertEqual(saved["unknown_calls"],0)
+                    self.assertEqual(saved["sum_prompt_tokens"],123);self.assertEqual(saved["sum_completion_tokens"],8192)
+                    self.assertEqual(metrics["sum_completion_tokens"],8192)
+                    self.assertIsNone(ledger.get("result"))
+                with m.Checkpoint(checkpoint,{"api":cfg}) as ledger:
+                    self.assertEqual(ledger.metrics(),saved,"reopening lost already reported usage")
+                self.assertEqual(m.checkpoint_status(checkpoint)["metrics"],saved)
+
+    def test_partial_missing_and_invalid_usage_stays_unknown(self):
+        cfg={"model":"fixture","key":"","endpoint":"http://localhost/chat/completions","timeout":1}
+        samples=[None,[],{"prompt_tokens":True,"completion_tokens":-1},{"prompt_tokens":"12","completion_tokens":3.5},{"prompt_tokens":12},{"completion_tokens":0},{"prompt_tokens":0,"completion_tokens":0}]
+        root=Path(tempfile.mkdtemp());metrics={}
+        with m.Checkpoint(root/"job.sqlite",{"api":cfg}) as ledger:
+            for usage in samples:
+                response={"usage":usage,"choices":[{"message":{"content":"{}"}}]}
+                with patch.object(m.urllib.request.OpenerDirector,"open",return_value=Response(m.dumps(response).encode())):
+                    self.assertEqual(m.complete(cfg,"规则",[],metrics,ledger=ledger),{})
+            saved=ledger.metrics()
+            self.assertEqual(saved["calls"],7);self.assertEqual(saved["unknown_calls"],6)
+            self.assertEqual(saved["sum_prompt_tokens"],12);self.assertEqual(saved["sum_completion_tokens"],0)
+            self.assertEqual(saved["measured_calls"],2);self.assertEqual(saved["completion_measured_calls"],2)
+            self.assertEqual(metrics,saved)
+        with patch.object(m.urllib.request.OpenerDirector,"open",side_effect=m.urllib.error.URLError("fixture disconnect")):
+            with self.assertRaises(m.urllib.error.URLError):m.complete(cfg,"规则",[],metrics)
+        self.assertEqual(metrics["calls"],8);self.assertEqual(metrics["unknown_calls"],7)
+
+    def test_failed_file_keeps_completed_part_progress_and_all_call_usage(self):
+        root=Path(tempfile.mkdtemp());sources=root/"sources";sources.mkdir();checkpoint=root/"job.sqlite"
+        (sources/"a-long.txt").write_text("虚构练习材料\n"*1400)
+        (sources/"b-valid.txt").write_text("虚构目标岗位")
+        total=len(m.source(sources/"a-long.txt","a-long.txt")[1]);self.assertGreater(total,1)
+        seen=0
+        def transport(req,timeout):
+            nonlocal seen
+            body=json.loads(req.data);data=json.loads(body["messages"][1]["content"]);reason="stop"
+            if body["messages"][0]["content"]==m.MAP:
+                if data["file"]=="a-long.txt":seen+=1
+                if data["file"]=="a-long.txt" and seen==2:reply={};reason="length"
+                else:
+                    row=data["segments"][0];reply={"records":[{"kind":"practice","location":row["location"],"quote":row["text"],"note":"虚构资料"}]}
+            else:reply={"overview":"虚构岗位资料","role":"","aliases":""}
+            return Response(m.dumps({"usage":{"prompt_tokens":100,"completion_tokens":30},"choices":[{"finish_reason":reason,"message":{"content":m.dumps(reply)}}]}).encode())
+        req={"folder":str(sources),"checkpoint":str(checkpoint),"api":{"model":"fixture","key":"","endpoint":"http://localhost/chat/completions","timeout":1}}
+        with patch.object(m.urllib.request.OpenerDirector,"open",side_effect=transport):
+            result=m.process(req,lambda _:None)
+        self.assertEqual(len(result["bundle"]["documents"]),1);self.assertIn("截断",result["failures"][0][1])
+        file=m.checkpoint_status(checkpoint)["files"][0]
+        self.assertEqual((file["status"],file["done"],file["total"]),("failed",1,total))
+        self.assertEqual(result["metrics"]["calls"],4);self.assertEqual(result["metrics"]["sum_completion_tokens"],120)
+        self.assertEqual(result["metrics"]["unknown_calls"],0)
+
     def test_incremental_synthesis_deduplicates_quotes_without_erasing_sources_or_conflicts(self):
         old={"id":"a","file":"old.md","source_hash":"before","kind":"personal","location":"行 1","quote":"Orchid 生产经验：无","source_status":{"confirmation":"confirmed","validity":"expired"}}
         same={**old,"id":"copy","file":"copy.md"}
@@ -85,7 +151,7 @@ class Test(unittest.TestCase):
                 row=data["segments"][0]
                 reply={"records":[{"location":row["location"],"quote":row["text"],"note":"练习资料","kind":"practice"}]}
             else: reply={"overview":"虚构练习项目","role":"","aliases":""}
-            return Response(m.dumps({"usage":{"prompt_tokens":100},"choices":[{"finish_reason":"stop","message":{"content":m.dumps(reply)}}]}).encode())
+            return Response(m.dumps({"usage":{"prompt_tokens":100,"completion_tokens":30},"choices":[{"finish_reason":"stop","message":{"content":m.dumps(reply)}}]}).encode())
         with patch.object(m.urllib.request.OpenerDirector,"open",side_effect=transport):
             with self.assertRaises(m.urllib.error.URLError): m.process(req,lambda _:None)
             state=m.checkpoint_status(checkpoint)
