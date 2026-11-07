@@ -195,3 +195,124 @@ fn preview_native_handoff_serializes_stop_and_drop_disconnects_the_owned_worker(
     let done=running.join().unwrap();assert_eq!(done.phase,Phase::Fault);assert_eq!(done.reason,Some(Reason::EyeProcessing));
     assert!(state.wait_idle(Duration::ZERO));
 }
+
+fn output_pin()->PinnedOutputLibrary {
+    let path=PathBuf::from(std::env::var_os("TINGXIAN_VIDEO_TEST_BIN").unwrap()).join("TingXianVideoOutput.dll");
+    PinnedOutputLibrary{sha256:format!("{:x}",Sha256::digest(fs::read(&path).expect("built own output library"))),path}
+}
+fn prime_preview(state:&Arc<Controller>)->(StreamFeed,NativePreview,thread::JoinHandle<Snapshot>) {
+    let (run,feed)=start(state,fixture("eye-stream.exe"));let running=thread::spawn(move||run.execute());
+    let mut preview=feed.open_preview(Duration::from_secs(3)).unwrap();
+    feed.submit(frame(1,tick())).unwrap();await_preview(&mut preview);
+    (feed,preview,running)
+}
+#[test]
+fn fanout_output_requires_explicit_intent_and_three_restarts_leave_preview_alive() {
+    let state=Arc::new(Controller::default());let _stop=StopOnDrop(state.clone());
+    let (feed,mut preview,running)=prime_preview(&state);assert!(preview.output_status().unwrap().status.is_none());
+    for index in 0..3 {
+        let intent=preview.output_status().unwrap().intent;
+        let endpoint=preview.enable_output(output_pin(),intent).unwrap();
+        let client=Client::connect(endpoint);
+        assert!(matches!(preview.enable_output(output_pin(),intent),Err(Reason::EyeOutput)));
+        let id=2+index*2;let captured=tick();feed.submit(frame(id,captured)).unwrap();await_preview(&mut preview);
+        preview.with_current(|f|assert_eq!((f.unwrap().id,f.unwrap().captured_ms),(id,captured)));
+        client.corrected(id,captured);
+        eventually(||preview.output_status().unwrap().status.unwrap().submitted==1);
+        let stats=preview.disable_output().unwrap();assert_eq!(stats.status.unwrap().phase,RelayPhase::Off);
+        assert_eq!((stats.status.unwrap().accepted,stats.status.unwrap().submitted),(1,1));
+        assert!(matches!(preview.enable_output(output_pin(),intent),Err(Reason::EyeOutput)),"old output enable ticket revived a disabled lane");
+        assert_eq!(state.snapshot().phase,Phase::Ready);
+        feed.submit(frame(id+1,tick())).unwrap();await_preview(&mut preview);preview.with_current(|f|assert_eq!(f.unwrap().id,id+1));
+    }
+    state.request_stop();assert_eq!(running.join().unwrap().phase,Phase::Off);
+}
+#[test]
+fn fanout_slow_receiver_is_bounded_and_disable_retires_pending_writes() {
+    let state=Arc::new(Controller::default());let _stop=StopOnDrop(state.clone());let (feed,mut preview,running)=prime_preview(&state);
+    let client=Client::connect(preview.enable_output(output_pin(),0).unwrap());
+    feed.submit(frame(2,tick())).unwrap();await_preview(&mut preview);let header=client.read(40);assert_eq!(u16::from_le_bytes(header[6..8].try_into().unwrap()),4);
+    for id in 3..=4 {feed.submit(frame(id,tick())).unwrap();await_preview(&mut preview);}
+    let status=preview.output_status().unwrap().status.unwrap();assert!(status.busy);assert_eq!(status.queued,1);assert_eq!(status.accepted,3);
+    let started=Instant::now();let stopped=preview.disable_output().unwrap().status.unwrap();
+    assert!(started.elapsed()<Duration::from_secs(1));assert!(!stopped.busy);assert_eq!(stopped.queued,0);
+    assert_eq!(stopped.accepted,stopped.submitted+stopped.dropped);
+    feed.submit(frame(5,tick())).unwrap();await_preview(&mut preview);preview.with_current(|f|assert_eq!(f.unwrap().id,5));
+    state.request_stop();assert_eq!(running.join().unwrap().phase,Phase::Off);
+}
+#[test]
+fn fanout_controller_stop_revokes_output_without_a_preview_poll_or_drop() {
+    let state=Arc::new(Controller::default());let _stop=StopOnDrop(state.clone());let (feed,mut preview,running)=prime_preview(&state);
+    let client=Client::connect(preview.enable_output(output_pin(),0).unwrap());
+    let captured=tick();feed.submit(frame(2,captured)).unwrap();await_preview(&mut preview);client.corrected(2,captured);
+    state.request_stop();
+    eventually(||unsafe{PeekNamedPipe(client.0.as_raw_handle(),null_mut(),0,null_mut(),null_mut(),null_mut())}==0);
+    preview.with_current(|f|assert!(f.is_none()));
+    assert_eq!(preview.output_status().unwrap().status.unwrap().phase,RelayPhase::Off);
+    let intent=preview.output_status().unwrap().intent;
+    assert!(matches!(preview.enable_output(output_pin(),intent),Err(Reason::EyeOutput)));
+    assert_eq!(running.join().unwrap().phase,Phase::Off);
+}
+#[test]
+fn fanout_library_pin_is_checked_before_load_and_held_until_output_is_retired() {
+    let state=Arc::new(Controller::default());let _stop=StopOnDrop(state.clone());let (feed,mut preview,running)=prime_preview(&state);
+    let pin=output_pin();let mut wrong=output_pin();wrong.sha256="0".repeat(64);
+    assert!(matches!(preview.enable_output(wrong,0),Err(Reason::Integrity)));
+    assert!(preview.output_status().unwrap().status.is_none());assert_eq!(state.snapshot().phase,Phase::Ready);
+    let _endpoint=preview.enable_output(output_pin(),1).unwrap();
+    assert!(fs::OpenOptions::new().write(true).open(&pin.path).is_err(),"loaded library must remain write-locked");
+    preview.disable_output().unwrap();
+    let reopened=fs::OpenOptions::new().write(true).open(&pin.path).expect("output retirement releases own library pin");drop(reopened);
+    feed.submit(frame(2,tick())).unwrap();await_preview(&mut preview);
+    state.request_stop();assert_eq!(running.join().unwrap().phase,Phase::Off);
+}
+#[test]
+fn fanout_bad_client_capability_faults_without_replaying_preview_or_input() {
+    let state=Arc::new(Controller::default());let _stop=StopOnDrop(state.clone());let (feed,mut preview,running)=prime_preview(&state);
+    let endpoint=preview.enable_output(output_pin(),0).unwrap();let b=endpoint.activation_blob();
+    let name:Vec<u16>=b[4..196].chunks_exact(2).map(|x|u16::from_le_bytes([x[0],x[1]])).collect();
+    let raw=unsafe{CreateFileW(name.as_ptr(),GENERIC_READ|GENERIC_WRITE,0,null(),OPEN_EXISTING,0,null_mut())};assert_ne!(raw,INVALID_HANDLE_VALUE);
+    let mut client=unsafe{fs::File::from_raw_handle(raw)};
+    let mut hello=[0u8;72];hello[..4].copy_from_slice(&0x31565854u32.to_le_bytes());hello[4..6].copy_from_slice(&1u16.to_le_bytes());
+    hello[6..8].copy_from_slice(&1u16.to_le_bytes());hello[8..12].copy_from_slice(&32u32.to_le_bytes());client.write_all(&hello).unwrap();
+    eventually(||preview.output_status().unwrap().status.unwrap().phase==RelayPhase::Fault);
+    assert_eq!(preview.poll(Duration::ZERO),Err(Reason::EyeOutput));preview.with_current(|f|assert!(f.is_none()));
+    let done=running.join().unwrap();assert_eq!(done.phase,Phase::Fault);assert!(feed.status().closed);
+}
+
+#[test]
+fn fanout_supervised_worker_through_preview_and_own_dll_reaches_real_mf_samples() {
+    use std::{os::windows::process::CommandExt,process::{Child,ChildStdin,ChildStdout,Command,Stdio}};
+    struct Reader {child:Child,input:ChildStdin,output:ChildStdout}
+    impl Drop for Reader {fn drop(&mut self){if self.child.try_wait().ok().flatten().is_none(){let _=self.child.kill();let _=self.child.wait();}}}
+    impl Reader {
+        fn received(&mut self,want:u8) {
+            let raw=self.output.as_raw_handle();let deadline=Instant::now()+Duration::from_secs(3);
+            loop {
+                assert!(Instant::now()<deadline,"MF reader acknowledgment deadline");let mut available=0;
+                assert_ne!(unsafe{PeekNamedPipe(raw,null_mut(),0,null_mut(),&mut available,null_mut())},0,"MF reader exited before acknowledgment");
+                if available>0{let mut byte=0;let mut read=0;assert_ne!(unsafe{ReadFile(raw,&mut byte,1,&mut read,null_mut())},0);assert_eq!((read,byte),(1,want));return;}
+                thread::sleep(Duration::from_millis(2));
+            }
+        }
+        fn check(&mut self,kind:u8){self.input.write_all(&[kind]).unwrap();self.received(kind);}
+    }
+    let state=Arc::new(Controller::default());let _stop=StopOnDrop(state.clone());let (feed,mut preview,running)=prime_preview(&state);
+    let endpoint=preview.enable_output(output_pin(),0).unwrap();
+    let bin=PathBuf::from(std::env::var_os("TINGXIAN_VIDEO_TEST_BIN").unwrap());
+    let mut command=Command::new(bin.join("tingxian-video-ipc-test.exe"));
+    command.arg("--relay-reader").arg(bin.join("TingXianVideoSource.dll")).env_clear()
+        .env("SystemRoot",std::env::var_os("SystemRoot").unwrap()).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit()).creation_flags(0x08000000);
+    let mut child=command.spawn().expect("own MF fixture launch");
+    let input=child.stdin.take().unwrap();let output=child.stdout.take().unwrap();let mut reader=Reader{child,input,output};
+    reader.input.write_all(endpoint.activation_blob()).unwrap();reader.received(b'R');
+    for id in 2..=3 {
+        let captured=tick();feed.submit(frame(id,captured)).unwrap();await_preview(&mut preview);
+        preview.with_current(|f|assert_eq!((f.unwrap().id,f.unwrap().captured_ms),(id,captured)));
+        reader.check(b'P');
+    }
+    state.request_stop();reader.check(b'N'); // no poll/drop needed to neutralize MF
+    preview.with_current(|f|assert!(f.is_none()));reader.input.write_all(b"Q").unwrap();
+    eventually(||reader.child.try_wait().unwrap().is_some());assert!(reader.child.wait().unwrap().success());
+    assert_eq!(running.join().unwrap().phase,Phase::Off);
+}

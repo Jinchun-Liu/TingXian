@@ -2,15 +2,16 @@
 
 This is the native output component for R10E. It implements a COM activation
 object, a Media Foundation live source and a single 1280×720 NV12 video stream at
-an advertised 30 fps. The GPU worker and application integration are not yet
-implemented. The advertised format is not a measured effective-frame-rate result.
+an advertised 30 fps. Optional native eye workers, preview receive and explicit
+output relay are separate components; main-window/installed integration is not
+complete. The advertised format is not a measured effective-frame-rate result.
 
 The component accepts already processed local frames through an in-process
 `IFrameReceiver` or the [authenticated local pipe transport](IPC.md). A producer
 helper can send frames from a separate Windows process. MF activation attributes
 can configure the transient channel without exposing its capability to source
-consumers. Tauri/eye-worker integration and actual FrameServer installation remain
-pending. There is no physical-camera enumeration/opening, audio, external network,
+consumers. Main-window integration and current-chain installed FrameServer checks
+remain pending. There is no physical-camera enumeration/opening, audio, external network,
 GPU loading, automatic download or registry modification in this DLL.
 
 ## Frame and lifecycle behavior

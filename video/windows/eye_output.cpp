@@ -88,21 +88,27 @@ HRESULT EyePipeOutput::open_if_current(UINT64 generation, UINT64 ticket, VideoPi
     return hr;
 }
 bool EyePipeOutput::corrected(const eye::Frame& frame) noexcept {
+    return enqueue(frame.generation, frame.id, frame.captured_ms, frame.bgr.data(), frame.bgr.size(), true);
+}
+bool EyePipeOutput::corrected_nv12(UINT64 generation, UINT64 id, UINT64 captured, const BYTE* data, size_t bytes) noexcept {
+    return enqueue(generation, id, captured, data, bytes, false);
+}
+bool EyePipeOutput::enqueue(UINT64 generation, UINT64 id, UINT64 captured, const BYTE* data, size_t bytes, bool bgr) noexcept {
     std::lock_guard guard(mutex_);
     if ((status_.state != EyeOutputState::waiting && status_.state != EyeOutputState::streaming)
-        || frame.generation != status_.generation || !frame.id || frame.id <= last_id_
-        || frame.captured_ms < last_time_ || !fresh(frame.captured_ms) || frame.bgr.size() != BgrBytes) {
+        || generation != status_.generation || !id || id <= last_id_
+        || captured < last_time_ || !fresh(captured) || !data || bytes != (bgr ? BgrBytes : FrameBytes)) {
         ++status_.rejected;
         return false;
     }
     try {
         // Copy only a completed provider result; neither a raw fallback nor an
         // unbounded queue. Allocate before replacing to preserve clear counts.
-        eye::Frame next = frame;
+        Pending next; next.frame = {generation, id, captured, std::vector<BYTE>(data, data + bytes)}; next.convert_bgr = bgr;
         discard_locked();
         pending_ = std::move(next);
         ++status_.accepted;
-        last_id_ = frame.id; last_time_ = frame.captured_ms;
+        last_id_ = id; last_time_ = captured;
     } catch (...) {
         ++status_.rejected;
         status_.error = E_OUTOFMEMORY; status_.state = EyeOutputState::fault;
@@ -123,16 +129,17 @@ void EyePipeOutput::run(UINT64 ticket, UINT64 generation) noexcept {
                 status_.state = EyeOutputState::streaming;
         }
         while (SUCCEEDED(hr)) {
-            eye::Frame frame;
+            Pending pending;
             {
                 std::unique_lock lock(mutex_);
                 changed_.wait(lock, [&] { return ticket != intent_ || pending_.has_value(); });
                 if (ticket != intent_ || status_.state != EyeOutputState::streaming) break;
-                frame = std::move(*pending_); pending_.reset();
+                pending = std::move(*pending_); pending_.reset();
                 status_.busy = true;
             }
-            const bool converted = fresh(frame.captured_ms)
-                && corrected_bgr_to_nv12(frame.bgr.data(), frame.bgr.size(), nv12.data(), nv12.size());
+            const auto& frame = pending.frame;
+            const bool converted = fresh(frame.captured_ms) && (!pending.convert_bgr
+                || corrected_bgr_to_nv12(frame.bgr.data(), frame.bgr.size(), nv12.data(), nv12.size()));
             bool send = false;
             {
                 std::lock_guard guard(mutex_);
@@ -143,7 +150,8 @@ void EyePipeOutput::run(UINT64 ticket, UINT64 generation) noexcept {
             if (!send) continue;
             // cancel() cannot be undone by a stale conversion completion. Never
             // replace captured_ms with conversion/send time to renew a stale face.
-            hr = publisher_.submit(generation, frame.id, frame.captured_ms, nv12.data(), FrameBytes);
+            hr = publisher_.submit(generation, frame.id, frame.captured_ms,
+                pending.convert_bgr ? nv12.data() : frame.bgr.data(), FrameBytes);
             {
                 std::lock_guard guard(mutex_);
                 if (SUCCEEDED(hr)) ++status_.submitted;

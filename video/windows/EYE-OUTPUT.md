@@ -61,7 +61,11 @@ checks actual MF pixels in another process after correction, stop, no-face fault
 and crash. `tingxian-video-source-test` checks declared color metadata. None of
 these registers/starts a device, executes NVIDIA, captures or sends media online.
 
-The native library is the connection seam, not a finished live worker. The pinned
-NVIDIA worker still has only its explicit offline-file command. Production trust,
-live worker/control integration, preview, installed component update, physical
-camera, real virtual-device/meeting output and resource/latency gates remain open.
+The native library is a connection component, not installed meeting acceptance.
+The worker now also has a native streaming command; its synthetic supervised path
+has independent tests. The new `TingXianVideoOutput.dll` C ABI reuses this publisher
+for host-side fanout of already corrected NV12 (`corrected_nv12`), bypassing a
+second color conversion. The Rust preview owner explicitly enables/disables this
+relay with separate intent and pinned loading. See [fanout validation](../../docs/eye-fanout-validation-2026-11-07.md).
+Production trust, main-window/device ownership, actual SDK streaming, installed
+component update, physical camera, meeting and resource/latency gates remain open.

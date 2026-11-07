@@ -1,0 +1,10 @@
+LIBRARY TingXianVideoOutput
+EXPORTS
+    TxOutputAbi
+    TxOutputCreate
+    TxOutputOpen
+    TxOutputSubmit
+    TxOutputCancel
+    TxOutputClose
+    TxOutputGetStatus
+    TxOutputDestroy

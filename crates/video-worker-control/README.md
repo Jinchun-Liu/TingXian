@@ -70,6 +70,38 @@ fallback. Status contains only counts/phase/reason, not image or endpoint data.
 Stop the owning controller before dropping the receiver during normal shutdown.
 Dropping the receiver alone disconnects its pipe and faults the worker output;
 it is not a success acknowledgment. No detached receive thread is created here.
-Preview consumes the sole endpoint: simultaneous preview and virtual output still
-need a separately controlled native fanout. Main-window rendering, that output
-owner, real SDK streaming, installation and meeting reception remain unverified.
+Preview consumes the worker's sole endpoint. A separately enabled relay now
+provides a different endpoint for the native output owner, described below.
+Main-window rendering/device ownership, real SDK streaming, installation and
+meeting reception remain unverified.
+
+## Explicit output relay
+
+`NativePreview::enable_output` requires the current output intent and a native
+build-pinned `PinnedOutputLibrary`. It loads our `TingXianVideoOutput.dll` only for
+this explicit operation. Missing or mismatched binaries leave local preview
+usable. File/directory locks and SHA-256 verification precede full-path loading;
+dependencies resolve from System32, and the returned module path/ABI are checked.
+Keep these native pins out of webview input/settings. No vendor DLL is involved.
+
+The DLL exposes a small C ABI over the existing C++ `EyePipeOutput` publisher,
+including its logon-SID/LocalService DACL and authenticated transport. Completed
+NV12 is relayed without reconversion, resizing or timestamp renewal. One latest
+queued result plus the sender's current result bounds the relay; there is no
+delivery acknowledgment implied by enqueue or pipe submission. Existing preview
+pixels are not replayed when output is enabled: only subsequently received frames
+may be submitted. Output has its own epoch; host/worker identities remain on the
+local preview side, while original frame ID/time survive forwarding.
+
+`disable_output` retires that relay and advances its intent, leaving preview/input
+alive. A queued old enable is rejected. Full controller Stop independently cancels
+the relay through a weak native revocation lease, even before another preview poll
+or renderer call. Preview fault/drop also retires the relay. The owner must continue
+polling to observe asynchronous relay errors and fail the processing stream closed.
+Do not interpret Waiting/Forwarding as a device, display or remote meeting state.
+
+`video/windows/output_bridge.h` documents the ABI and thread contract. Open,
+Submit, Close and Destroy are serialized on the native lane; only Cancel/Status
+are callable concurrently. DLL lifetime extends through sender retirement and
+all outstanding revocation references. It is not currently packaged in the CPU
+installer and no Tauri start API exposes it yet.

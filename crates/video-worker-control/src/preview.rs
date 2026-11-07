@@ -1,6 +1,7 @@
 //! Native corrected-frame receiver. No camera, device registration, UI or SDK
 //! authority. Poll on the native media lane, never the webview/UI thread.
 use crate::{stream::Shared, NativeOutputEndpoint, Reason, StreamFeed};
+use crate::{output::NativeOutput,PinnedOutputLibrary,RelayPhase,RelayStatus,OutputSnapshot};
 use serde::Serialize;
 use std::{ptr::{null,null_mut}, sync::Arc, thread, time::{Duration,Instant}};
 use windows_sys::Win32::{Foundation::*, Storage::FileSystem::*, System::{IO::*, Pipes::*, Threading::*}};
@@ -85,10 +86,12 @@ fn transfer(pipe:&Handle,write:bool,bytes:&mut [u8],lease:&Shared,deadline:Insta
 pub struct NativePreview {
     pipe:Option<Handle>,lease:Arc<Shared>,generation:u64,worker_generation:Option<u64>,last_id:u64,last_time:u64,
     frame:Option<PreviewFrame>,last_presented:u64,status:PreviewStatus,
+    output:Option<NativeOutput>,output_intent:u64,last_output:Option<RelayStatus>,
 }
+impl Drop for NativePreview {fn drop(&mut self){let _=self.disable_output();}}
 impl StreamFeed {
-    /// Consumes this stream's sole endpoint. Native preview and direct MF output
-    /// cannot both claim it; future output fanout requires a distinct explicit lane.
+    /// Consumes this stream's sole endpoint. The preview owner can separately
+    /// enable a pinned output relay; it never gives this endpoint to two clients.
     pub fn open_preview(&self,timeout:Duration)->Result<NativePreview,Reason> {
         let endpoint=self.take_endpoint(timeout)?;
         NativePreview::connect(endpoint,self.shared.clone())
@@ -114,7 +117,27 @@ impl NativePreview {
         sent?;
         let mut ack=[0;40];transfer(&pipe,false,&mut ack,&lease,deadline)?;
         if !Header::parse(&ack)?.control(2,0){return Err(Reason::Protocol);}
-        Ok(Self{pipe:Some(pipe),lease,generation,worker_generation:None,last_id:0,last_time:0,frame:None,last_presented:0,status:PreviewStatus::default()})
+        Ok(Self{pipe:Some(pipe),lease,generation,worker_generation:None,last_id:0,last_time:0,frame:None,last_presented:0,status:PreviewStatus::default(),output:None,output_intent:0,last_output:None})
+    }
+    /// Explicit native host intent only. Never accepts a DLL pin from WebView.
+    /// This opens a transport endpoint, not a device or meeting connection.
+    pub fn enable_output(&mut self,pin:PinnedOutputLibrary,expected_intent:u64)->Result<NativeOutputEndpoint,Reason> {
+        self.refresh();
+        if expected_intent!=self.output_intent||self.output.is_some()||self.pipe.is_none()||self.worker_generation.is_none(){return Err(Reason::EyeOutput);}
+        self.output_intent=self.output_intent.checked_add(1).ok_or(Reason::EyeOutput)?;
+        let (output,endpoint)=NativeOutput::open(pin,self.output_intent,&self.lease)?;
+        self.output=Some(output);self.last_output=None;Ok(endpoint)
+    }
+    /// Stops just the relay, leaving valid local preview/input alive. Carry the
+    /// new intent on subsequent explicit enable; queued earlier enables fail.
+    pub fn disable_output(&mut self)->Result<OutputSnapshot,Reason> {
+        self.output_intent=self.output_intent.saturating_add(1);
+        if let Some(mut output)=self.output.take(){self.last_output=Some(output.stop()?);}
+        Ok(OutputSnapshot{intent:self.output_intent,status:self.last_output})
+    }
+    pub fn output_status(&mut self)->Result<OutputSnapshot,Reason> {
+        self.refresh();
+        Ok(OutputSnapshot{intent:self.output_intent,status:if let Some(output)=&self.output{Some(output.status()?)}else{self.last_output}})
     }
     fn clear(&mut self,replaced:bool) {
         if self.frame.as_ref().is_some_and(|f|f.id!=self.last_presented){
@@ -123,8 +146,11 @@ impl NativePreview {
         self.frame=None;
     }
     fn end(&mut self,reason:Option<Reason>) {
+        // Revoke and retire the independent relay before discarding preview.
+        let cleanup=if self.output.is_some(){self.disable_output().err()}else{None};
         self.clear(false);self.pipe=None;self.status.reason=reason;
-        self.status.phase=if reason.is_some(){PreviewPhase::Fault}else{PreviewPhase::Stopped};
+        self.status.reason=reason.or(cleanup);
+        self.status.phase=if self.status.reason.is_some(){PreviewPhase::Fault}else{PreviewPhase::Stopped};
     }
     fn refresh(&mut self) {
         if self.lease.closed(){self.end(self.status.reason);}
@@ -137,6 +163,10 @@ impl NativePreview {
     /// Partial/invalid packets fail closed. Call from a dedicated native lane.
     pub fn poll(&mut self,wait:Duration)->Result<bool,Reason> {
         self.refresh();if self.pipe.is_none(){return self.status.reason.map_or(Ok(false),Err);}
+        if let Some(output)=&self.output {
+            let failure=match output.status(){Ok(s) if s.phase==RelayPhase::Fault=>Some(Reason::EyeOutput),Err(e)=>Some(e),_=>None};
+            if let Some(reason)=failure{self.end(Some(reason));return Err(reason);}
+        }
         let result=self.receive(wait.min(IO_BOUND));
         if let Err(reason)=result {
             if self.lease.closed(){self.end(self.status.reason);return Ok(false);}
@@ -173,6 +203,9 @@ impl NativePreview {
         self.last_id=h.id;self.last_time=h.time;self.status.received+=1;
         let now=tick();
         if h.time>now||now-h.time>MAX_AGE_MS {self.status.rejected+=1;self.status.expired+=1;self.clear(false);return Ok(false);}
+        if let Some(output)=&self.output {
+            self.lease.while_open(|open,_|if open{output.submit(&frame)}else{Err(Reason::Abandoned)})?;
+        }
         self.clear(true);self.frame=Some(frame);Ok(true)
     }
     pub fn status(&mut self)->PreviewStatus {self.refresh();self.status}

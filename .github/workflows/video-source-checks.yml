@@ -52,6 +52,7 @@ jobs:
           name: TingXian-video-source-synthetic-only
           path: |
             ${{ runner.temp }}/video-source-build/Release/TingXianVideoSource.dll
+            ${{ runner.temp }}/video-source-build/Release/TingXianVideoOutput.dll
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-source-test.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-ipc-test.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-eye-output-test.exe

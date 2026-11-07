@@ -11,6 +11,10 @@ mod preview;
 #[cfg(windows)]
 pub use preview::{NativePreview, PreviewFrame, PreviewPhase, PreviewStatus};
 #[cfg(windows)]
+mod output;
+#[cfg(windows)]
+pub use output::{PinnedOutputLibrary, RelayPhase, RelayStatus, OutputSnapshot};
+#[cfg(windows)]
 mod windows;
 #[cfg(all(test, windows))]
 mod tests;

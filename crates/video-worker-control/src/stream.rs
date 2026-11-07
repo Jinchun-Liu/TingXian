@@ -35,6 +35,7 @@ pub struct StreamInputStatus {
 }
 #[derive(Default)]
 struct State {
+    output:Option<std::sync::Weak<dyn RevokeOutput>>,
     generation: u64,
     admitted: bool, ready: bool, closed: bool, ending: bool,
     pending: Option<StreamFrame>, endpoint: Option<NativeOutputEndpoint>,
@@ -42,6 +43,7 @@ struct State {
 }
 #[derive(Default)]
 pub(crate) struct Shared { state:Mutex<State>,changed:Condvar }
+pub(crate) trait RevokeOutput:Send+Sync {fn revoke(&self);}
 pub(crate) enum Next { Frame(StreamFrame), Finish, Closed }
 impl Shared {
     pub(crate) fn admit(&self,generation:u64) {
@@ -53,6 +55,13 @@ impl Shared {
         let s=self.state.lock().unwrap_or_else(|e|e.into_inner());
         f(s.admitted&&s.ready&&!s.closed,s.generation)
     }
+    #[cfg(windows)]
+    pub(crate) fn attach_output(&self,output:std::sync::Weak<dyn RevokeOutput>)->bool {
+        let mut s=self.state.lock().unwrap_or_else(|e|e.into_inner());
+        if !s.admitted||!s.ready||s.closed{return false;}
+        if let Some(previous)=s.output.take().and_then(|v|v.upgrade()){previous.revoke();}
+        s.output=Some(output);true
+    }
     pub(crate) fn publish(&self,endpoint:NativeOutputEndpoint)->bool {
         let mut s=self.state.lock().unwrap_or_else(|e|e.into_inner());
         if !s.admitted || s.closed || s.ready { return false; }
@@ -60,6 +69,7 @@ impl Shared {
     }
     pub(crate) fn close(&self) {
         let mut s=self.state.lock().unwrap_or_else(|e|e.into_inner());s.closed=true;
+        if let Some(output)=s.output.take().and_then(|v|v.upgrade()){output.revoke();}
         if s.pending.take().is_some(){s.stats.discarded+=1;}s.endpoint=None;self.changed.notify_all();
     }
     pub(crate) fn settled(&self,written:bool) {
