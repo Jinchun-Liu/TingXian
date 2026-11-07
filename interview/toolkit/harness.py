@@ -334,7 +334,7 @@ def main():
     archive.add_argument("--role", default="")
     archive.add_argument("--revisions", type=Path)
     archive.add_argument("--excluded", type=Path)
-    for action in ("preparation-plan", "preparation-input", "preparation-collect", "consolidation-catalog", "consolidation-plan", "consolidation-input", "consolidation-collect"):
+    for action in ("preparation-plan", "preparation-input", "preparation-progress", "preparation-collect", "consolidation-catalog", "consolidation-plan", "consolidation-input", "consolidation-progress", "consolidation-collect"):
         command = sub.add_parser(action)
         command.add_argument("--bundle", type=Path)
         command.add_argument("--library-id")
@@ -347,7 +347,7 @@ def main():
         command.add_argument("--output-reserve", type=int, default=8192)
         command.add_argument("--preview-methods", action="store_true")
         if action in ("preparation-input","consolidation-input"): command.add_argument("--part", type=int, required=True)
-        if action == "preparation-collect" or action.startswith("consolidation-"):
+        if action in ("preparation-progress", "preparation-collect") or action.startswith("consolidation-"):
             command.add_argument("--proposals", type=Path, required=True)
             command.add_argument("--execution-mode", choices=("fixture", "host_model", "unreported"), default="unreported")
         if action in ("preparation-collect","consolidation-collect"):
@@ -356,7 +356,7 @@ def main():
             command.add_argument("--consolidation-input-cap", type=int, default=65536)
             command.add_argument("--consolidation-output-reserve", type=int, default=16384)
             if action != "consolidation-catalog": command.add_argument("--groups", type=Path, required=True)
-            if action == "consolidation-collect": command.add_argument("--responses", type=Path, required=True)
+            if action in ("consolidation-progress", "consolidation-collect"): command.add_argument("--responses", type=Path, required=True)
     args = parser.parse_args()
     read = lambda p: json.loads(p.read_text(encoding="utf-8"))
     if args.action == "policy":
@@ -392,9 +392,11 @@ def main():
                 assembled=consolidation.plan(parent,read(args.groups),budget)
                 if args.action=="consolidation-plan":result=consolidation.manifest(assembled)
                 elif args.action=="consolidation-input":result=consolidation.input_packet(assembled,args.part)
+                elif args.action=="consolidation-progress":result=consolidation.progress(assembled,read(args.responses))
                 else:result=consolidation.collect(assembled,read(args.responses),args.execution_mode)
         elif args.action == "preparation-plan": result = preparation.manifest(plan)
         elif args.action == "preparation-input": result = preparation.input_packet(plan, args.part)
+        elif args.action == "preparation-progress": result = preparation.progress(plan, read(args.proposals))
         else:
             result = preparation.collect(plan, read(args.proposals), args.execution_mode)
         if args.action in ("preparation-collect","consolidation-collect"):

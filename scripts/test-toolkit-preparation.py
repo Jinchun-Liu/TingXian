@@ -153,8 +153,39 @@ class Tests(unittest.TestCase):
         after=p.plan(archive(changed),TASK,input_cap=cap)
         old={v['input_hash'] for v in before['parts']};new={v['input_hash'] for v in after['parts']}
         self.assertEqual(len(old & new),3)
+        pending=p.progress(after,responses)
+        self.assertEqual(pending['reusable_parts'],3);self.assertEqual(len(pending['pending_parts']),1)
+        self.assertEqual(set(pending['ignored_stale_inputs']),old-new)
+        self.assertFalse(pending['ready_to_collect'])
         responses+=[proposal(after,i) for i,part in enumerate(after['parts']) if part['input_hash'] not in old]
         out=p.collect(after,responses,'fixture');self.assertEqual(len(out['accepted_inputs']),4);self.assertEqual(len(out['ignored_stale_inputs']),1)
+        self.assertTrue(p.progress(after,responses)['ready_to_collect'])
+    def test_progress_partial_invalid_and_duplicate_are_not_reused(self):
+        view=archive();task=p.task_spec(TASK)
+        cap=max(p.upper(p.messages(task,[p.model_record(r)],'0'*64)) for r in view['records'])+5
+        plan=p.plan(view,TASK,input_cap=cap);rs=[proposal(plan,i) for i in range(3)]
+        invalid=copy.deepcopy(rs[1]);invalid['requirements'][0]['references']=[{'record_id':plan['parts'][0]['record_ids'][0],'purpose':'跨块伪引用'}]
+        saved=[rs[0],invalid];before=copy.deepcopy((plan,saved));report=p.progress(plan,saved)
+        self.assertEqual([r['status'] for r in report['parts']],['structurally_valid','invalid','missing'])
+        self.assertEqual(report['pending_parts'],[2,3]);self.assertEqual((plan,saved),before)
+        self.assertEqual(report['pending_input_upper_if_reprocessed'],sum(x['input_upper'] for x in plan['parts'][1:]))
+        self.assertFalse(report['ready_to_collect']);self.assertFalse(report['quality_pass'])
+        self.assertEqual(report['model_calls_executed_by_tool'],0);self.assertIsNone(report['actual_cost_cny'])
+        # Identical duplicates still require choosing a revision, not another call.
+        duplicated=p.progress(plan,rs+[rs[0]])
+        self.assertEqual(duplicated['parts'][0]['status'],'duplicate');self.assertEqual(duplicated['duplicate_responses'][0]['response_indices'],[1,4])
+        with self.assertRaises(ValueError):p.collect(plan,rs+[rs[0]])
+    def test_progress_stale_duplicates_bad_identity_and_changed_policy_block_ready(self):
+        plan=p.plan(archive(),TASK);rs=[proposal(plan)];stale={**copy.deepcopy(rs[0]),'input_hash':'f'*64}
+        for extra in [[stale,stale],[{'input_hash':[]},None],['untrusted text']]:
+            report=p.progress(plan,rs+extra)
+            self.assertFalse(report['ready_to_collect']);self.assertEqual(report['reusable_parts'],1)
+            with self.assertRaises(ValueError):p.collect(plan,rs+extra)
+        for changed in [p.plan(archive(owner='different'),TASK),p.plan(archive(),{**TASK,'role':'新岗位'}),p.plan(archive(),TASK,output_reserve=4096)]:
+            report=p.progress(changed,rs);self.assertFalse(report['ready_to_collect'])
+            self.assertEqual(report['reusable_parts'],0);self.assertEqual(len(report['ignored_stale_inputs']),1)
+        with self.assertRaises(ValueError):p.progress(plan,[stale]*(p.MAX_PARTS*2+1))
+        with self.assertRaises(ValueError):p.progress(plan,[{'input_hash':'f'*64,'extra':'x'*p.MAX_PROPOSAL_BYTES}])
     def test_cli_roundtrip_and_exact_candidate_team_review_contract(self):
         root=Path(tempfile.mkdtemp(prefix='tingxian-preparation-test-'))
         for name,value in [('bundle.json',bundle()),('task.json',TASK)]: (root/name).write_text(json.dumps(value,ensure_ascii=False))
@@ -165,6 +196,9 @@ class Tests(unittest.TestCase):
         self.assertEqual(manifest['parts'][0]['input_hash'],packet['input_hash'])
         plan=p.plan(archive(),TASK);(root/'responses.json').write_text(json.dumps([proposal(plan)],ensure_ascii=False))
         extra=['--proposals',str(root/'responses.json'),'--execution-mode','fixture']
+        saved=(root/'responses.json').read_bytes()
+        progress=json.loads(run('preparation-progress',extra));self.assertTrue(progress['ready_to_collect'])
+        self.assertEqual((root/'responses.json').read_bytes(),saved)
         artifact=json.loads(run('preparation-collect',extra));team=json.loads(run('preparation-collect',extra+['--output-format','team']))
         self.assertEqual(team['artifact'],artifact)
         self.assertIn('项目故事卡',run('preparation-collect',extra+['--output-format','markdown']))

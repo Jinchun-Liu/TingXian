@@ -103,11 +103,26 @@ class Tests(unittest.TestCase):
         changed=copy.deepcopy(parent);changed['candidate_hash']='f'*64;changed['role_view'][0]['matches'][0]['reason']='更具体的相关性理由'
         after=c.plan(changed,f.groups(c,changed));old={x['input_hash'] for x in plan['parts']};new={x['input_hash'] for x in after['parts']}
         self.assertEqual(len(old&new),2)
+        progress=c.progress(after,rs);self.assertEqual(progress['reusable_parts'],2)
+        self.assertEqual(len(progress['pending_parts']),1);self.assertFalse(progress['ready_to_collect'])
         with self.assertRaisesRegex(ValueError,'incomplete'):c.collect(after,rs)
         extra=[r for r in f.responses(after) if r['input_hash'] not in old];out=c.collect(after,rs+extra)
         self.assertEqual(len(out['consolidation']['ignored_stale_inputs']),1)
+        self.assertTrue(c.progress(after,rs+extra)['ready_to_collect'])
         changed['library_id']='other-owner'
         with self.assertRaisesRegex(ValueError,'Stale'):c.plan(changed,group)
+    def test_progress_checks_coverage_and_keeps_parent_and_responses_unchanged(self):
+        *_,plan=setup();rs=f.responses(plan);saved=copy.deepcopy((plan,rs))
+        report=c.progress(plan,rs[:-1]);self.assertFalse(report['ready_to_collect'])
+        self.assertEqual(report['pending_parts'],[len(rs)]);self.assertEqual(report['reusable_parts'],len(rs)-1)
+        bad=copy.deepcopy(rs);bad[-1]['stories'][0]['activity']='completed'
+        report=c.progress(plan,bad);self.assertEqual(report['parts'][-1]['status'],'invalid')
+        self.assertFalse(report['ready_to_collect'])
+        for values in [bad,rs+[rs[0]],rs+[{'input_hash':'f'*64},{'input_hash':'f'*64}],rs+[None]]:
+            self.assertFalse(c.progress(plan,values)['ready_to_collect'])
+            with self.assertRaises(ValueError):c.collect(plan,values)
+        self.assertTrue(c.progress(plan,rs)['ready_to_collect']);self.assertEqual((plan,rs),saved)
+        self.assertFalse(c.progress(plan,rs)['quality_pass']);self.assertEqual(c.progress(plan,rs)['model_calls_executed_by_tool'],0)
     def test_real_cli_scope_parent_rebuild_and_outputs(self):
         b,cap,_,proposals,parent,group,plan=setup()
         folder=Path(tempfile.mkdtemp(prefix='tingxian-consolidation-cli-'))
@@ -121,6 +136,10 @@ class Tests(unittest.TestCase):
         manifest=json.loads(run('consolidation-plan',groupsargs).stdout);packet=json.loads(run('consolidation-input',groupsargs+['--part','1']).stdout)
         self.assertEqual(packet['input_hash'],manifest['parts'][0]['input_hash'])
         more=groupsargs+['--responses',str(folder/'responses.json')];out=json.loads(run('consolidation-collect',more).stdout)
+        saved={p.name:p.read_bytes() for p in folder.iterdir()}
+        progress=json.loads(run('consolidation-progress',more).stdout)
+        self.assertTrue(progress['ready_to_collect']);self.assertEqual(progress,c.progress(plan,f.responses(plan)))
+        self.assertEqual({p.name:p.read_bytes() for p in folder.iterdir()},saved)
         self.assertEqual(out,c.collect(plan,f.responses(plan),'fixture'))
         self.assertEqual(json.loads(run('consolidation-collect',more+['--output-format','team']).stdout)['artifact'],out)
         self.assertIn('未决冲突',run('consolidation-collect',more+['--output-format','markdown']).stdout)

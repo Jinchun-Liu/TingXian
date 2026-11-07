@@ -109,6 +109,12 @@ def input_packet(plan, number):
             "execution_profile": "offline", "model_calls_executed_by_tool": 0}
 
 
+def progress(plan, responses):
+    return {"format": "consolidation-progress-v1", "parent_candidate_hash": plan["parent"]["candidate_hash"],
+            "grouping_hash": plan["grouping_hash"], "limits": copy.deepcopy(plan["limits"]),
+            **p.response_progress(plan["parts"], responses, lambda part, value: validate(plan, part, value))}
+
+
 def validate(plan, item, response):
     kind=item["kind"]
     p.shape(response, ("format","input_hash","kind","omitted","conflicts",*( ("requirement","gap_review") if kind=="requirement" else ("stories",))))

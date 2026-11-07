@@ -140,6 +140,54 @@ def input_packet(plan, number):
             "execution_profile": "offline", "model_calls_executed_by_tool": 0}
 
 
+def response_progress(parts, responses, validator):
+    """Read-only inventory of saved host responses, never a partial candidate.
+
+    Validation uses the same current plan and validators as collect. Duplicate
+    revisions (including stale ones) require an explicit choice; even identical
+    copies must not silently become a successful result or another model call.
+    """
+    array(responses, MAX_PARTS * 2)
+    require(len(canonical(responses).encode()) <= MAX_PROPOSAL_BYTES, "Responses exceed 16 MiB")
+    by_hash, invalid_identity = {}, []
+    for index, response in enumerate(responses, 1):
+        h = response.get("input_hash") if isinstance(response, dict) else None
+        if not isinstance(h, str) or not re.fullmatch(r"[a-f0-9]{64}", h):
+            invalid_identity.append(index)
+        else:
+            by_hash.setdefault(h, []).append((index, response))
+    current = {part["input_hash"] for part in parts}
+    rows = []
+    for number, part in enumerate(parts, 1):
+        found = by_hash.get(part["input_hash"], [])
+        state = "missing" if not found else "duplicate" if len(found) > 1 else "structurally_valid"
+        if state == "structurally_valid":
+            try:
+                validator(part, found[0][1])
+            except (ValueError, KeyError, TypeError, IndexError):
+                state = "invalid"
+        rows.append({"part": number, "input_hash": part["input_hash"], "status": state,
+                     "response_indices": [i for i, _ in found], "input_upper": part["input_upper"]})
+    duplicates = [{"input_hash": h, "response_indices": [i for i, _ in values]}
+                  for h, values in sorted(by_hash.items()) if len(values) > 1]
+    pending = [row for row in rows if row["status"] != "structurally_valid"]
+    return {"parts": rows, "total_parts": len(rows), "reusable_parts": len(rows) - len(pending),
+            "pending_parts": [row["part"] for row in pending],
+            "ignored_stale_inputs": sorted(set(by_hash) - current),
+            "duplicate_responses": duplicates, "invalid_identity_indices": invalid_identity,
+            "ready_to_collect": not pending and not duplicates and not invalid_identity,
+            "pending_input_upper_if_reprocessed": sum(row["input_upper"] for row in pending),
+            "token_method": "UTF-8 bytes plus chat envelope; estimate, not provider tokens or saved fees",
+            "model_calls_executed_by_tool": 0, "model_usage": None, "actual_cost_cny": None,
+            "execution_profile": "offline", "quality_pass": False, "harness2_enabled": False}
+
+
+def progress(plan, proposals):
+    return {"format": "preparation-progress-v1", "snapshot_hash": plan["snapshot_hash"],
+            "task_hash": plan["task_hash"], "limits": copy.deepcopy(plan["limits"]),
+            **response_progress(plan["parts"], proposals, lambda _part, value: validate_part(plan, value))}
+
+
 def validate_part(plan, proposal):
     shape(proposal, ("format", "input_hash", "requirements", "stories"))
     require(proposal["format"] == "preparation-part-v1", "Unsupported proposal format")
