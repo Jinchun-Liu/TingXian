@@ -1,7 +1,7 @@
 name: Windows native video source
 on:
   push:
-    branches: [feat/windows-eye-local-20261106]
+    branches: [feat/windows-eye-local-20261106, feat/windows-eye-output-20261107]
     paths: ['video/windows/**', 'video/eye/**', 'crates/video-worker-control/**', 'Cargo.lock', '.github/workflows/video-source-checks.yml']
   pull_request:
     paths: ['video/windows/**', 'video/eye/**', 'crates/video-worker-control/**', 'Cargo.lock', '.github/workflows/video-source-checks.yml']
@@ -54,6 +54,8 @@ jobs:
             ${{ runner.temp }}/video-source-build/Release/TingXianVideoSource.dll
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-source-test.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-ipc-test.exe
+            ${{ runner.temp }}/video-source-build/Release/tingxian-eye-output-test.exe
+            ${{ runner.temp }}/video-source-build/Release/tingxian-eye-output.lib
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-session-test.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-worker-owner-test.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-worker.exe

@@ -213,8 +213,11 @@ HRESULT FramePublisher::submit(UINT64 epoch, UINT64 id, UINT64 captured, const B
     return send(Frame, epoch, id, captured, data, bytes);
 }
 HRESULT FramePublisher::end(UINT64 epoch) { return epoch ? send(End, epoch, 0, 0, nullptr, 0) : E_INVALIDARG; }
-void FramePublisher::close() {
+void FramePublisher::cancel() noexcept {
     if (stop_) SetEvent(stop_);
+}
+void FramePublisher::close() {
+    cancel();
     std::lock_guard guard(writer_);
     connected_ = false;
     if (pipe_ != INVALID_HANDLE_VALUE) { DisconnectNamedPipe(pipe_); CloseHandle(pipe_); pipe_ = INVALID_HANDLE_VALUE; }

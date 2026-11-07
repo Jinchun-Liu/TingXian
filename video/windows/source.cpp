@@ -80,6 +80,11 @@ public:
         TX_CHECK(type_->SetUINT32(MF_MT_DEFAULT_STRIDE, Width));
         TX_CHECK(type_->SetUINT32(MF_MT_SAMPLE_SIZE, FrameBytes));
         TX_CHECK(type_->SetUINT32(MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235));
+        TX_CHECK(type_->SetUINT32(MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709));
+        TX_CHECK(type_->SetUINT32(MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709));
+        TX_CHECK(type_->SetUINT32(MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709));
+        TX_CHECK(type_->SetUINT32(MF_MT_VIDEO_CHROMA_SITING,
+            MFVideoChromaSubsampling_ProgressiveChroma | MFVideoChromaSubsampling_MPEG1));
         IMFMediaType* types[] = {type_.Get()};
         TX_CHECK(MFCreateStreamDescriptor(0, 1, types, &descriptor_));
         ComPtr<IMFMediaTypeHandler> handler;

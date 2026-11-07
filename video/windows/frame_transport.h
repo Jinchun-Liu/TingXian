@@ -53,6 +53,7 @@ public:
     HRESULT begin(UINT64 epoch);
     HRESULT submit(UINT64 epoch, UINT64 id, UINT64 captured, const BYTE* data, UINT32 bytes);
     HRESULT end(UINT64 epoch);
+    void cancel() noexcept; // event only; caller may close/join on its owning lane
     void close();
 };
 

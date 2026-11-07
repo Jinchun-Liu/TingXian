@@ -1,5 +1,7 @@
 // Two real Windows processes, synthetic pixels, no camera registration/capture.
 #include "frame_transport.h"
+#include "eye_output.h"
+#include "../eye/session.h"
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mferror.h>
@@ -50,6 +52,11 @@ struct TransportTestPeer {
             } else if (!GetOverlappedResult(publisher.pipe_, &operation, &sent, FALSE)) result = HRESULT_FROM_WIN32(GetLastError());
         }
         CloseHandle(event); return result;
+    }
+};
+struct EyeOutputTestPeer {
+    static bool restricted_acl(EyePipeOutput& output) {
+        return TransportTestPeer::restricted_acl(output.publisher_);
     }
 };
 }
@@ -124,6 +131,57 @@ int publisher_child(HANDLE control, HANDLE report) {
     } catch (...) { return 3; }
 }
 
+// The input is blue and the fake provider returns red. Red MF samples test the
+// actual Session -> adapter -> pipe -> source, never an SDK quality claim.
+int eye_publisher_child(HANDLE control, HANDLE report) {
+    using namespace tingxian::eye;
+    struct SyntheticProvider : EyeCorrectionProvider {
+        bool fail = false;
+        Capabilities capabilities() const noexcept override { return {"synthetic", "1", true}; }
+        Error prepare(Format f) override { return f.width==Width && f.height==Height ? Error::none : Error::invalid_frame; }
+        Result process(const Frame& f) override {
+            if (fail) return {Error::no_face,{}};
+            std::vector<BYTE> red(f.bgr.size());
+            for(size_t i=2;i<red.size();i+=3) red[i]=255;
+            return {Error::none,std::move(red)};
+        }
+        bool stop() noexcept override { return true; }
+    } provider;
+    struct TickClock : Clock { uint64_t now_ms() const noexcept override { return GetTickCount64(); } } clock;
+    EyePipeOutput output;
+    Session session(provider,output,clock);
+    struct Cleanup { Session& session; EyePipeOutput& output;
+        ~Cleanup(){session.stop();session.drain_stop();output.close();} } cleanup{session,output};
+    try {
+        const auto generation=session.begin({Width,Height});
+        expect(generation && session.prepare(generation),"prepare synthetic eye session");
+        Ready ready;
+        ready.result=output.open_if_current(generation,output.operation_ticket(),&ready.endpoint);
+        if(SUCCEEDED(ready.result))ready.restricted_acl=EyeOutputTestPeer::restricted_acl(output);
+        pipe_write(report,&ready,sizeof(ready));
+        if(FAILED(ready.result))return 2;
+        const auto until=GetTickCount64()+3000;
+        while(output.status().state==EyeOutputState::waiting && GetTickCount64()<until)Sleep(1);
+        HRESULT handshake=output.status().state==EyeOutputState::streaming ? S_OK : E_FAIL;
+        pipe_write(report,&handshake,sizeof(handshake));
+        if(FAILED(handshake))return 3;
+        for(;;){
+            Command command{};pipe_read(control,&command,sizeof(command));
+            HRESULT hr=E_INVALIDARG;
+            if(command.kind==Pixels){
+                provider.fail=command.y==0;
+                Frame frame{generation,command.id,GetTickCount64(),std::vector<BYTE>(size_t(Width)*Height*3)};
+                for(size_t i=0;i<frame.bgr.size();i+=3)frame.bgr[i]=255;
+                hr=session.submit(std::move(frame)) && session.process_one() ? S_OK : E_FAIL;
+            }else if(command.kind==StopEpoch || command.kind==Close){
+                session.stop();session.drain_stop();output.close();hr=S_OK;
+            }else if(command.kind==Crash)ExitProcess(0);
+            pipe_write(report,&hr,sizeof(hr));
+            if(command.kind==Close)return 0;
+        }
+    }catch(...){return 3;}
+}
+
 struct Child {
     Handle control, report;
     OwnedTestProcess process;
@@ -131,7 +189,7 @@ struct Child {
     DWORD pid = 0;
     HRESULT handshake = E_PENDING;
     bool crashed = false;
-    explicit Child(bool simulate_start_failure = false, HANDLE* observed_process = nullptr) {
+    explicit Child(bool simulate_start_failure = false, HANDLE* observed_process = nullptr, bool eye_output = false) {
         SECURITY_ATTRIBUTES security{sizeof(security), nullptr, TRUE};
         Handle child_control, child_report;
         expect(CreatePipe(&child_control.value, &control.value, &security, 0), "create control pipe");
@@ -150,7 +208,8 @@ struct Child {
         wchar_t executable[32768];
         const DWORD length = GetModuleFileNameW(nullptr, executable, _countof(executable));
         if (!length || length == _countof(executable)) { DeleteProcThreadAttributeList(attributes); throw std::runtime_error("executable path unavailable"); }
-        std::wstring command = L"\"" + std::wstring(executable) + L"\" --publisher-test "
+        std::wstring command = L"\"" + std::wstring(executable)
+            + (eye_output ? L"\" --eye-publisher-test " : L"\" --publisher-test ")
             + std::to_wstring(reinterpret_cast<UINT_PTR>(child_control.value)) + L" "
             + std::to_wstring(reinterpret_cast<UINT_PTR>(child_report.value));
         STARTUPINFOEXW startup{}; startup.StartupInfo.cb = sizeof(startup); startup.lpAttributeList = attributes;
@@ -239,7 +298,7 @@ struct SourceFixture {
         while (GetTickCount64() < deadline) { if (predicate()) return; Sleep(1); }
         throw std::runtime_error(message);
     }
-    void pixels(BYTE y_value, BYTE uv_value) {
+    void pixels(BYTE y_value, BYTE uv_value, int v_value = -1) {
         check(stream->RequestSample(nullptr), "request IPC sample");
         auto event = next_event(stream.Get(), MEMediaSample);
         PROPVARIANT value{}; check(event->GetValue(&value), "sample value");
@@ -253,7 +312,8 @@ struct SourceFixture {
         bool valid = pitch >= LONG(Width);
         if (valid) for (UINT32 row = 0; row < Height + Height / 2; ++row)
             for (UINT32 col = 0; col < Width; ++col)
-                if (scanline[size_t(row) * pitch + col] != BYTE(row < Height ? y_value : uv_value)) valid = false;
+                if (scanline[size_t(row) * pitch + col]
+                    != BYTE(row < Height ? y_value : ((col % 2 && v_value >= 0) ? v_value : uv_value))) valid = false;
         check(image->Unlock2D(), "unlock pixels"); expect(valid, "cross-process pixels differ");
     }
     void connect(Child& child) {
@@ -274,6 +334,23 @@ void run(const wchar_t* dll) {
     }
     SourceFixture source(dll);
     source.pixels(32, 128);
+    for (int failure=0;failure<3;++failure) {
+        Child child(false,nullptr,true);source.connect(child);
+        const auto accepted=source.metrics().accepted;
+        check(child.send({Pixels}),"processed eye frame");
+        source.wait([&]{return source.metrics().accepted>accepted;},"corrected eye frame not received");
+        source.pixels(63,102,240); // provider's red, never input's blue
+        if(failure==0)check(child.send({StopEpoch}),"stop eye provider");
+        else if(failure==1){Command command{Pixels};command.id=2;command.y=0;
+            expect(FAILED(child.send(command)),"no-face provider result falsely completed");}
+        else check(child.send({Crash}),"crash synthetic eye process");
+        source.wait([&]{return source.status().state==TransportState::fault;},"eye stop/fault did not disconnect output");
+        source.pixels(32,128);
+        expect(!source.metrics().enabled,"eye stop/fault retained enabled output");
+        passed(failure==0 ? "corrected provider pixels cross processes into MF; explicit stop neutralizes"
+            : failure==1 ? "provider no-face fault neutralizes actual MF output without raw fallback"
+            : "eye producer crash neutralizes MF output without worker cleanup");
+    }
     {
         Child child; source.connect(child);
         check(child.send({StartEpoch}), "begin epoch");
@@ -385,6 +462,8 @@ void run(const wchar_t* dll) {
 }
 
 int wmain(int argc, wchar_t** argv) {
+    if (argc == 4 && wcscmp(argv[1], L"--eye-publisher-test") == 0)
+        return eye_publisher_child(reinterpret_cast<HANDLE>(_wcstoui64(argv[2], nullptr, 10)), reinterpret_cast<HANDLE>(_wcstoui64(argv[3], nullptr, 10)));
     if (argc == 4 && wcscmp(argv[1], L"--publisher-test") == 0)
         return publisher_child(reinterpret_cast<HANDLE>(_wcstoui64(argv[2], nullptr, 10)), reinterpret_cast<HANDLE>(_wcstoui64(argv[3], nullptr, 10)));
     if (argc != 2) return 2;

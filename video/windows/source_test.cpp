@@ -101,6 +101,14 @@ void run(HMODULE library) {
         check(type->GetGUID(MF_MT_SUBTYPE, &subtype), "subtype");
         expect(width == 1280 && height == 720 && numerator == 30 && denominator == 1 && subtype == MFVideoFormat_NV12, "not 720p30 NV12");
         passed("single 720p30 NV12 stream with no audio");
+        expect(MFGetAttributeUINT32(type.Get(), MF_MT_YUV_MATRIX, 0) == MFVideoTransferMatrix_BT709
+            && MFGetAttributeUINT32(type.Get(), MF_MT_VIDEO_PRIMARIES, 0) == MFVideoPrimaries_BT709
+            && MFGetAttributeUINT32(type.Get(), MF_MT_TRANSFER_FUNCTION, 0) == MFVideoTransFunc_709
+            && MFGetAttributeUINT32(type.Get(), MF_MT_VIDEO_NOMINAL_RANGE, 0) == MFNominalRange_16_235
+            && MFGetAttributeUINT32(type.Get(), MF_MT_VIDEO_CHROMA_SITING, 0)
+                == (MFVideoChromaSubsampling_ProgressiveChroma | MFVideoChromaSubsampling_MPEG1),
+            "output color metadata does not match the corrected-frame converter");
+        passed("BT709 limited range and centered progressive chroma are explicit");
 
         PROPVARIANT position{};
         expect(source->Start(pd.Get(), nullptr, &position) == MF_E_NOT_INITIALIZED, "start without allocator succeeded");

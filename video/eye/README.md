@@ -4,6 +4,13 @@ This is an opt-in native development module. The base app, display window,
 prerequisite worker, CPU installer and virtual camera do **not** invoke it yet.
 It has no capture, audio, recording preference, UI, cloud or face-replacement API.
 
+The Windows `EyePipeOutput` now connects a prepared Session's corrected results
+to the existing authenticated video pipe. It has a single pending corrected frame,
+a separate conversion/send lane, explicit operation tickets and nonblocking
+revocation. The own synthetic two-process tests read actual MF samples; the
+NVIDIA worker, application UI and installed component are not connected yet.
+See [output integration](../windows/EYE-OUTPUT.md).
+
 `EyeCorrectionProvider` accepts packed BGR8 frames and returns a separate corrected
 buffer or an error. `Session` owns explicit preparation and generation admission:
 
