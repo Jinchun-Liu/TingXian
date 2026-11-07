@@ -51,6 +51,16 @@ capture 与独立 completion、进入 Timeline 后恰好一个有效帧、推理
 证据：`artifacts/2026-11-08/eye-qpc-host-001/` 下实验定义、构建/回归日志、原生输入
 摘要、环境、安装进程/受保护工作树记录和证据清单。完整 CI 结果另行回填。
 
+功能 `915317e09bab6eee0f71eea5f3c604f135c3cb78` 已保留原 SHA 推送。
+2026-11-08 [Windows CI 42394765273](https://github.com/Jinchun-Liu/TingXian/actions/runs/42394765273)
+（job `128469654481`）完整日志确认 **111 Rust、9+2+3 CTest、1658 文件检查**通过。
+平台工件 `13582517733`：4,051,614 bytes，平台 SHA-256
+`9789f1210b5f95a170017d642df4bc0afa37695cafa6c7a7cd02cefdbc628e52`；本轮仅核对元数据，
+没有下载/执行工件或安装器。上一轮工件下载超时未被本次 CI 成功掩盖。
+Git 443 fetch 两次失败，官方 API 核对远端后上传原 tree/commit，以 expected-old-SHA
+非强制快进；后续本地远端跟踪引用依据已核验 API HEAD 同步，不宣称 fetch 已成功。
+Mac API HEAD `6549357` 保留，三个受保护工作树和原安装进程未变。
+
 ## 接下来必须完成的边界
 
 当前 Timeline 交接验证是**输入入队**，未将新 reader 自动绑定到 `JointOutput`。
