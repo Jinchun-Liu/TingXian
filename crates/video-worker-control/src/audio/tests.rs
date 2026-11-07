@@ -87,6 +87,13 @@ fn native_audio_bridge_pinned_production_has_no_fixture_and_refuses_unknown_pair
         Err(Error::Load(Reason::Integrity))
     ));
     let mut audio = NativeAudio::load(pin(false)).unwrap();
+    for _ in 0..3 {
+        assert!(audio.inspect_pair(&pair()).is_err());
+    }
+    assert_eq!(audio.status().unwrap().phase, 0);
+    assert_eq!(audio.status().unwrap().submitted_frames, 0);
+    assert!(!audio.revocation().revoked());
+    assert!(audio.ready_event().unwrap().is_none());
     assert!(unsafe {
         GetProcAddress(
             audio.library.module,
@@ -290,12 +297,43 @@ fn native_audio_bridge_abi_bounds_and_thread_affinity_are_enforced() {
     .join()
     .unwrap();
     assert_eq!(hr as u32, 0x8001010e); // RPC_E_WRONG_THREAD, not an unsafe Session read.
+    let inspect = audio.library.inspect_pair;
+    assert_eq!(
+        unsafe { inspect(audio.raw.as_ptr(), std::ptr::null(), 1, std::ptr::null(), 0) } as u32,
+        0x80070057
+    );
+    let hr = std::thread::spawn(move || unsafe {
+        inspect(raw as *mut c_void, std::ptr::null(), 0, std::ptr::null(), 0)
+    })
+    .join()
+    .unwrap();
+    assert_eq!(hr as u32, 0x8001010e);
     let flag = audio.revocation();
     drop(audio);
     assert!(
         flag.revoked(),
         "callback context lives until native destruction completes"
     );
+}
+
+#[test]
+fn native_audio_bridge_preflight_can_retry_without_consuming_prepare() {
+    let mut audio = NativeAudio::load(pin(true)).unwrap();
+    audio.inspect_pair(&pair()).unwrap();
+    step(&audio, 0, 6);
+    assert!(audio.inspect_pair(&pair()).is_err());
+    step(&audio, 0, 0);
+    audio.inspect_pair(&pair()).unwrap();
+    assert_eq!(audio.status().unwrap().phase, 0);
+    assert!(!audio.revocation().revoked());
+    assert!(read(&audio).is_empty());
+    assert!(audio.ready_event().unwrap().is_none());
+    audio.prepare(&pair(), 2, 1).unwrap();
+    assert_eq!(audio.status().unwrap().submitted_frames, 0);
+    assert!(matches!(audio.inspect_pair(&pair()), Err(Error::Off)));
+    audio.start(true).unwrap();
+    assert_eq!(audio.status().unwrap().submitted_frames, 960);
+    assert!(read(&audio).iter().all(|s| *s == 0.0));
 }
 
 #[test]

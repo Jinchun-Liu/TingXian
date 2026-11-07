@@ -119,6 +119,7 @@ const _: () = assert!(std::mem::size_of::<RawStatus>() == 48);
 type Abi = unsafe extern "system" fn() -> u32;
 type Revoke = unsafe extern "system" fn(*mut c_void);
 type Create = unsafe extern "system" fn(Revoke, *mut c_void) -> *mut c_void;
+type InspectPair = unsafe extern "system" fn(*mut c_void, *const u16, u32, *const u16, u32) -> i32;
 type Prepare = unsafe extern "system" fn(
     *mut c_void,
     *const u16,
@@ -142,6 +143,7 @@ struct Library {
     module: HMODULE,
     _verified: Verified,
     create: Create,
+    inspect_pair: InspectPair,
     prepare: Prepare,
     start: Start,
     observe: Observe,
@@ -220,6 +222,7 @@ impl Library {
             module: module.0,
             _verified: verified,
             create: symbol!("TxAudioCreate", Create),
+            inspect_pair: symbol!("TxAudioInspectPair", InspectPair),
             prepare: symbol!("TxAudioPrepare", Prepare),
             start: symbol!("TxAudioStart", Start),
             observe: symbol!("TxAudioObserve", Observe),
@@ -334,6 +337,25 @@ impl NativeAudio {
             stopped: false,
             identity: Rc::new(()),
             _owner_thread: PhantomData,
+        })
+    }
+    /// Read-only PnP/endpoint identity check; no audio client/stream is prepared.
+    /// May be retried on this idle owner. A successful snapshot is not a lease,
+    /// a driver/license attestation or permission to start. Prepare revalidates.
+    pub fn inspect_pair(&self, pair: &AudioPair) -> Result<(), Error> {
+        if self.stopped || self.format.is_some() || self.callback.state.revoked() {
+            return Err(Error::Off);
+        }
+        let render = endpoint(&pair.render_id)?;
+        let capture = endpoint(&pair.capture_id)?;
+        check(unsafe {
+            (self.library.inspect_pair)(
+                self.raw.as_ptr(),
+                render.as_ptr(),
+                render.len() as u32,
+                capture.as_ptr(),
+                capture.len() as u32,
+            )
         })
     }
     /// Explicit native selection only; may initialize an output client. Caller

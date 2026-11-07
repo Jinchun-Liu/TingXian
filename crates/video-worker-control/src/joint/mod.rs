@@ -61,6 +61,18 @@ pub struct Config {
     pub selected_microphone: u64,
     pub barrier_path: PathBuf,
 }
+/// An idle, native-only candidate, not output readiness or authorization. No
+/// pipe, endpoint client, timeline generation or durable exposure mark exists.
+/// Keep on the MTA owner lane; activate rechecks the inventory before exposure.
+pub struct Candidate {
+    audio: NativeAudio,
+    video: NativeTimedVideo,
+    pair: AudioPair,
+    channels: u32,
+    selected_microphone: u64,
+    barrier_path: PathBuf,
+    renderer: SincRenderer,
+}
 #[derive(Clone, Copy, Debug)]
 pub struct Cleanup {
     pub timeline: Result<u64, av_timeline::Error>,
@@ -125,34 +137,57 @@ pub struct JointOutput {
     cleanup: Option<Cleanup>,
     prime_deadline: Option<u64>,
 }
-impl JointOutput {
-    /// Explicit intent covers BOTH outputs. Loading pins/preparing a filter has
-    /// no device side effects. Arm durably before prepare/open; failures after
-    /// that point retain the barrier even if no media ultimately reaches a sink.
-    pub fn prepare(
-        config: Config,
-        explicit_intent: bool,
-    ) -> Result<(Self, TimedEndpoint), PrepareFailure> {
-        if !explicit_intent {
-            return Err(Error::Permission.into());
-        }
+impl Candidate {
+    /// Only reads native component pins and current endpoint metadata. Failure
+    /// leaves the profile untouched and can be retried with a corrected choice.
+    pub fn inspect(config: Config) -> Result<Self, Error> {
         if config.selected_microphone == 0 || !(1..=2).contains(&config.channels) {
-            return Err(Error::Source.into());
+            return Err(Error::Source);
         }
         let mut audio = NativeAudio::load(config.audio).map_err(Error::Audio)?;
         let video = NativeTimedVideo::load(config.video).map_err(Error::Video)?;
         audio
             .couple_video(video.cancellation())
             .map_err(Error::Audio)?;
+        audio.inspect_pair(&config.pair).map_err(Error::Audio)?;
         let renderer = SincRenderer::default();
+        Ok(Self {
+            audio,
+            video,
+            pair: config.pair,
+            channels: config.channels,
+            selected_microphone: config.selected_microphone,
+            barrier_path: config.barrier_path,
+            renderer,
+        })
+    }
+    /// Explicit intent covers BOTH outputs. Revalidate before arming; actual
+    /// prepare checks again for hot-unplug/races. Once arming begins, failures
+    /// retain the barrier because acquired resources may have been exposed.
+    pub fn activate(
+        self,
+        explicit_intent: bool,
+    ) -> Result<(JointOutput, TimedEndpoint), PrepareFailure> {
+        if !explicit_intent {
+            return Err(Error::Permission.into());
+        }
+        self.audio.inspect_pair(&self.pair).map_err(Error::Audio)?;
+        let Self {
+            audio,
+            video,
+            pair,
+            channels,
+            selected_microphone,
+            barrier_path,
+            renderer,
+        } = self;
         let timeline = Timeline::default();
         let generation = timeline
-            .begin(0, config.selected_microphone)
+            .begin(0, selected_microphone)
             .map_err(Error::Timeline)?;
-        let mut barrier =
-            barrier::Barrier::acquire(&config.barrier_path).map_err(Error::Barrier)?;
+        let mut barrier = barrier::Barrier::acquire(&barrier_path).map_err(Error::Barrier)?;
         barrier.arm(generation).map_err(Error::Barrier)?;
-        let mut owner = Self {
+        let mut owner = JointOutput {
             audio,
             video,
             timeline,
@@ -168,10 +203,7 @@ impl JointOutput {
             cleanup: None,
             prime_deadline: None,
         };
-        if let Err(e) = owner
-            .audio
-            .prepare(&config.pair, config.channels, generation)
-        {
+        if let Err(e) = owner.audio.prepare(&pair, channels, generation) {
             let cause = owner.fail(Error::Audio(e));
             return Err(PrepareFailure {
                 cause,
@@ -189,6 +221,19 @@ impl JointOutput {
             }
         };
         Ok((owner, endpoint))
+    }
+}
+impl JointOutput {
+    /// Convenience for an immediate explicit start. A failed read-only preflight
+    /// does not arm the durable barrier or require fabricated drain evidence.
+    pub fn prepare(
+        config: Config,
+        explicit_intent: bool,
+    ) -> Result<(Self, TimedEndpoint), PrepareFailure> {
+        if !explicit_intent {
+            return Err(Error::Permission.into());
+        }
+        Candidate::inspect(config)?.activate(true)
     }
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {

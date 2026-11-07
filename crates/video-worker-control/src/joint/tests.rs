@@ -243,11 +243,11 @@ fn joint_stalled_priming_clock_cannot_wait_past_prime_budget() {
 #[test]
 fn joint_prepare_failure_retains_cleanup_and_durable_fence() {
     let path = root().join("output.barrier");
-    let mut c = config(path.clone());
-    c.pair.render_id = "not-an-endpoint".into();
-    let failure = match JointOutput::prepare(c, true) {
+    let candidate = Candidate::inspect(config(path.clone())).unwrap();
+    a::step(&candidate.audio, 0, 7); // Prepare fails AFTER crossing the resource boundary.
+    let failure = match candidate.activate(true) {
         Err(f) => f,
-        Ok(_) => panic!("unknown endpoint accepted"),
+        Ok(_) => panic!("failed preparation accepted"),
     };
     assert!(matches!(
         failure.cause,
@@ -258,6 +258,87 @@ fn joint_prepare_failure_retains_cleanup_and_durable_fence() {
     assert!(cleanup.video.unwrap().local_clear);
     assert_eq!(cleanup.audio.unwrap().submitted_frames, 0);
     fenced(path);
+}
+#[test]
+fn joint_preflight_invalid_pair_does_not_poison_unexposed_profile() {
+    let path = root().join("output.barrier");
+    let mut c = config(path.clone());
+    c.pair.render_id = "not-an-endpoint".into();
+    let failure = match JointOutput::prepare(c, true) {
+        Err(f) => f,
+        Ok(_) => panic!("invalid pair accepted"),
+    };
+    assert!(matches!(
+        failure.cause,
+        Error::Audio(audio::Error::Native(_))
+    ));
+    assert!(
+        failure.cleanup.is_none(),
+        "unexposed preflight must not prepare either endpoint"
+    );
+    assert!(
+        !path.exists(),
+        "invalid selection permanently poisoned the profile"
+    );
+    let (mut owner, _endpoint) = JointOutput::prepare(config(path.clone()), true).unwrap();
+    owner.stop();
+    drop(owner);
+    fenced(path);
+}
+#[test]
+fn joint_preflight_candidate_is_idle_and_activation_rechecks_unplug() {
+    let path = root().join("output.barrier");
+    let candidate = Candidate::inspect(config(path.clone())).unwrap();
+    assert!(!path.exists());
+    assert_eq!(candidate.audio.status().unwrap().phase, 0);
+    assert_eq!(candidate.audio.status().unwrap().submitted_frames, 0);
+    assert_eq!(
+        candidate.video.status().unwrap().phase,
+        timed_video::Phase::Idle
+    );
+    assert!(a::read(&candidate.audio).is_empty());
+    a::step(&candidate.audio, 0, 6); // Endpoint becomes inactive after inspection.
+    let failure = match candidate.activate(true) {
+        Err(f) => f,
+        Ok(_) => panic!("stale inventory started"),
+    };
+    assert!(matches!(
+        failure.cause,
+        Error::Audio(audio::Error::Native(_))
+    ));
+    assert!(failure.cleanup.is_none());
+    assert!(!path.exists());
+    let candidate = Candidate::inspect(config(path.clone())).unwrap();
+    assert!(matches!(
+        candidate.activate(false),
+        Err(PrepareFailure {
+            cause: Error::Permission,
+            cleanup: None
+        })
+    ));
+    assert!(!path.exists());
+}
+#[test]
+fn joint_preflight_product_unknown_pair_is_metadata_only_and_keeps_existing_fence() {
+    let path = root().join("output.barrier");
+    fs::write(&path, b"retained unresolved exposure").unwrap();
+    let mut c = config(path.clone());
+    c.audio = a::pin(false);
+    assert!(matches!(
+        Candidate::inspect(c),
+        Err(Error::Audio(audio::Error::Native(_)))
+    ));
+    assert_eq!(fs::read(&path).unwrap(), b"retained unresolved exposure");
+    // A valid candidate cannot remove a prior record either.
+    let candidate = Candidate::inspect(config(path.clone())).unwrap();
+    assert!(matches!(
+        candidate.activate(true),
+        Err(PrepareFailure {
+            cause: Error::Barrier(BarrierError::UncertainDrain),
+            cleanup: None
+        })
+    ));
+    assert_eq!(fs::read(&path).unwrap(), b"retained unresolved exposure");
 }
 #[test]
 fn joint_stop_event_wins_over_pending_receipt() {

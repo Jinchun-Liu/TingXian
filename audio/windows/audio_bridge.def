@@ -1,6 +1,7 @@
 EXPORTS
     TxAudioAbi
     TxAudioCreate
+    TxAudioInspectPair
     TxAudioPrepare
     TxAudioStart
     TxAudioObserve

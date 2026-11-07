@@ -21,6 +21,9 @@ using TxAudioRevoke = void (WINAPI*)(void* context);
 extern "C" {
 UINT32 WINAPI TxAudioAbi() noexcept;
 void* WINAPI TxAudioCreate(TxAudioRevoke revoke, void* context) noexcept;
+// Metadata only; does not prepare a client, prime PCM, set attempted, or revoke.
+HRESULT WINAPI TxAudioInspectPair(void*, const wchar_t* render, UINT32 render_length,
+    const wchar_t* capture, UINT32 capture_length) noexcept;
 HRESULT WINAPI TxAudioPrepare(void*, const wchar_t* render, UINT32 render_length,
     const wchar_t* capture, UINT32 capture_length, UINT32 channels, UINT64 generation,
     TxAudioFormat*, UINT32 size) noexcept;

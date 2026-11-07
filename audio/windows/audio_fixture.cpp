@@ -10,6 +10,7 @@ public:
     std::array<float, 1920> last{};
     UINT32 count = 0, failure = 0;
     HRESULT prepare(const Pair&, UINT32 channels, Format& out) noexcept override {
+        if (failure == 7) return E_FAIL; // Failure after prepare may have acquired resources.
         format.channels = channels; out = format; return S_OK;
     }
     HRESULT start() noexcept override { return now.padding == 960 ? S_OK : E_UNEXPECTED; }
@@ -39,13 +40,14 @@ public:
 };
 }
 std::unique_ptr<Backend> make_fixture_backend() { return std::make_unique<Fixture>(); }
-std::vector<Endpoint> fixture_inventory() {
-    return {{L"fixture-render", L"Synthetic", L"fixture-adapter", L"VBAudioVACWDM", L"VBAudioVACMME", Flow::render, true},
+std::vector<Endpoint> fixture_inventory(const Backend& backend) {
+    const auto& f = static_cast<const Fixture&>(backend);
+    return {{L"fixture-render", L"Synthetic", L"fixture-adapter", L"VBAudioVACWDM", L"VBAudioVACMME", Flow::render, f.failure != 6},
             {L"fixture-capture", L"Synthetic", L"fixture-adapter", L"VBAudioVACWDM", L"VBAudioVACMME", Flow::capture, true}};
 }
 HRESULT fixture_step(Backend& backend, UINT32 consumed, UINT32 failure) noexcept {
     auto& f = static_cast<Fixture&>(backend);
-    if (consumed > 4800 || failure > 5) return E_INVALIDARG;
+    if (consumed > 4800 || failure > 7) return E_INVALIDARG;
     const auto ticks = UINT64(consumed) * 10000000 / 48000;
     f.now.position += ticks; f.now.qpc_100ns += ticks;
     f.now.padding -= std::min(f.now.padding, consumed);

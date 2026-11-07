@@ -43,12 +43,35 @@ bool valid_id(const wchar_t* id, UINT32 length) noexcept {
     return id && length && length <= 1024 && std::find(id, id + length, L'\0') == id + length;
 }
 TxAudioClock clock_out(const Snapshot& s) noexcept { return {s.position, s.qpc_100ns, s.padding, 0}; }
+HRESULT inventory(Owner& o, std::vector<Endpoint>& endpoints) {
+#ifdef TINGXIAN_AUDIO_FIXTURE
+    endpoints = fixture_inventory(*o.backend);
+    return S_OK;
+#else
+    (void)o;
+    return enumerate_endpoints(endpoints);
+#endif
+}
 }
 extern "C" {
 UINT32 WINAPI TxAudioAbi() noexcept { return 1; }
 void* WINAPI TxAudioCreate(TxAudioRevoke callback, void* context) noexcept {
     if (!callback || !context) return nullptr;
     try { return new Owner(callback, context); } catch (...) { return nullptr; }
+}
+HRESULT WINAPI TxAudioInspectPair(void* raw, const wchar_t* render, UINT32 rlen,
+    const wchar_t* capture, UINT32 clen) noexcept {
+    auto hr = valid(raw); if (FAILED(hr)) return hr;
+    if (!valid_id(render, rlen) || !valid_id(capture, clen)) return E_INVALIDARG;
+    auto& o = *owner(raw);
+    if (o.attempted || o.session.status().phase != Phase::idle)
+        return HRESULT_FROM_WIN32(ERROR_INVALID_STATE);
+    try {
+        std::vector<Endpoint> endpoints;
+        hr = inventory(o, endpoints); if (FAILED(hr)) return hr;
+        return validate_pair(endpoints, {std::wstring(render, rlen), std::wstring(capture, clen)});
+    } catch (const std::bad_alloc&) { return E_OUTOFMEMORY; }
+    catch (...) { return E_FAIL; }
 }
 HRESULT WINAPI TxAudioPrepare(void* raw, const wchar_t* render, UINT32 rlen, const wchar_t* capture,
     UINT32 clen, UINT32 channels, UINT64 generation, TxAudioFormat* out, UINT32 size) noexcept {
@@ -63,11 +86,7 @@ HRESULT WINAPI TxAudioPrepare(void* raw, const wchar_t* render, UINT32 rlen, con
     o.attempted = true;
     try {
         std::vector<Endpoint> endpoints;
-#ifdef TINGXIAN_AUDIO_FIXTURE
-        endpoints = fixture_inventory();
-#else
-        hr = enumerate_endpoints(endpoints); if (FAILED(hr)) return hr;
-#endif
+        hr = inventory(o, endpoints); if (FAILED(hr)) return hr;
         hr = o.session.prepare(endpoints, {std::wstring(render, rlen), std::wstring(capture, clen)}, channels, generation);
         if (hr != S_OK) return hr;
         const auto f = o.session.format();

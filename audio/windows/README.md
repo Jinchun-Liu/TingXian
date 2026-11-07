@@ -9,6 +9,13 @@ defaults. The app's existing installed processes and user data are untouched.
 
 ## Native boundary
 
+- `TxAudioInspectPair` is an additive ABI 1 metadata-only export for an idle
+  owner. It never calls backend prepare/start or consumes the one preparation
+  attempt. The Rust joint `Candidate` separates this inspection from explicit
+  activation and rechecks inventory before durably arming the exposure barrier.
+  Invalid selections can be corrected without poisoning an unexposed profile;
+  a previous uncertain-drain record is never cleared by inspection. Actual
+  prepare still revalidates. New hosts reject DLLs missing this export.
 - `enumerate_endpoints` reads MMDevice properties and the endpoint's single
   DeviceTopology connector, then walks at most 16 PnP ancestors. DeviceTopology
   activation is metadata access; no `IAudioClient` is activated by enumeration.
