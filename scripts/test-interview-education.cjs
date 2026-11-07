@@ -19,8 +19,8 @@ function harness(){const calls=[],saved=new Map();let fail=false,saveGate=null,m
     if(name==='education_cancel')return;
     if(name==='education_save'){if(saveGate)await saveGate.promise;if(fail)throw Error('synthetic disk failure');const current=saved.get(args.document.id),revision=(current?.store_revision??0)+1;assert.equal(args.expected,current?.store_revision??0);saved.set(args.document.id,{...e.clone(args.document),store_revision:revision});return revision;}
     if(name==='education_load')return e.clone(saved.get(args.id));
-    if(name==='education_preview')return {budget:16000,model:'synthetic-fixture-only',endpoint:'http://127.0.0.1/unused',profile_stamp:'synthetic-profile-pin',output_reserve:4096,context_limit:32768,estimate:'synthetic'};
-    if(name==='education_generate'){if(modelGate)return await modelGate.promise;return result(c.study,args.request);}
+    if(name==='education_preview')return {budget:16000,model:'synthetic-fixture-only',endpoint:'http://127.0.0.1/unused',profile_stamp:'synthetic-profile-pin',scope_epoch:7,output_reserve:4096,context_limit:32768,estimate:'synthetic'};
+    if(name==='education_generate'){assert.equal(args.request.scope_epoch,7);if(modelGate)return await modelGate.promise;return result(c.study,args.request);}
     throw Error('Unexpected command '+name);
   }});return {c,calls,saved,setFail:v=>fail=v,setSaveGate:v=>saveGate=v,setModelGate:v=>modelGate=v};}
 let groups=0;async function check(name,run){await run();groups++;console.log('PASS education:',name);}

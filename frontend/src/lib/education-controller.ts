@@ -1,6 +1,6 @@
 import {Study,Request,Result,Task,Draft,clone,newStudy,restoreStudy,editDraft,invalidate,commitAttempt,prepareRequest,applyResult,packs} from './education';
 export type Bridge={invoke:<T>(name:string,args?:Record<string,unknown>)=>Promise<T>};
-export type Preview={request:Request;budget:number;model:string;endpoint:string;profile_stamp:string;output_reserve:number;context_limit:number;estimate:string};
+export type Preview={request:Request;budget:number;model:string;endpoint:string;profile_stamp:string;scope_epoch:number;output_reserve:number;context_limit:number;estimate:string};
 
 /** One owner; serialized saves and generation-bound results. No restore dispatch. */
 export class EducationController {
@@ -38,7 +38,7 @@ export class EducationController {
       await this.cancelled;await this.persist();const request=await prepareRequest(this.study,attemptId,lane);
       const info=await this.bridge.invoke<Omit<Preview,'request'>>('education_preview',{request});
       if(request.generation!==this.study.generation||request.session_id!==this.study.id)throw Error('输入已变化，请重新预览');
-      this.preview={request:{...request,profile_stamp:info.profile_stamp},...info};
+      this.preview={request:{...request,profile_stamp:info.profile_stamp,scope_epoch:info.scope_epoch},...info};
     }catch(e){this.error=String(e);throw e;}finally{this.preparing=false;this.notify();}
   }
   async send(){

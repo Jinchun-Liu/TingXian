@@ -25,6 +25,7 @@ pub struct Request {
     pub task_id:String,pub session_id:String,pub generation:u64,pub lane:String,
     pub input_json:String,pub input_hash:String,pub profile_id:String,pub context_limit:u64,pub confirmed:bool,
     #[serde(default)] pub profile_stamp:String,
+    #[serde(default)] pub scope_epoch:u64,
 }
 #[derive(Clone,Debug,Serialize,Deserialize)]
 pub struct ReviewResult {pub text:String,pub model_version:String,pub usage:Option<u64>,pub request_attempts:u8,pub error:Option<String>,pub budget:u64}
@@ -181,7 +182,7 @@ mod tests {
     fn request()->Request{
         let answer="我会区分 null、0、缺失字段和空串；用租户与幂等键联合约束，并在超时后查事务状态。";
         let input=json!({"schema":"tingxian-learning-input-v1","pack_id":"software-ai-foundations","pack_version":"1.0.0","goal":"核验事务结果","question":"StockMarketAgent 契约测试与提交后超时如何处理？","attempt_id":"attempt-1","answer_revision":1,"answer":answer,"answer_hash":digest(answer.as_bytes()),"input_source":"typed_self_response","assistance_level":"unknown","answer_exposed":false,"evidence":[]}).to_string();
-        Request{task_id:"task-1".into(),session_id:"study-1".into(),generation:2,lane:"interactive".into(),input_hash:digest(input.as_bytes()),input_json:input,profile_id:"answer-1".into(),context_limit:32768,confirmed:true,profile_stamp:String::new()}
+        Request{task_id:"task-1".into(),session_id:"study-1".into(),generation:2,lane:"interactive".into(),input_hash:digest(input.as_bytes()),input_json:input,profile_id:"answer-1".into(),context_limit:32768,confirmed:true,profile_stamp:String::new(),scope_epoch:0}
     }
     fn replace_input(r:&mut Request,change:impl FnOnce(&mut Value)){let mut value:Value=serde_json::from_str(&r.input_json).unwrap();change(&mut value);r.input_json=value.to_string();r.input_hash=digest(r.input_json.as_bytes());}
     fn document()->Value{json!({"format":"tingxian-learning-v1","schema_version":1,"id":"study-1","mode":"review","pack_id":"software-ai-foundations","pack_version":"1.0.0","generation":0,"store_revision":0,"status":"editing","draft":{"question":"合成题目","text":"未完成的本人输入"},"attempts":[],"feedback":[],"tasks":[],"items":[],"evidence":[]})}

@@ -22,18 +22,19 @@ pub async fn education_save<R:tauri::Runtime>(window:WebviewWindow<R>,state:Stat
 #[tauri::command]
 pub fn education_cancel<R:tauri::Runtime>(window:WebviewWindow<R>,state:State<'_,EducationState>,session_id:String,generation:u64)->Result<(),String>{owner(&window)?;state.tasks.cancel(&session_id,generation);Ok(())}
 #[tauri::command]
-pub async fn education_preview<R:tauri::Runtime>(window:WebviewWindow<R>,interview:State<'_,crate::interview::InterviewState>,request:Request)->Result<Value,String>{
+pub async fn education_preview<R:tauri::Runtime>(window:WebviewWindow<R>,state:State<'_,EducationState>,interview:State<'_,crate::interview::InterviewState>,request:Request)->Result<Value,String>{
     owner(&window)?;let (_,budget)=core::messages(&request)?;
     let config=interview.index(window.app_handle()).await?.provider_config().await?;
     let profile=config.answers.iter().chain([&config.background]).find(|p|p.id==request.profile_id&&p.enabled).ok_or("请选择已启用的文字模型接口")?;
     let key=interview.provider_key(profile).await;
     if key.is_empty()&&!profile.accepts_empty_key(){return Err("需要在模型接口中配置自己的生成模型；仍可手动练习和保存".into());}
-    Ok(json!({"budget":budget,"model":profile.request.model,"endpoint":profile.endpoint,"profile_stamp":interview_core::digest(serde_json::to_string(profile).unwrap().as_bytes()),"output_reserve":interview_core::model::MAX_ANSWER_TOKENS,"context_limit":request.context_limit,"estimate":"UTF-8 字节保守上界，不是精确 tokenizer"}))
+    Ok(json!({"budget":budget,"scope_epoch":state.tasks.scope(),"model":profile.request.model,"endpoint":profile.endpoint,"profile_stamp":interview_core::digest(serde_json::to_string(profile).unwrap().as_bytes()),"output_reserve":interview_core::model::MAX_ANSWER_TOKENS,"context_limit":request.context_limit,"estimate":"UTF-8 字节保守上界，不是精确 tokenizer"}))
 }
 #[tauri::command]
 pub async fn education_generate<R:tauri::Runtime>(window:WebviewWindow<R>,state:State<'_,EducationState>,interview:State<'_,crate::interview::InterviewState>,request:Request)->Result<ReviewResult,String>{
     owner(&window)?;crate::interview_exit::ensure_not_exiting(window.app_handle())?;
-    let epoch=state.tasks.scope();
+    let epoch=request.scope_epoch;
+    if epoch!=state.tasks.scope(){return Err("全局取消后原预览已失效，请重新预览".into());}
     if !request.confirmed{return Err("需明确确认本次发送范围".into());}core::messages(&request)?;
     if request.lane=="background"&&interview.education_assist_active(){return Err("实时辅助活跃，后台评估已暂停；可稍后明确继续".into());}
     if let Some(result)=state.tasks.cached(&request)?{return Ok(result);}
