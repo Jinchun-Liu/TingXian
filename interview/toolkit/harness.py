@@ -336,8 +336,9 @@ def main():
     archive.add_argument("--excluded", type=Path)
     for action in ("preparation-plan", "preparation-input", "preparation-collect"):
         command = sub.add_parser(action)
-        command.add_argument("--bundle", type=Path, required=True)
-        command.add_argument("--library-id", required=True)
+        command.add_argument("--bundle", type=Path)
+        command.add_argument("--library-id")
+        command.add_argument("--scope", type=Path, help="Desktop-exported current sources and manual revisions")
         command.add_argument("--task", type=Path, required=True)
         command.add_argument("--revisions", type=Path)
         command.add_argument("--excluded", type=Path)
@@ -360,8 +361,17 @@ def main():
         spec = importlib.util.spec_from_file_location("tingxian_preparation", Path(__file__).with_name("preparation.py"))
         preparation = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(preparation)
-        archive = archive_bundle(read(args.bundle), args.library_id, "",
-                                 read(args.revisions) if args.revisions else [], read(args.excluded) if args.excluded else [])
+        if args.scope:
+            require(not any((args.bundle, args.library_id, args.revisions, args.excluded)), "Do not override a desktop scope")
+            scope = read(args.scope)
+            require(set(scope) == {"format", "library_id", "index_version", "bundle", "revisions", "excluded"}
+                    and scope["format"] == "tingxian-preparation-scope-v1", "Invalid desktop scope")
+            require(len(canonical(scope).encode()) <= 16 * 1024 * 1024, "Desktop scope exceeds 16 MiB")
+            archive = archive_bundle(scope["bundle"], scope["library_id"], "", scope["revisions"], scope["excluded"])
+        else:
+            require(args.bundle and args.library_id, "Provide --scope or both --bundle and --library-id")
+            archive = archive_bundle(read(args.bundle), args.library_id, "",
+                                     read(args.revisions) if args.revisions else [], read(args.excluded) if args.excluded else [])
         task = read(args.task)
         preparation.task_spec(task)
         method_pack = preparation_policy(load_registry(Path(__file__).with_name("registry.json")), task, args.preview_methods)

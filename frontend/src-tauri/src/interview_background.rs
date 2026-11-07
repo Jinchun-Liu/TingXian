@@ -38,8 +38,8 @@ impl Work{
             "metrics":d.metrics,"failures":d.failures}))})
     }
 }
-fn owner(window:&Window)->Result<(),String>{if window.label()!="main"{return Err("请在主操作窗口整理资料".into())}Ok(())}
-async fn guard<'a>(window:&Window,app:&AppHandle,state:&'a InterviewState)->Result<tokio::sync::MutexGuard<'a,()>,String>{
+fn owner<R:tauri::Runtime>(window:&Window<R>)->Result<(),String>{if window.label()!="main"{return Err("请在主操作窗口整理资料".into())}Ok(())}
+async fn guard<'a,R:tauri::Runtime>(window:&Window<R>,app:&AppHandle<R>,state:&'a InterviewState)->Result<tokio::sync::MutexGuard<'a,()>,String>{
     owner(window)?;crate::interview_exit::ensure_not_exiting(app)?;
     let guard=state.lifecycle.try_lock().map_err(|_|"请等待当前操作完成")?;
     if state.session.load(Ordering::SeqCst)||crate::audio::recording_commands::is_recording().await{return Err("请结束面试会话后整理资料".into())}
@@ -310,6 +310,45 @@ pub async fn background_apply(window:Window,app:AppHandle,state:State<'_,Intervi
 #[tauri::command]
 pub async fn background_settings_preview(window:Window,app:AppHandle,state:State<'_,InterviewState>)->Result<Value,String>{
     owner(&window)?;state.index(&app).await?.background_settings_preview().await
+}
+#[tauri::command]
+pub async fn background_preparation_export<R:tauri::Runtime>(window:Window<R>,app:AppHandle<R>,state:State<'_,InterviewState>)->Result<Option<String>,String>{
+    let _guard=guard(&window,&app,&state).await?;
+    if state.background.view()["busy"]==true{return Err("请等待背景整理完成".into());}
+    let picker=app.clone();
+    let folder=tauri::async_runtime::spawn_blocking(move||picker.dialog().file().blocking_pick_folder()).await.map_err(|e|e.to_string())?;
+    let Some(folder)=folder else{return Ok(None)};
+    let scope=state.index(&app).await?.preparation_export().await?;
+    let path=folder.into_path().map_err(|e|e.to_string())?.join(format!("TingXian-preparation-{}.json",uuid::Uuid::new_v4()));
+    let mut file=tokio::fs::OpenOptions::new().create_new(true).write(true).open(&path).await.map_err(|e|e.to_string())?;
+    file.write_all(&serde_json::to_vec_pretty(&scope).map_err(|e|e.to_string())?).await.map_err(|e|e.to_string())?;
+    file.sync_all().await.map_err(|e|e.to_string())?;Ok(Some(path.to_string_lossy().into_owned()))
+}
+#[tauri::command]
+pub async fn background_preparation_import<R:tauri::Runtime>(window:Window<R>,app:AppHandle<R>,state:State<'_,InterviewState>)->Result<Option<Value>,String>{
+    let _guard=guard(&window,&app,&state).await?;
+    if state.background.view()["busy"]==true{return Err("请等待背景整理完成".into());}
+    let picker=app.clone();
+    let path=tauri::async_runtime::spawn_blocking(move||picker.dialog().file().add_filter("岗位准备候选",&["json"]).blocking_pick_file()).await.map_err(|e|e.to_string())?;
+    let Some(path)=path else{return Ok(None)};let path=path.into_path().map_err(|e|e.to_string())?;
+    let meta=tokio::fs::symlink_metadata(&path).await.map_err(|e|e.to_string())?;
+    if !meta.is_file() || meta.len()>interview_core::preparation::LIMIT as u64{return Err("请选择不超过16 MiB的普通JSON文件".into());}
+    let file=tokio::fs::File::open(path).await.map_err(|e|e.to_string())?;let mut bytes=vec![];
+    file.take(interview_core::preparation::LIMIT as u64+1).read_to_end(&mut bytes).await.map_err(|e|e.to_string())?;
+    if bytes.len()>interview_core::preparation::LIMIT{return Err("候选包超过16 MiB".into());}
+    let candidate:Value=serde_json::from_slice(&bytes).map_err(|_|"候选JSON无效")?;
+    state.index(&app).await?.preparation_preview(&candidate).await.map(Some)
+}
+#[tauri::command]
+pub async fn background_preparation_save<R:tauri::Runtime>(window:Window<R>,app:AppHandle<R>,state:State<'_,InterviewState>,candidate:Value,version:String,previous_hash:Option<String>)->Result<(),String>{
+    let _guard=guard(&window,&app,&state).await?;
+    if state.background.view()["busy"]==true{return Err("请等待背景整理完成".into());}
+    state.index(&app).await?.preparation_save(&candidate,&version,previous_hash.as_deref()).await
+}
+#[tauri::command]
+pub async fn background_preparation_view<R:tauri::Runtime>(window:Window<R>,app:AppHandle<R>,state:State<'_,InterviewState>)->Result<Value,String>{
+    let _guard=guard(&window,&app,&state).await?;
+    state.index(&app).await?.preparation_view().await
 }
 #[tauri::command]
 pub async fn background_settings_apply(window:Window,app:AppHandle,state:State<'_,InterviewState>,version:String,profile_hash:String,changes:Vec<interview_core::background_settings::Change>)->Result<(),String>{

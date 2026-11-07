@@ -61,8 +61,26 @@ plan 列出分块编号、每块 input_hash、记录范围、保守输入估计�
 
 `preparation-collect ... --output-format markdown` 输出可读稿；`--output-format team` 输出共享 team-audit 可用的 candidate。三名reviewer接收同一份 candidate 及其 canonical hash，按照 execution.md 独立核对。candidate.id来自产物摘要，review.candidate_hash则必须是完整candidate的摘要，二者不混用。收集后的隐藏改写会使旧评审失效。程序并未执行三角色模型，也未替宿主统计无法取得的费用。
 
-本产物为 `tingxian-preparation-v1` 候选，不是 `meetily-background-v1/v2` 交换包；当前桌面“导入 Agent 结果”仍只接收原背景格式。不要把故事文本塞回原文或已确认事实来绕过这一边界。后续桌面来源核对与独立应用入口尚待接入。应用侧必须再校验自己的源版本、修订、时效与排除状态，不能只信可移植工具声称 current。
+本产物为 `tingxian-preparation-v1` 候选，不是 `meetily-background-v1/v2` 交换包；当前桌面“导入 Agent 结果”仍只接收原背景格式。不要把故事文本塞回原文或已确认事实来绕过这一边界。新版源码通过下文的独立“岗位准备”入口再次校验源版本、修订、时效与排除状态；安装版尚未更新，不能只信可移植工具声称 current。
 
 ## 无模型示例
 
 包内 examples/preparation-bundle.fixture.json、preparation-task.json、preparation-responses.fixture.json 是虚构的手工测试夹具。可将前三个命令的参数指向这些文件，library-id 使用 synthetic-owner，并用 --execution-mode fixture 收集。这个示例只验证命令与格式，不代表真实模型运行或三角色评审通过。
+
+## 桌面来源与回导（工具包 0.5）
+
+新版源码提供“资料与模型 → 资料库 → 岗位准备”。先导出已整理且当前有效的来源；尚未进入背景整理的普通文件索引不包含在这个导出里，需先通过原背景工具整理。排除、过期或内容变化待核对的资料不导出。此动作生成本机 JSON，不调用模型；把文件交给外部 Agent 时仍由使用者选择范围。
+
+```sh
+python toolkit/harness.py preparation-plan --scope current-scope.json --task task.json
+python toolkit/harness.py preparation-input --scope current-scope.json --task task.json --part 1
+python toolkit/harness.py preparation-collect --scope current-scope.json --task task.json --proposals responses.json --execution-mode host_model --output-format json > preparation.json
+```
+
+`--scope` 不可与手工 bundle/library/revisions/excluded 参数混用，不能更改本机库标识。模型仅处理 `preparation-input` 的 messages；当前来源和修订身份由程序保留。模型输出完整后按原四角色流程评审同一候选版本；本工具不会代替真实角色推理。
+
+将 JSON 候选从“导入准备候选”打开；核对岗位要求、匹配理由、参考材料、缺口、故事卡与原文，再点“保存岗位准备”。该保存只写独立的本机准备视图，不代表事实确认、不会使候选进入实时答题、不自动修改设置。当前视图可以重新查看，来源变化则标为旧候选；尚未提供准备视图的多版本回滚。
+
+原生端重新绑定资料库身份、完整有效来源集合、原文位置/哈希/提取版本和当前本人修订；导入到保存之间资料变化或另一个保存操作都会拒绝旧快照。引用存在仅证明绑定，不能证明模型文字被原文蕴含或岗位匹配正确。
+
+已跑 Rust → Python 三命令 → 原生核对/保存 → 重开数据库的合成路径。并未运行 Codex/Claude Code 的真实模型，也未升级已安装桌面应用。

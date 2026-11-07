@@ -4,6 +4,7 @@ import {invoke} from '@tauri-apps/api/core';
 import {Button} from '@/components/ui/button';
 import {BackgroundSettings} from '@/components/interview/BackgroundSettings';
 import {BackgroundChanges} from '@/components/interview/BackgroundChanges';
+import {PreparationLibrary} from '@/components/interview/PreparationLibrary';
 type Profile={overview:string;role:string;aliases:string};
 type Metrics={peak_prompt_tokens:number|null;sum_prompt_tokens?:number|null;sum_completion_tokens?:number|null;unknown_calls?:number;calls:number};
 type Draft={id:string;job?:string;profile:Profile;documents:{id:string;name:string;count:number}[];failures:[string,string][];metrics:Metrics|null};
@@ -115,6 +116,7 @@ export function BackgroundLibrary({locked,onBusy,onApplied,onModels,revision,act
       <Button variant="outline" size="sm" disabled={off} onClick={()=>pick('bundle')}>导入 Agent 结果</Button>
       <Button variant="outline" size="sm" disabled={off} onClick={()=>op(async()=>{const path=await invoke<string|null>('background_export_skill');if(path)setMsg('技能已导出：'+path);})}>导出整理 Skill</Button></div>
       <p className="text-xs text-slate-500">将技能文件夹放入项目的 .agents/skills（Codex）或 .claude/skills（Claude Code），用高智能模型整理后导回 .meetily.json。</p></details>
+    {active&&<PreparationLibrary locked={off} revision={revision} onBusy={onBusy}/>}
     {msg&&<p role="status" className="break-words">{msg}</p>}
   </section>;
 }

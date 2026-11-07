@@ -1,4 +1,4 @@
-# 听弦 CV / 面试工具包 0.4 候选
+# 听弦 CV / 面试工具包 0.5 候选
 
 候选实现，默认不改变桌面答题策略。四角色用于离线准备与评审，实时只选择适用方法。Harness²关闭，无模型传输或凭证；不支持以审计通过自动启用候选。
 
@@ -30,4 +30,6 @@ validation/development.json六个开发案例，spoken.json十二个口语输入
 
 策略编译同时给出完整 `text`、`method_text` 和 `style_text`。使用 Rust 精简口语候选时只追加 `method_text`，避免再重复整份口语规则；SP 规则仍留在离线来源映射中。这是待语义验证的风格替换，不是字节完全相同的去重，也不代表候选已晋级。`scripts/measure-toolkit-inputs.py` 分别记录完整卡片和精简候选两种装配口径，不混用压缩比例。
 
-岗位与故事卡新增 `preparation-plan/input/collect`：宿主按块做语义匹配，程序检验来源与预算，输出 JSON、可读 Markdown 或同一版四角色候选。它不新增 API 客户端，不宣称语义质量已通过，也不直接导入应用。入口与数据边界见 [来源化岗位准备](references/preparation.md)。
+岗位与故事卡新增 `preparation-plan/input/collect`：宿主按块做语义匹配，程序检验来源与预算，输出 JSON、可读 Markdown 或同一版四角色候选。它不新增 API 客户端，不宣称语义质量已通过，可通过新版源码的独立“岗位准备”入口导回并核对保存。安装版尚未升级。入口与数据边界见 [来源化岗位准备](references/preparation.md)。
+
+桌面端先点击“资料与模型 → 资料库 → 岗位准备 → 导出整理资料”，得到当前有效背景提取和本人修订。三个 preparation 命令可使用 `--scope <导出文件>` 替代 `--bundle/--library-id/--revisions/--excluded`。不要改库标识或手工确认字段。导回时使用 `--output-format json` 的候选，原生端重核当前来源；保存只建立本机准备视图，不写入个人事实、实时检索或设置。

@@ -3,7 +3,7 @@ const fs=require('node:fs'),path=require('node:path');
 const output=process.argv[2];if(!output)throw Error('Pass a new output directory');
 const buildFlag=process.argv.indexOf('--build');
 const build=buildFlag<0?path.resolve(__dirname,'../frontend/out'):path.resolve(process.argv[buildFlag+1]);
-function fixture(versions,transport){
+function fixture(versions,transport,preparation){
  let sequence=0,recording=false,paused=false;const callbacks=new Map(),events=new Map();
  const emit=name=>{for(const cb of events.get(name)||[])cb({event:name,id:1,payload:null});};
  const preferences={scenario:'interview',role:'手动填写的测试岗位',organization:'原目标组织',context:'保留本人手动确认的背景。',terminology:'JSON Schema',answer_language:'auto',transcription_language:'auto'};
@@ -23,6 +23,12 @@ function fixture(versions,transport){
    if(cmd==='plugin:event|unlisten')return;
    if(cmd==='interview_status')return {preferences,root:'',suggested_root:'',aliases:'',facts:'',key_configured:transport,workspace_ready:transport,answer_capacity:transport?2:0,cloud_asr_mode:'local',index_documents:1,index_chunks:4,index_version:'8',documents,session_active:false,architecture:'合成测试',system_version:'未连接原生应用',memory_bytes:0,whisper_model:''};
    if(cmd==='background_status')return {library:{documents:1,chunks:4,baseline:262144,full_budget:62000,rag_budget:56000,fits_full:true,version:'8',state:{profile,share:false,metrics:null},measurement:null},model:'合成模型',ready:false,jobs:[],work:{busy:false,progress:'',draft:versions?{id:'draft-versions',profile,documents:[{id:source,name:'项目说明.md',count:1}],failures:[],metrics:null}:null}};
+   if(preparation){
+    if(cmd==='background_preparation_import')return {candidate:preparation,source_names:Object.fromEntries(preparation.source_records.flatMap(r=>r.source_refs.map(s=>[s.source_id,'合成项目.md']))),index_version:'8',previous_hash:null,source_binding_valid:true};
+    if(cmd==='background_preparation_save')return;
+    if(cmd==='background_preparation_view')return {candidate:preparation,source_names:Object.fromEntries(preparation.source_records.flatMap(r=>r.source_refs.map(s=>[s.source_id,'合成项目.md']))),source_binding_valid:true,local_only:true};
+    if(cmd==='background_preparation_export')return '/synthetic/preparation.json';
+   }
    if(cmd==='background_changes')return [{id:source,name:'项目说明.md',state:'source_changed',identical_count:0,identical_sources:[]}];
    if(cmd==='background_preview')return {rows:[newRow],more:false,previous:{name:'项目说明.md',rows:[oldRow],more:false}};
    if(cmd==='background_versions')return {rows:[{revision:expected,name:'项目说明.md',source_hash:expected,recorded_at:'2026-11-06T01:00:00Z',count:1,current:true},{revision:'b'.repeat(64),name:'项目说明.md',source_hash:'b'.repeat(64),recorded_at:null,count:1,current:false}],more:false};
@@ -60,8 +66,10 @@ function fixture(versions,transport){
  window.__TAURI_EVENT_PLUGIN_INTERNALS__={unregisterListener(){}};
 }
 fs.mkdirSync(output); // Refuse reusing a fixture directory or modifying the build.
+const preparationFlag=process.argv.indexOf('--preparation');
+const preparation=preparationFlag<0?null:JSON.parse(fs.readFileSync(process.argv[preparationFlag+1],'utf8'));
 for(const item of fs.readdirSync(build)){
- if(item==='interview-workspace.html'||(process.argv.includes('--transport')&&item==='interview.html'))fs.writeFileSync(path.join(output,item),fs.readFileSync(path.join(build,item),'utf8').replace('<head>','<head><script>('+fixture.toString()+')('+JSON.stringify(process.argv.includes('--versions'))+','+JSON.stringify(process.argv.includes('--transport'))+')</script>'));
+ if(item==='interview-workspace.html'||(process.argv.includes('--transport')&&item==='interview.html'))fs.writeFileSync(path.join(output,item),fs.readFileSync(path.join(build,item),'utf8').replace('<head>','<head><script>('+fixture.toString()+')('+JSON.stringify(process.argv.includes('--versions'))+','+JSON.stringify(process.argv.includes('--transport'))+','+JSON.stringify(preparation).replaceAll('<','\\u003c')+')</script>'));
  else fs.symlinkSync(path.join(build,item),path.join(output,item));
 }
 console.log(output);

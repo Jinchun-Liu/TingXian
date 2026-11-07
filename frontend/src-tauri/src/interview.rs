@@ -1020,3 +1020,28 @@ pub async fn interview_residue_clear<R:tauri::Runtime>(app:tauri::AppHandle<R>,s
     let prefs=crate::audio::recording_preferences::load_recording_preferences(&app).await.map_err(|e|e.to_string())?;
     crate::interview_history::clear_temporary_history_with(app.state::<crate::state::AppState>().db_manager.pool(),&prefs.save_folder,json!({"recovery":recovery}),crate::interview_history::move_to_trash).await
 }
+
+#[cfg(test)]
+mod preparation_ipc_tests {
+    use super::*;
+    use crate::interview_background;
+    #[test]
+    fn preparation_ipc_is_main_window_only_and_obeys_session_and_lifecycle_guards(){
+        let dir=std::env::temp_dir().join(format!("tingxian-preparation-ipc-{}",uuid::Uuid::new_v4()));std::fs::create_dir(&dir).unwrap();
+        let index=tauri::async_runtime::block_on(interview_core::Index::open(&dir.join("synthetic.sqlite"))).unwrap();
+        let state=InterviewState::default();assert!(state.index.set(index).is_ok());
+        let app=tauri::test::mock_builder().manage(state).manage(crate::interview_exit::ExitState::default())
+            .invoke_handler(tauri::generate_handler![interview_background::background_preparation_export,interview_background::background_preparation_import,interview_background::background_preparation_save,interview_background::background_preparation_view])
+            .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let main=tauri::WebviewWindowBuilder::new(&app,"main",Default::default()).build().unwrap();
+        let display=tauri::WebviewWindowBuilder::new(&app,"display",Default::default()).build().unwrap();
+        let invoke=|window:&tauri::WebviewWindow<tauri::test::MockRuntime>,cmd:&str,body:Value|tauri::test::get_ipc_response(window,tauri::webview::InvokeRequest {cmd:cmd.into(),callback:tauri::ipc::CallbackFn(0),error:tauri::ipc::CallbackFn(1),url:"tauri://localhost".parse().unwrap(),body:tauri::ipc::InvokeBody::Json(body),headers:Default::default(),invoke_key:tauri::test::INVOKE_KEY.to_string()});
+        let commands=[("background_preparation_export",json!({})),("background_preparation_import",json!({})),("background_preparation_view",json!({})),("background_preparation_save",json!({"candidate":{},"version":"0","previousHash":null}))];
+        for (cmd,body) in &commands{assert!(invoke(&display,cmd,body.clone()).is_err());}
+        let state=app.state::<InterviewState>();state.session.store(true,Ordering::SeqCst);
+        for (cmd,body) in &commands{assert!(invoke(&main,cmd,body.clone()).is_err());}state.session.store(false,Ordering::SeqCst);
+        let lock=tauri::async_runtime::block_on(state.lifecycle.clone().lock_owned());for (cmd,body) in &commands{assert!(invoke(&main,cmd,body.clone()).is_err());}drop(lock);
+        assert_eq!(invoke(&main,"background_preparation_view",json!({})).unwrap().deserialize::<Value>().unwrap(),Value::Null);
+        assert!(invoke(&main,"background_preparation_save",commands[3].1.clone()).is_err());
+    }
+}
