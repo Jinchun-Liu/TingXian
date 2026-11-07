@@ -9,7 +9,7 @@
 namespace tingxian::video {
 namespace {
 constexpr UINT32 Magic = 0x31565854; // TXV1, little endian Windows x64
-enum : UINT16 { Hello = 1, Ack = 2, Begin = 3, Frame = 4, End = 5, ScheduledFrame = 6, Receipt = 7 };
+enum : UINT16 { Hello = 1, Ack = 2, Begin = 3, Frame = 4, End = 5, ScheduledFrame = 6, Receipt = 7, CorrectedFrame = 8 };
 struct Header {
     UINT32 magic = Magic;
     UINT16 version = 1;
@@ -130,10 +130,10 @@ HRESULT authenticate_client(HANDLE pipe) {
 }
 
 }
-bool valid_video_endpoint(const VideoPipeEndpoint& endpoint) noexcept {
+static bool valid_endpoint_layout(const VideoPipeEndpoint& endpoint) noexcept {
     constexpr size_t prefix_size = _countof(PipePrefix) - 1;
     const size_t length = wcsnlen_s(endpoint.name, _countof(endpoint.name));
-    if ((endpoint.version != 1 && endpoint.version != 2) || !endpoint.producer_pid || length != prefix_size + 32
+    if (!endpoint.producer_pid || length != prefix_size + 32
         || wcsncmp(endpoint.name, PipePrefix, prefix_size) != 0) return false;
     for (size_t i = prefix_size; i < length; ++i) {
         wchar_t c = endpoint.name[i];
@@ -141,6 +141,12 @@ bool valid_video_endpoint(const VideoPipeEndpoint& endpoint) noexcept {
     }
     BYTE any = 0; for (BYTE byte : endpoint.capability) any |= byte;
     return any != 0;
+}
+bool valid_video_endpoint(const VideoPipeEndpoint& endpoint) noexcept {
+    return (endpoint.version == 1 || endpoint.version == 2) && valid_endpoint_layout(endpoint);
+}
+bool valid_eye_endpoint(const VideoPipeEndpoint& endpoint) noexcept {
+    return endpoint.version == 3 && valid_endpoint_layout(endpoint);
 }
 namespace {
 bool basic_header(const Header& header, UINT16 version) { return header.magic == Magic && header.version == version && header.reserved == 0; }
@@ -157,6 +163,9 @@ HRESULT FramePublisher::open(VideoPipeEndpoint* endpoint) {
 }
 HRESULT FramePublisher::open_timed(VideoPipeEndpoint* endpoint) {
     return open_protocol(endpoint, 2);
+}
+HRESULT FramePublisher::open_corrected(VideoPipeEndpoint* endpoint) {
+    return open_protocol(endpoint, 3);
 }
 HRESULT FramePublisher::open_protocol(VideoPipeEndpoint* endpoint, UINT16 version) {
     if (!endpoint) return E_POINTER;
@@ -209,7 +218,8 @@ HRESULT FramePublisher::send(UINT16 kind, UINT64 epoch, UINT64 id, UINT64 captur
     if (received) *received = false;
     std::lock_guard guard(writer_);
     if (!connected_ || pipe_ == INVALID_HANDLE_VALUE) return HRESULT_FROM_WIN32(ERROR_PIPE_NOT_CONNECTED);
-    if ((kind == Frame && endpoint_.version != 1) || (kind == ScheduledFrame && endpoint_.version != 2)) return E_INVALIDARG;
+    if ((kind == Frame && endpoint_.version != 1) || (kind == ScheduledFrame && endpoint_.version != 2)
+        || (kind == CorrectedFrame && endpoint_.version != 3)) return E_INVALIDARG;
     Header header{}; header.kind = kind; header.epoch = epoch; header.id = id; header.captured = captured; header.bytes = bytes;
     header.version = UINT16(endpoint_.version);
     HRESULT hr = transfer(pipe_, true, &header, sizeof(header), stop_);
@@ -245,6 +255,18 @@ HRESULT FramePublisher::submit_timed(UINT64 epoch, UINT64 sequence, const TimedF
         std::memcpy(payload.data(), &timing, sizeof(timing));
         if (bytes) std::memcpy(payload.data() + sizeof(timing), data, bytes);
         const auto result = send(ScheduledFrame, epoch, sequence, 0, payload.data(), UINT32(payload.size()), receipt);
+        SecureZeroMemory(payload.data(), payload.size()); return result;
+    } catch (const std::bad_alloc&) { return E_OUTOFMEMORY; }
+}
+HRESULT FramePublisher::submit_corrected(UINT64 epoch, UINT64 id, const CorrectedTiming& timing, const BYTE* data, UINT32 bytes) {
+    UINT64 now = 0;
+    if (!epoch || !id || !data || bytes != FrameBytes || !qpc_now(now) || !timing.capture_qpc ||
+        timing.capture_qpc > timing.completed_qpc || timing.completed_qpc > now || now - timing.capture_qpc > TimedMaxAge) return E_INVALIDARG;
+    try {
+        std::vector<BYTE> payload(sizeof(timing) + bytes);
+        std::memcpy(payload.data(), &timing, sizeof(timing));
+        std::memcpy(payload.data() + sizeof(timing), data, bytes);
+        const auto result = send(CorrectedFrame, epoch, id, 0, payload.data(), UINT32(payload.size()));
         SecureZeroMemory(payload.data(), payload.size()); return result;
     } catch (const std::bad_alloc&) { return E_OUTOFMEMORY; }
 }

@@ -12,9 +12,16 @@ struct Format {
             ? size_t(width) * height * 3 : 0;
     }
 };
+enum class ClockDomain { tick_ms, qpc_100ns };
 struct Frame {
     uint64_t generation = 0, id = 0, captured_ms = 0;
     std::vector<uint8_t> bgr;
+    // Explicit QPC mode only. Legacy captured_ms stays zero in that mode.
+    // Completion is assigned by Session after inference, never by input/provider.
+    uint64_t capture_qpc = 0, completed_qpc = 0;
+    uint64_t captured(ClockDomain domain) const noexcept {
+        return domain == ClockDomain::qpc_100ns ? capture_qpc : captured_ms;
+    }
 };
 enum class Error { none, unavailable, invalid_frame, no_face, inference, provider_contract, exception, cleanup };
 struct Result {
@@ -51,5 +58,6 @@ class Clock {
 public:
     virtual ~Clock() = default;
     virtual uint64_t now_ms() const noexcept = 0;
+    virtual uint64_t now_qpc() const noexcept { return 0; }
 };
 }

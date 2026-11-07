@@ -4,6 +4,8 @@
 #include "ar087_provider.h"
 #include "../windows/eye_output.h"
 #include <algorithm>
+#include <array>
+#include <cstring>
 #include <cerrno>
 #include <memory>
 #include <sstream>
@@ -22,7 +24,10 @@ uint64_t number(const wchar_t* value) {
     for (auto p = value; *p; ++p) if (*p < L'0' || *p > L'9') return 0;
     errno = 0; const auto n = _wcstoui64(value, nullptr, 10); return errno ? 0 : n;
 }
-struct Monotonic : Clock { uint64_t now_ms() const noexcept override { return GetTickCount64(); } };
+struct Monotonic : Clock {
+    uint64_t now_ms() const noexcept override { return GetTickCount64(); }
+    uint64_t now_qpc() const noexcept override { UINT64 now = 0; return video::qpc_now(now) ? now : 0; }
+};
 enum class Read { complete, cancelled, input_fault, output_fault };
 bool failed_output(const video::EyePipeOutput& sink) {
     const auto state = sink.status().state;
@@ -58,10 +63,17 @@ bool valid_input(const InputHeader& h, uint64_t generation) noexcept {
     if (h.kind == Finish) return h.bytes == 0 && h.id == 0 && h.captured_ms == 0;
     return h.kind == Frame && h.bytes == BgrBytes && h.id != 0;
 }
+bool valid_qpc_input(const QpcInputHeader& h, uint64_t generation) noexcept {
+    if (h.magic != InputMagic || h.version != 2 || h.reserved || h.generation != generation) return false;
+    if (h.kind == Finish) return h.bytes == 0 && h.id == 0 && h.capture_qpc == 0;
+    return h.kind == Frame && h.bytes == BgrBytes && h.id != 0 && h.capture_qpc != 0;
+}
 int run(int argc, wchar_t** argv) {
     // owner, stop, report, input, fixed width/height, host generation
     if (argc != 9 || number(argv[6]) != video::Width || number(argv[7]) != video::Height || !number(argv[8])) return 2;
     const auto request = number(argv[8]);
+    const bool qpc = std::wstring(argv[1]) == L"--eye-stream-v2";
+    const auto domain = qpc ? ClockDomain::qpc_100ns : ClockDomain::tick_ms;
     Handles handles{reinterpret_cast<HANDLE>(number(argv[2])), reinterpret_cast<HANDLE>(number(argv[3])),
                     reinterpret_cast<HANDLE>(number(argv[4])), reinterpret_cast<HANDLE>(number(argv[5]))};
     if (GetFileType(handles.input) != FILE_TYPE_PIPE || GetFileType(handles.report) != FILE_TYPE_PIPE) return 3;
@@ -72,7 +84,7 @@ int run(int argc, wchar_t** argv) {
     auto provider = make_ar087_provider();
     constexpr const char* provider_name = "ar087";
 #endif
-    video::EyePipeOutput sink; Monotonic clock; Session session(*provider, sink, clock);
+    video::EyePipeOutput sink(domain); Monotonic clock; Session session(*provider, sink, clock, domain);
     const auto generation = session.begin({video::Width, video::Height});
     const auto ticket = sink.operation_ticket(); // AFTER begin neutralizes, BEFORE owner watch
     OwnerWatch watch(session);
@@ -81,19 +93,29 @@ int run(int argc, wchar_t** argv) {
     try {
         if (!session.prepare(generation)) error = uint32_t(session.snapshot().error);
         else if (!watch.cancelled()) {
-            Ready ready{}; ready.header.generation = request;
+            Ready ready{}; ready.header.generation = request; ready.header.version = qpc ? 2 : 1;
             if (FAILED(sink.open_if_current(generation, ticket, &ready.endpoint))) error = 10;
             else if (!watch.cancelled()) announced = write_small(handles.report, &ready, ReadyBytes);
             SecureZeroMemory(&ready, sizeof(ready));
             if (!announced && !watch.cancelled()) error = 10;
         }
         while (!error && announced && !watch.cancelled()) {
-            InputHeader header{};
-            auto read = read_exact(handles.input, &header, sizeof(header), IdleTimeoutMs, watch, sink);
+            std::array<BYTE, 40> raw{};
+            auto read = read_exact(handles.input, raw.data(), DWORD(raw.size()), IdleTimeoutMs, watch, sink);
             if (read != Read::complete) { if (read != Read::cancelled) error = read == Read::output_fault ? 10 : 9; break; }
-            if (!valid_input(header, request)) { error = 9; break; }
-            if (header.kind == Finish) { finished = true; break; }
-            eye::Frame frame{generation, header.id, header.captured_ms, std::vector<uint8_t>(BgrBytes)};
+            eye::Frame frame{}; frame.generation = generation;
+            uint16_t kind = 0;
+            if (qpc) {
+                QpcInputHeader header{}; std::memcpy(&header, raw.data(), sizeof(header));
+                if (!valid_qpc_input(header, request)) { error = 9; break; }
+                kind = header.kind; frame.id = header.id; frame.capture_qpc = header.capture_qpc;
+            } else {
+                InputHeader header{}; std::memcpy(&header, raw.data(), sizeof(header));
+                if (!valid_input(header, request)) { error = 9; break; }
+                kind = header.kind; frame.id = header.id; frame.captured_ms = header.captured_ms;
+            }
+            if (kind == Finish) { finished = true; break; }
+            frame.bgr.resize(BgrBytes);
             read = read_exact(handles.input, frame.bgr.data(), BgrBytes, PayloadTimeoutMs, watch, sink);
             if (read != Read::complete) { if (read != Read::cancelled) error = read == Read::output_fault ? 10 : 9; break; }
             if (watch.cancelled()) break;
@@ -126,7 +148,7 @@ int run(int argc, wchar_t** argv) {
     const bool cancelled = watch.cancelled() && !uncertain;
     const auto output = sink.status();
     std::ostringstream json;
-    json << "{\"protocol\":3,\"generation\":" << request << ",\"provider\":\"" << provider_name
+    json << "{\"protocol\":" << (qpc ? 4 : 3) << ",\"generation\":" << request << ",\"provider\":\"" << provider_name
          << "\",\"width\":" << video::Width << ",\"height\":" << video::Height
          << ",\"received\":" << received << ",\"rejected\":" << before_stop.rejected
          << ",\"provider_dropped\":" << before_stop.dropped << ",\"corrected\":" << output.accepted

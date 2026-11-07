@@ -4,8 +4,9 @@
 
 namespace tingxian::eye {
 bool Session::fresh(uint64_t at) const noexcept {
-    const auto now = clock_.now_ms();
-    return at <= now && now - at <= MaxAgeMs;
+    const bool qpc = domain_ == ClockDomain::qpc_100ns;
+    const auto now = qpc ? clock_.now_qpc() : clock_.now_ms();
+    return (!qpc || (at && now)) && at <= now && now - at <= MaxAgeMs * (qpc ? 10000 : 1);
 }
 void Session::discard() noexcept {
     status_.dropped += queue_.size();
@@ -62,17 +63,18 @@ bool Session::prepare(uint64_t generation) {
 bool Session::submit(Frame frame) {
     std::lock_guard guard(mutex_);
     if (status_.state != State::ready || frame.generation != status_.generation || !frame.id
-        || frame.id <= last_id_ || frame.captured_ms < last_time_ || !fresh(frame.captured_ms)
+        || frame.id <= last_id_ || frame.captured(domain_) < last_time_ || !fresh(frame.captured(domain_))
+        || frame.completed_qpc || (domain_ == ClockDomain::qpc_100ns ? frame.captured_ms != 0 : frame.capture_qpc != 0)
         || frame.bgr.size() != format_.bytes()) {
         ++status_.rejected;
         return false;
     }
-    while (!queue_.empty() && (!fresh(queue_.front().captured_ms) || queue_.size() >= MaxPending)) {
+    while (!queue_.empty() && (!fresh(queue_.front().captured(domain_)) || queue_.size() >= MaxPending)) {
         queue_.pop_front();
         ++status_.dropped;
     }
     last_id_ = frame.id;
-    last_time_ = frame.captured_ms;
+    last_time_ = frame.captured(domain_);
     queue_.push_back(std::move(frame));
     ++status_.accepted;
     return true;
@@ -82,7 +84,7 @@ bool Session::process_one() {
     {
         std::lock_guard guard(mutex_);
         if (status_.state != State::ready || status_.busy) return false;
-        while (!queue_.empty() && !fresh(queue_.front().captured_ms)) {
+        while (!queue_.empty() && !fresh(queue_.front().captured(domain_))) {
             queue_.pop_front();
             ++status_.dropped;
         }
@@ -94,6 +96,7 @@ bool Session::process_one() {
     Result result;
     try { result = provider_.process(frame); }
     catch (...) { result.error = Error::exception; }
+    if (domain_ == ClockDomain::qpc_100ns) frame.completed_qpc = clock_.now_qpc();
     const auto generation = frame.generation;
     {
         std::lock_guard guard(mutex_);
@@ -102,7 +105,7 @@ bool Session::process_one() {
             // stop already revoked the sink. Cleanup below precedes restart.
         } else if (result.error == Error::none && result.corrected.size() == format_.bytes()) {
             status_.busy = false;
-            if (!fresh(frame.captured_ms)) {
+            if (!fresh(frame.captured(domain_)) || (domain_ == ClockDomain::qpc_100ns && frame.completed_qpc < frame.capture_qpc)) {
                 ++status_.dropped;
                 sink_.neutral(generation);
                 return false;

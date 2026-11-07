@@ -15,6 +15,14 @@ struct InputHeader {
     uint32_t bytes = BgrBytes, reserved = 0;
     uint64_t generation = 0, id = 0, captured_ms = 0;
 };
+// Explicit --eye-stream-v2 only. QPC is converted to 100 ns units by the
+// capture owner. Never put ticks or GetTickCount64 milliseconds in this field.
+struct QpcInputHeader {
+    uint32_t magic = InputMagic;
+    uint16_t version = 2, kind = Frame;
+    uint32_t bytes = BgrBytes, reserved = 0;
+    uint64_t generation = 0, id = 0, capture_qpc = 0;
+};
 struct ReadyHeader {
     uint32_t magic = ReadyMagic;
     uint16_t version = 1, kind = 1;
@@ -23,9 +31,11 @@ struct ReadyHeader {
 };
 struct Ready { ReadyHeader header; video::VideoPipeEndpoint endpoint; };
 static_assert(sizeof(InputHeader) == 40 && sizeof(ReadyHeader) == 24);
+static_assert(sizeof(QpcInputHeader) == 40);
 static_assert(sizeof(video::VideoPipeEndpoint) == 236);
 static_assert(sizeof(Ready) == 264); // final 4 bytes of alignment are NOT sent
 inline constexpr DWORD ReadyBytes = sizeof(ReadyHeader) + sizeof(video::VideoPipeEndpoint);
 bool valid_input(const InputHeader& h, uint64_t generation) noexcept;
+bool valid_qpc_input(const QpcInputHeader& h, uint64_t generation) noexcept;
 int run(int argc, wchar_t** argv);
 }

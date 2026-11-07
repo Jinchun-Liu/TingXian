@@ -17,6 +17,7 @@ class Session {
     EyeCorrectionProvider& provider_;
     OutputSink& sink_;
     const Clock& clock_;
+    const ClockDomain domain_;
     mutable std::mutex mutex_;
     Snapshot status_;
     Format format_;
@@ -29,8 +30,9 @@ class Session {
 public:
     static constexpr size_t MaxPending = 2;
     static constexpr uint64_t MaxAgeMs = 250;
-    Session(EyeCorrectionProvider& provider, OutputSink& sink, const Clock& clock)
-        : provider_(provider), sink_(sink), clock_(clock) {}
+    Session(EyeCorrectionProvider& provider, OutputSink& sink, const Clock& clock,
+            ClockDomain domain = ClockDomain::tick_ms)
+        : provider_(provider), sink_(sink), clock_(clock), domain_(domain) {}
     // Caller drains stop and joins the execution lane before destroying Session.
     uint64_t begin(Format format); // zero means refused; explicit user admission
     bool prepare(uint64_t generation); // worker lane, queued starts carry a ticket

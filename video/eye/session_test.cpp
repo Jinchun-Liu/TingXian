@@ -14,7 +14,9 @@ void require(bool good, const char* label) {
 }
 struct TestClock : Clock {
     std::atomic<uint64_t> now{1000};
+    std::atomic<uint64_t> qpc{10000000};
     uint64_t now_ms() const noexcept override { return now.load(); }
+    uint64_t now_qpc() const noexcept override { return qpc.load(); }
 };
 struct Barrier {
     std::mutex mutex;
@@ -165,6 +167,51 @@ void age_and_race() {
         require(!r.sink.visible && r.session.snapshot().state == State::off, "stop serialization keeps neutral final state");
     }
 }
+void qpc_capture_contract() {
+    Fake provider; Sink sink; TestClock clock;
+    Session session(provider, sink, clock, ClockDomain::qpc_100ns);
+    const auto gen = session.begin({4, 2}); require(gen && session.prepare(gen), "QPC prepare");
+    auto frame = [&](uint64_t id) { return Frame{gen, id, 0, std::vector<uint8_t>(24, 17), clock.now_qpc(), 0}; };
+    auto mixed = frame(1); mixed.captured_ms = clock.now_ms();
+    require(!session.submit(mixed), "QPC rejects mixed milliseconds");
+    mixed = frame(1); mixed.completed_qpc = mixed.capture_qpc;
+    require(!session.submit(mixed), "input cannot assert inference completion");
+    mixed = frame(1); mixed.capture_qpc = 0;
+    require(!session.submit(mixed), "QPC zero rejected");
+    mixed = frame(1); ++mixed.capture_qpc;
+    require(!session.submit(mixed), "future QPC rejected");
+    mixed = frame(1); mixed.capture_qpc -= 2500001;
+    require(!session.submit(mixed), "QPC stale rejected at original capture");
+    const auto capture = clock.now_qpc();
+    provider.on_process = [&](const Frame& f) {
+        require(f.capture_qpc == capture && !f.captured_ms && !f.completed_qpc, "provider receives original capture only");
+        clock.qpc += 400000;
+        return Result{Error::none, std::vector<uint8_t>(24, 200)};
+    };
+    require(session.submit(frame(1)) && session.process_one(), "delayed QPC frame delivered");
+    const auto& out = sink.history.back();
+    require(out.capture_qpc == capture && out.completed_qpc == capture + 400000 && !out.captured_ms,
+        "capture and inference completion remain distinct");
+    require(out.bgr == std::vector<uint8_t>(24, 200), "only corrected QPC pixels delivered");
+    provider.on_process = [&](const Frame&) { clock.qpc += 2500001; return Result{Error::none, std::vector<uint8_t>(24, 200)}; };
+    require(session.submit(frame(2)) && !session.process_one() && !sink.visible && sink.history.size() == 1,
+        "slow inference cannot renew capture age");
+    provider.on_process = [&](const Frame&) { clock.qpc -= 1; return Result{Error::none, std::vector<uint8_t>(24, 200)}; };
+    require(session.submit(frame(3)) && !session.process_one() && sink.history.size() == 1, "clock regression never publishes");
+    session.stop(); session.drain_stop();
+    require(!session.submit(frame(4)), "stopped QPC generation rejected");
+    Test legacy; legacy.start(); auto wrong = legacy.frame(); wrong.capture_qpc = clock.now_qpc();
+    require(!legacy.session.submit(wrong), "legacy never reinterprets QPC metadata");
+
+    Fake delayed; Sink final_sink; TestClock final_clock; Barrier barrier;
+    Session final(delayed, final_sink, final_clock, ClockDomain::qpc_100ns);
+    const auto next = final.begin({4, 2}); require(next && final.prepare(next), "QPC cancellation prepare");
+    delayed.on_process = [&](const Frame&) { barrier.block(); return Result{Error::none, std::vector<uint8_t>(24, 200)}; };
+    require(final.submit({next, 1, 0, std::vector<uint8_t>(24, 17), final_clock.now_qpc(), 0}), "QPC cancellation input");
+    std::thread worker([&] { final.process_one(); }); barrier.wait(); final.stop(); barrier.release(); worker.join(); final.drain_stop();
+    require(final_sink.history.empty() && !final_sink.visible && final.snapshot().state == State::off,
+        "late QPC inference cannot publish after stop");
+}
 void cleanup_race() {
     Test t; t.start(); Barrier barrier;
     t.provider.on_process = [](const Frame&) { return Result{Error::inference, {}}; };
@@ -183,7 +230,7 @@ void cleanup_race() {
 }
 int main() {
     try {
-        ordinary_and_queue(); failures(); cancellation(); age_and_race(); cleanup_race();
+        ordinary_and_queue(); failures(); cancellation(); age_and_race(); cleanup_race(); qpc_capture_contract();
         std::cout << "{\"checks\":" << checks << ",\"failures\":0,\"sdk_loaded\":false,\"media_started\":false}\n";
         return 0;
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

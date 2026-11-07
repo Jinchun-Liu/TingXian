@@ -1,5 +1,6 @@
 // Real child processes and local pipes; synthetic pixels only. No SDK/devices.
 #include "stream_protocol.h"
+#include "../windows/eye_output.h"
 #include <algorithm>
 #include <filesystem>
 #include <iostream>
@@ -48,7 +49,9 @@ struct Child {
     Handle process, job, stop, input, report;
     fs::path directory;
     uint64_t generation;
-    Child(const fs::path& source, const fs::path& root, const wchar_t* mode, uint64_t gen, HANDLE owner_process = GetCurrentProcess()) : generation(gen) {
+    bool qpc;
+    Child(const fs::path& source, const fs::path& root, const wchar_t* mode, uint64_t gen, HANDLE owner_process = GetCurrentProcess(), bool use_qpc = false)
+        : generation(gen), qpc(use_qpc) {
         directory = root / (std::to_wstring(gen) + L"-" + mode); require(fs::create_directory(directory), "fixture directory exists");
         const auto exe = directory / mode; require(fs::copy_file(source, exe), "fixture copy failed");
         SECURITY_ATTRIBUTES security{sizeof(security), nullptr, TRUE}; Handle child_input, child_report, child_owner, child_stop;
@@ -69,7 +72,7 @@ struct Child {
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
         limits.BasicLimitInformation.ActiveProcessLimit = 1;
         require(SetInformationJobObject(job.value, JobObjectExtendedLimitInformation, &limits, sizeof(limits)) != 0, "job limits failed");
-        std::wstring command = L"\"" + exe.wstring() + L"\" --eye-stream-v1 " + number(child_owner.value) + L" " + number(child_stop.value)
+        std::wstring command = L"\"" + exe.wstring() + (qpc ? L"\" --eye-stream-v2 " : L"\" --eye-stream-v1 ") + number(child_owner.value) + L" " + number(child_stop.value)
             + L" " + number(child_report.value) + L" " + number(child_input.value) + L" 1280 720 " + std::to_wstring(generation);
         std::wstring env = L"SystemRoot=" + environment(L"SystemRoot"); env.push_back(0);
         env += L"TEMP=" + directory.wstring(); env.push_back(0); env += L"TMP=" + directory.wstring(); env.push_back(0);
@@ -88,24 +91,28 @@ struct Child {
     eye::stream::Ready ready() {
         eye::stream::Ready ready{};
         require(read(report.value, &ready, eye::stream::ReadyBytes), "ready missing");
-        require(ready.header.magic == eye::stream::ReadyMagic && ready.header.version == 1 && ready.header.kind == 1
+        require(ready.header.magic == eye::stream::ReadyMagic && ready.header.version == (qpc ? 2 : 1) && ready.header.kind == 1
             && ready.header.bytes == sizeof(video::VideoPipeEndpoint) && ready.header.reserved == 0
-            && ready.header.generation == generation && video::valid_video_endpoint(ready.endpoint)
+            && ready.header.generation == generation && (qpc ? video::valid_eye_endpoint(ready.endpoint) : video::valid_video_endpoint(ready.endpoint))
             && ready.endpoint.producer_pid == GetProcessId(process.value), "ready identity invalid");
         return ready;
     }
     void frame(uint64_t id, uint64_t captured) {
-        eye::stream::InputHeader h{}; h.generation = generation; h.id = id; h.captured_ms = captured;
-        std::vector<BYTE> pixels(eye::stream::BgrBytes, 31); write(input.value, &h, sizeof(h)); write(input.value, pixels.data(), DWORD(pixels.size()));
+        if (qpc) { eye::stream::QpcInputHeader h{}; h.generation = generation; h.id = id; h.capture_qpc = captured; write(input.value, &h, sizeof(h)); }
+        else { eye::stream::InputHeader h{}; h.generation = generation; h.id = id; h.captured_ms = captured; write(input.value, &h, sizeof(h)); }
+        std::vector<BYTE> pixels(eye::stream::BgrBytes, 31); write(input.value, pixels.data(), DWORD(pixels.size()));
     }
-    void finish() { eye::stream::InputHeader h{}; h.kind = eye::stream::Finish; h.bytes = 0; h.generation = generation; write(input.value, &h, sizeof(h)); }
+    void finish() {
+        if (qpc) { eye::stream::QpcInputHeader h{}; h.kind = eye::stream::Finish; h.bytes = 0; h.generation = generation; write(input.value, &h, sizeof(h)); }
+        else { eye::stream::InputHeader h{}; h.kind = eye::stream::Finish; h.bytes = 0; h.generation = generation; write(input.value, &h, sizeof(h)); }
+    }
     void cancel() { require(SetEvent(stop.value) != 0, "cancel failed"); }
     std::string result() {
         require(WaitForSingleObject(process.value, 3000) == WAIT_OBJECT_0, "child did not stop");
         DWORD code = 99; require(GetExitCodeProcess(process.value, &code) && code == 0, "child failed");
         std::string text; char buffer[4096]; DWORD count = 0;
         while (ReadFile(report.value, buffer, sizeof(buffer), &count, nullptr) && count) { text.append(buffer, count); require(text.size() <= 4096, "report overflow"); }
-        require(text.find("\"protocol\":3") != std::string::npos && text.find("\"generation\":" + std::to_string(generation)) != std::string::npos, "report identity failed");
+        require(text.find(qpc ? "\"protocol\":4" : "\"protocol\":3") != std::string::npos && text.find("\"generation\":" + std::to_string(generation)) != std::string::npos, "report identity failed");
         require(text.find("TingXian.Video") == std::string::npos && text.find("capability") == std::string::npos, "report leaked endpoint");
         require(text.find("\"camera_started\":false") != std::string::npos && text.find("\"audio_started\":false") != std::string::npos
             && text.find("\"virtual_device_started\":false") != std::string::npos, "unexpected device state");
@@ -116,23 +123,37 @@ bool has(const std::string& text, const char* pair) { return text.find(pair) != 
 // Independent consumer decodes the actual wire, including capture time/id.
 struct Client {
     Handle pipe;
-    explicit Client(const video::VideoPipeEndpoint& endpoint) {
+    uint32_t version;
+    uint64_t generation = 0;
+    explicit Client(const video::VideoPipeEndpoint& endpoint) : version(endpoint.version) {
         pipe.value = CreateFileW(endpoint.name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
         require(pipe.value != INVALID_HANDLE_VALUE, "output connect failed");
         ULONG pid = 0; require(GetNamedPipeServerProcessId(pipe.value, &pid) && pid == endpoint.producer_pid, "output server identity failed");
-        eye::stream::InputHeader hello{}; hello.magic = 0x31565854; hello.kind = 1; hello.bytes = 32;
+        eye::stream::InputHeader hello{}; hello.magic = 0x31565854; hello.kind = 1; hello.bytes = 32; hello.version = uint16_t(version);
         write(pipe.value, &hello, sizeof(hello)); write(pipe.value, endpoint.capability, 32);
         eye::stream::InputHeader ack{}, begin{};
-        require(read(pipe.value, &ack, sizeof(ack)) && ack.magic == 0x31565854 && ack.kind == 2 && ack.bytes == 0, "output handshake failed");
-        require(read(pipe.value, &begin, sizeof(begin)) && begin.kind == 3 && begin.generation != 0, "output begin failed");
+        require(read(pipe.value, &ack, sizeof(ack)) && ack.magic == 0x31565854 && ack.version == version && ack.kind == 2 && ack.bytes == 0
+            && !ack.reserved && !ack.generation && !ack.id && !ack.captured_ms, "output handshake failed");
+        require(read(pipe.value, &begin, sizeof(begin)) && begin.magic == 0x31565854 && begin.version == version && begin.kind == 3
+            && begin.generation != 0 && !begin.bytes && !begin.reserved && !begin.id && !begin.captured_ms, "output begin failed");
+        generation = begin.generation;
     }
-    void corrected(uint64_t id, uint64_t captured) {
+    uint64_t corrected(uint64_t id, uint64_t captured) {
         eye::stream::InputHeader header{}; std::vector<BYTE> pixels(video::FrameBytes);
-        require(read(pipe.value, &header, sizeof(header)) && header.magic == 0x31565854 && header.kind == 4
-            && header.id == id && header.captured_ms == captured && header.bytes == pixels.size(), "frame metadata changed");
+        const bool qpc = version == 3;
+        require(read(pipe.value, &header, sizeof(header)) && header.magic == 0x31565854 && header.version == version && header.kind == (qpc ? 8 : 4)
+            && !header.reserved && header.generation == generation && header.id == id && header.captured_ms == (qpc ? 0 : captured)
+            && header.bytes == pixels.size() + (qpc ? sizeof(video::CorrectedTiming) : 0), "frame metadata changed");
+        video::CorrectedTiming timing{};
+        if (qpc) {
+            UINT64 now = 0;
+            require(read(pipe.value, &timing, sizeof(timing)) && video::qpc_now(now) && timing.capture_qpc == captured
+                && timing.completed_qpc >= captured && timing.completed_qpc <= now, "original QPC/completion missing");
+        }
         require(read(pipe.value, pixels.data(), DWORD(pixels.size())), "frame payload missing");
         require(std::all_of(pixels.begin(), pixels.begin() + video::Width * video::Height, [](BYTE b) { return b == 188; })
             && std::all_of(pixels.begin() + video::Width * video::Height, pixels.end(), [](BYTE b) { return b == 128; }), "raw or incorrect pixels reached output");
+        return timing.completed_qpc;
     }
     bool disconnected() { BYTE value = 0; return !read(pipe.value, &value, 1, 1000); }
 };
@@ -212,6 +233,75 @@ int wmain(int argc, wchar_t** argv) {
             auto report = child.result(); require(has(report, "\"cleanup_uncertain\":true") && has(report, "\"error\":8") && has(report, "\"outcome\":\"fault\""), "cleanup failure hidden");
         }
         std::cout << "PASS stream: provider cleanup failure remains a fault\n";
+        for (uint64_t gen = 30; gen != 33; ++gen) {
+            Child child(source, root, L"eye-delay.exe", gen, GetCurrentProcess(), true);
+            auto ready = child.ready();
+            require(!video::valid_video_endpoint(ready.endpoint), "unscheduled corrected endpoint accepted as MF input");
+            video::PipeReceiver mf(std::make_shared<video::FrameMailbox>());
+            require(FAILED(mf.connect(ready.endpoint)), "MF receiver accepted unscheduled QPC transport");
+            Client client(ready.endpoint); SecureZeroMemory(&ready, sizeof(ready));
+            UINT64 captured = 0; require(video::qpc_now(captured), "QPC unavailable");
+            child.frame(71, captured);
+            require(client.corrected(71, captured) >= captured + 300000, "inference completion reused capture time");
+            child.finish(); const auto report = child.result();
+            require(has(report, "\"outcome\":\"completed\"") && has(report, "\"submitted\":1") && client.disconnected(), "QPC finish failed");
+        }
+        std::cout << "PASS QPC stream: three process restarts preserve capture/completion and corrected NV12; MF refuses unscheduled endpoint\n";
+        {
+            Child child(source, root, L"eye-stream.exe", 33, GetCurrentProcess(), true);
+            auto ready = child.ready(); Client client(ready.endpoint);
+            UINT64 captured = 0; require(video::qpc_now(captured), "QPC unavailable");
+            child.frame(1, captured - 3000000); child.frame(2, captured + 100000000);
+            require(video::qpc_now(captured), "QPC unavailable"); child.frame(3, captured); client.corrected(3, captured);
+            child.frame(3, captured); child.finish(); const auto report = child.result();
+            require(has(report, "\"received\":4") && has(report, "\"rejected\":3") && has(report, "\"submitted\":1"), "QPC invalid input counted as media");
+        }
+        std::cout << "PASS QPC stream: stale/future/duplicate input rejected before provider\n";
+        {
+            Child child(source, root, L"eye-expired.exe", 34, GetCurrentProcess(), true);
+            auto ready = child.ready(); Client client(ready.endpoint);
+            UINT64 captured = 0; require(video::qpc_now(captured), "QPC unavailable"); child.frame(1, captured); child.finish();
+            const auto report = child.result();
+            require(has(report, "\"provider_dropped\":1") && has(report, "\"corrected\":0") && has(report, "\"submitted\":0") && client.disconnected(),
+                "slow QPC inference refreshed capture or leaked pixels");
+        }
+        std::cout << "PASS QPC stream: expired inference revokes output without refreshing capture\n";
+        for (bool qpc : {false, true}) {
+            Child child(source, root, L"eye-stream.exe", qpc ? 35 : 36, GetCurrentProcess(), qpc); auto ready = child.ready();
+            if (qpc) { eye::stream::InputHeader old{}; old.generation = child.generation; old.id = 1; old.captured_ms = GetTickCount64(); write(child.input.value, &old, sizeof(old)); }
+            else { eye::stream::QpcInputHeader next{}; next.generation = child.generation; next.id = 1; next.capture_qpc = 1; write(child.input.value, &next, sizeof(next)); }
+            const auto report = child.result(); require(has(report, "\"error\":9") && has(report, "\"received\":0"), "cross-version input was reinterpreted");
+        }
+        std::cout << "PASS QPC stream: input versions cannot silently downgrade or reinterpret clocks\n";
+        {
+            Child child(source, root, L"eye-slow.exe", 37, GetCurrentProcess(), true);
+            auto ready = child.ready(); Client client(ready.endpoint);
+            UINT64 captured = 0; require(video::qpc_now(captured), "QPC unavailable"); child.frame(1, captured);
+            eventually([&] { return fs::exists(child.directory / L"processing"); }, "QPC provider did not reach barrier");
+            child.cancel(); const auto report = child.result();
+            require(has(report, "\"outcome\":\"cancelled\"") && has(report, "\"submitted\":0") && client.disconnected(), "late QPC frame survived cancellation");
+        }
+        std::cout << "PASS QPC stream: cancellation during inference prevents late output\n";
+        {
+            video::EyePipeOutput sink(eye::ClockDomain::qpc_100ns);
+            video::VideoPipeEndpoint endpoint{};
+            require(SUCCEEDED(sink.open_if_current(1, sink.operation_ticket(), &endpoint)), "QPC sink open failed");
+            UINT64 now = 0; require(video::qpc_now(now), "QPC unavailable");
+            eye::Frame frame{1, 1, 0, std::vector<BYTE>(eye::stream::BgrBytes, 200), now, 0};
+            require(!sink.corrected(frame), "QPC sink accepted missing completion");
+            frame.completed_qpc = now - 1; require(!sink.corrected(frame), "QPC sink accepted reversed completion");
+            frame.completed_qpc = now + 100000000; require(!sink.corrected(frame), "QPC sink accepted future completion");
+            frame.completed_qpc = now; frame.captured_ms = GetTickCount64(); require(!sink.corrected(frame), "QPC sink accepted mixed domains");
+            frame.captured_ms = 0; frame.capture_qpc = now - 3000000; require(!sink.corrected(frame), "QPC sink accepted stale capture");
+            require(video::qpc_now(now), "QPC unavailable"); frame.capture_qpc = frame.completed_qpc = now;
+            require(sink.corrected(frame) && sink.status().queued == 1, "QPC sink lost bounded pending frame");
+            sink.request_stop(); ++frame.id;
+            require(!sink.corrected(frame), "QPC sink accepted late callback after stop"); sink.close();
+            require(sink.status().accepted == 1 && sink.status().dropped == 1 && sink.status().submitted == 0,
+                "cancelled QPC queue reported delivery");
+            SecureZeroMemory(&endpoint, sizeof(endpoint));
+        }
+        std::cout << "PASS QPC sink: missing/reversed/future/mixed/stale timestamps and late callbacks fail closed\n";
         return 0;
     } catch (const std::exception& e) { std::cerr << "FAIL stream: " << e.what() << "\n"; return 1; }
 }

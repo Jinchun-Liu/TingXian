@@ -6,13 +6,18 @@ namespace tingxian::video {
 namespace {
 constexpr size_t BgrBytes = size_t(Width) * Height * 3;
 constexpr HRESULT Cancelled = HRESULT_FROM_WIN32(ERROR_CANCELLED);
-bool fresh(UINT64 captured) noexcept {
-    const auto now = GetTickCount64();
-    return captured <= now && now - captured <= MaxFrameAgeMs;
-}
 BYTE rounded(double value) noexcept {
     return static_cast<BYTE>((std::clamp)(std::floor(value + 0.5), 0.0, 255.0));
 }
+}
+bool EyePipeOutput::fresh(const eye::Frame& frame) const noexcept {
+    if (domain_ == eye::ClockDomain::tick_ms) {
+        const auto now = GetTickCount64();
+        return !frame.capture_qpc && !frame.completed_qpc && frame.captured_ms <= now && now - frame.captured_ms <= MaxFrameAgeMs;
+    }
+    UINT64 now = 0;
+    return !frame.captured_ms && frame.capture_qpc && qpc_now(now) && frame.capture_qpc <= frame.completed_qpc &&
+        frame.completed_qpc <= now && now - frame.capture_qpc <= TimedMaxAge;
 }
 bool corrected_bgr_to_nv12(const BYTE* bgr, size_t bytes, BYTE* nv12, size_t capacity) noexcept {
     if (!bgr || !nv12 || bytes != BgrBytes || capacity != FrameBytes) return false;
@@ -69,7 +74,7 @@ HRESULT EyePipeOutput::open_if_current(UINT64 generation, UINT64 ticket, VideoPi
         last_id_ = last_time_ = 0;
     }
     VideoPipeEndpoint candidate{};
-    HRESULT hr = publisher_.open(&candidate);
+    HRESULT hr = domain_ == eye::ClockDomain::qpc_100ns ? publisher_.open_corrected(&candidate) : publisher_.open(&candidate);
     {
         std::lock_guard guard(mutex_);
         if (ticket != intent_) hr = Cancelled;
@@ -88,27 +93,30 @@ HRESULT EyePipeOutput::open_if_current(UINT64 generation, UINT64 ticket, VideoPi
     return hr;
 }
 bool EyePipeOutput::corrected(const eye::Frame& frame) noexcept {
-    return enqueue(frame.generation, frame.id, frame.captured_ms, frame.bgr.data(), frame.bgr.size(), true);
+    return enqueue(frame.generation, frame.id, frame.captured_ms, frame.bgr.data(), frame.bgr.size(), true, frame.capture_qpc, frame.completed_qpc);
 }
 bool EyePipeOutput::corrected_nv12(UINT64 generation, UINT64 id, UINT64 captured, const BYTE* data, size_t bytes) noexcept {
     return enqueue(generation, id, captured, data, bytes, false);
 }
-bool EyePipeOutput::enqueue(UINT64 generation, UINT64 id, UINT64 captured, const BYTE* data, size_t bytes, bool bgr) noexcept {
+bool EyePipeOutput::enqueue(UINT64 generation, UINT64 id, UINT64 captured, const BYTE* data, size_t bytes, bool bgr,
+                           UINT64 capture_qpc, UINT64 completed_qpc) noexcept {
     std::lock_guard guard(mutex_);
+    eye::Frame metadata{generation, id, captured, {}, capture_qpc, completed_qpc};
+    const auto time = metadata.captured(domain_);
     if ((status_.state != EyeOutputState::waiting && status_.state != EyeOutputState::streaming)
         || generation != status_.generation || !id || id <= last_id_
-        || captured < last_time_ || !fresh(captured) || !data || bytes != (bgr ? BgrBytes : FrameBytes)) {
+        || time < last_time_ || !fresh(metadata) || !data || bytes != (bgr ? BgrBytes : FrameBytes)) {
         ++status_.rejected;
         return false;
     }
     try {
         // Copy only a completed provider result; neither a raw fallback nor an
         // unbounded queue. Allocate before replacing to preserve clear counts.
-        Pending next; next.frame = {generation, id, captured, std::vector<BYTE>(data, data + bytes)}; next.convert_bgr = bgr;
+        Pending next; next.frame = std::move(metadata); next.frame.bgr.assign(data, data + bytes); next.convert_bgr = bgr;
         discard_locked();
         pending_ = std::move(next);
         ++status_.accepted;
-        last_id_ = id; last_time_ = captured;
+        last_id_ = id; last_time_ = time;
     } catch (...) {
         ++status_.rejected;
         status_.error = E_OUTOFMEMORY; status_.state = EyeOutputState::fault;
@@ -138,20 +146,22 @@ void EyePipeOutput::run(UINT64 ticket, UINT64 generation) noexcept {
                 status_.busy = true;
             }
             const auto& frame = pending.frame;
-            const bool converted = fresh(frame.captured_ms) && (!pending.convert_bgr
+            const bool converted = fresh(frame) && (!pending.convert_bgr
                 || corrected_bgr_to_nv12(frame.bgr.data(), frame.bgr.size(), nv12.data(), nv12.size()));
             bool send = false;
             {
                 std::lock_guard guard(mutex_);
-                send = converted && fresh(frame.captured_ms) && ticket == intent_
+                send = converted && fresh(frame) && ticket == intent_
                     && status_.state == EyeOutputState::streaming;
                 if (!send) { ++status_.dropped; status_.busy = false; }
             }
             if (!send) continue;
             // cancel() cannot be undone by a stale conversion completion. Never
             // replace captured_ms with conversion/send time to renew a stale face.
-            hr = publisher_.submit(generation, frame.id, frame.captured_ms,
-                pending.convert_bgr ? nv12.data() : frame.bgr.data(), FrameBytes);
+            const auto* pixels = pending.convert_bgr ? nv12.data() : frame.bgr.data();
+            hr = domain_ == eye::ClockDomain::qpc_100ns
+                ? publisher_.submit_corrected(generation, frame.id, {frame.capture_qpc, frame.completed_qpc}, pixels, FrameBytes)
+                : publisher_.submit(generation, frame.id, frame.captured_ms, pixels, FrameBytes);
             {
                 std::lock_guard guard(mutex_);
                 if (SUCCEEDED(hr)) ++status_.submitted;

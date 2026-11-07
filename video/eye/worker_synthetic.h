@@ -38,6 +38,8 @@ public:
         if (mode_ == L"eye-crash.exe") ExitProcess(71);
         if (mode_ == L"eye-fail.exe") return {Error::inference, frame.bgr};
         if (mode_ == L"eye-slow.exe") WaitForSingleObject(stop_, INFINITE);
+        if (mode_ == L"eye-delay.exe") Sleep(40);
+        if (mode_ == L"eye-expired.exe") Sleep(300);
         return {Error::none, std::vector<uint8_t>(frame.bgr.size(), 200)};
     }
     bool stop() noexcept override { return mode_ != L"eye-cleanup.exe"; }

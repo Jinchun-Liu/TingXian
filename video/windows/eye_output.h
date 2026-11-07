@@ -26,6 +26,7 @@ struct EyeOutputStatus {
 class EyePipeOutput final : public eye::OutputSink {
     friend struct EyeOutputTestPeer; // native test observes the actual pipe DACL
     FramePublisher publisher_;
+    const eye::ClockDomain domain_;
     std::mutex lifecycle_;
     mutable std::mutex mutex_;
     std::condition_variable changed_;
@@ -45,9 +46,11 @@ class EyePipeOutput final : public eye::OutputSink {
     void discard_locked() noexcept;
     void revoke_locked() noexcept;
     void run(UINT64 ticket, UINT64 generation) noexcept;
-    bool enqueue(UINT64 generation, UINT64 id, UINT64 captured, const BYTE* data, size_t bytes, bool bgr) noexcept;
+    bool fresh(const eye::Frame& frame) const noexcept;
+    bool enqueue(UINT64 generation, UINT64 id, UINT64 captured, const BYTE* data, size_t bytes, bool bgr,
+        UINT64 capture_qpc = 0, UINT64 completed_qpc = 0) noexcept;
 public:
-    EyePipeOutput() = default;
+    explicit EyePipeOutput(eye::ClockDomain domain = eye::ClockDomain::tick_ms) : domain_(domain) {}
     ~EyePipeOutput() override { close(); }
     EyePipeOutput(const EyePipeOutput&) = delete;
     EyePipeOutput& operator=(const EyePipeOutput&) = delete;

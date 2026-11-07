@@ -21,6 +21,10 @@ struct VideoPipeEndpoint {
 };
 enum class TransportState : UINT32 { disconnected, connected, streaming, stopped, fault };
 bool valid_video_endpoint(const VideoPipeEndpoint& endpoint) noexcept;
+// Worker -> native host only. Never activate this endpoint as an MF source.
+bool valid_eye_endpoint(const VideoPipeEndpoint& endpoint) noexcept;
+struct CorrectedTiming { UINT64 capture_qpc = 0, completed_qpc = 0; };
+static_assert(sizeof(CorrectedTiming) == 16);
 struct TransportStatus {
     TransportState state = TransportState::disconnected;
     HRESULT last_error = S_OK;
@@ -51,11 +55,13 @@ public:
     FramePublisher& operator=(const FramePublisher&) = delete;
     HRESULT open(VideoPipeEndpoint* endpoint);
     HRESULT open_timed(VideoPipeEndpoint* endpoint); // Explicit v2; never downgrade.
+    HRESULT open_corrected(VideoPipeEndpoint* endpoint); // v3: unscheduled corrected QPC frames.
     HRESULT accept();
     HRESULT begin(UINT64 epoch);
     HRESULT submit(UINT64 epoch, UINT64 id, UINT64 captured, const BYTE* data, UINT32 bytes);
     HRESULT submit_timed(UINT64 epoch, UINT64 sequence, const TimedFrame& timing, const BYTE* data, UINT32 bytes,
         bool* receipt = nullptr);
+    HRESULT submit_corrected(UINT64 epoch, UINT64 id, const CorrectedTiming& timing, const BYTE* data, UINT32 bytes);
     HRESULT end(UINT64 epoch);
     void cancel() noexcept; // event only; caller may close/join on its owning lane
     void close();
