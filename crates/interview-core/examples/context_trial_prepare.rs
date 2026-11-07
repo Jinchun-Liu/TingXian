@@ -30,7 +30,8 @@ fn prepare_answer(mut messages:Value,png:Option<&[u8]>)->Result<Value> {
     let mut payload=json!({"model":config.model,"thinking":{"type":"disabled"},"stream":true,"stream_options":{"include_usage":true},"max_tokens":config.budget.output(interview_core::MAX_ANSWER_TOKENS.into()),"messages":messages});
     // Match the real answer transport, which reports unknown image accounting.
     let measurement=fit(&mut payload,&config.budget,WindowBasis::ConfiguredUnknown,None)?;
-    Ok(json!({"payload":payload,"measurement":measurement,"max_attempts":2,"output_cap":4096,"total_timeout_secs":config.total_timeout_secs}))
+    let payload_sha256=digest(&serde_json::to_vec(&payload).map_err(|e|e.to_string())?);
+    Ok(json!({"payload":payload,"payload_sha256":payload_sha256,"measurement":measurement,"max_attempts":2,"output_cap":4096,"total_timeout_secs":config.total_timeout_secs}))
 }
 fn prepare(input:Input)->Result<Value> {
     let cases:Vec<Case>=serde_json::from_str(CASES).map_err(|e|e.to_string())?;
@@ -60,7 +61,8 @@ fn prepare(input:Input)->Result<Value> {
         let snapshot=l.snapshot(28,8)?;
         let profile=compaction::Config::default().profile;
         let (payload,measurement)=compaction::prepare(&snapshot,&profile)?;
-        let ai2=json!({"snapshot":snapshot,"payload":payload,"measurement":measurement,"max_attempts":1,"output_cap":8192,"total_timeout_secs":profile.request.total_timeout_secs});
+        let payload_sha256=digest(&serde_json::to_vec(&payload).map_err(|e|e.to_string())?);
+        let ai2=json!({"snapshot":snapshot,"payload":payload,"payload_sha256":payload_sha256,"measurement":measurement,"max_attempts":1,"output_cap":8192,"total_timeout_secs":profile.request.total_timeout_secs});
         let c=if let Some(candidate)=input.candidate {
             let candidate_hash=digest(&serde_json::to_vec(&candidate).map_err(|e|e.to_string())?);
             l.promote(snapshot,candidate)?;
@@ -72,6 +74,8 @@ fn prepare(input:Input)->Result<Value> {
     };
     Ok(json!({"version":1,"case_id":case.id,"split":case.split,"kind":case.kind,"case_corpus_sha256":digest(CASES.as_bytes()),"source_version":"c5-fictional-sources-v1","model":"deepseek-flash","endpoint":interview_core::DEEPSEEK_ENDPOINT,"protocol":"deepseek","strategy":"legacy","harness2_enabled":false,"app_window":262144,"image_sha256":png.as_ref().map(|p|digest(p)),"A":a,"B":b,"C":c,"AI2":ai2,"external_calls":0,"quality":null}))
 }
+pub fn prepare_value(input:Value)->Result<Value>{prepare(serde_json::from_value(input).map_err(|e|e.to_string())?)}
+#[allow(dead_code)]
 fn main()->std::result::Result<(),Box<dyn std::error::Error>> {
     if std::env::args_os().len()!=1{return Err("offline only: JSON input on stdin; no execution flags".into());}
     let mut raw=String::new();std::io::stdin().take(128*1024+1).read_to_string(&mut raw)?;

@@ -1,4 +1,4 @@
-"""C5 offline planning and consent preflight. No execution/credential/network path.
+"""C5 offline planning and consent preflight. This module never calls a model.
 
 Freeze six fictional cases and A/B requests. C's long-case request is intentionally
 absent until a separately obtained AI2 candidate passes production validation.
@@ -23,6 +23,7 @@ AUTH_FIELDS = {'approved', 'scope', 'manifest_sha256', 'data_scope', 'model', 'e
                'max_cost_micro_cny', 'max_transport_attempts', 'valid_on', 'allow_paid_calls',
                'allow_private_data', 'allow_installed_app_switch', 'allow_strategy_promotion'}
 SOURCES = ['Cargo.lock', 'crates/interview-core/examples/context_trial_prepare.rs',
+           'crates/interview-core/examples/context_trial_run.rs', 'validation/context-compaction/execute.py',
            'crates/interview-core/src/session_memory.rs', 'crates/interview-core/src/compaction.rs',
            'crates/interview-core/src/model.rs', 'crates/interview-core/src/request_budget.rs',
            'crates/interview-core/src/context_budget.rs', 'crates/interview-core/src/vision.rs',
@@ -100,7 +101,7 @@ def reserve(request, price):
             'max_attempts': request['max_attempts'], 'reserve_micro_cny': one * request['max_attempts']}
 
 
-def prepare(binary, images, output):
+def prepare(binary, images, output, runner=None):
     binary = binary.resolve(strict=True)
     require(sha(read(HERE / 'cases.json')) == CORPUS_SHA, 'frozen corpus changed')
     cases = load(HERE / 'cases.json'); price = load(HERE / 'price-review.json'); validate_prices(price)
@@ -161,16 +162,17 @@ def prepare(binary, images, output):
                        'reserved_micro_cny': j['reserve_micro_cny'], 'charged_micro_cny': None} for j in jobs],
           'rule': 'Before any child transport, fsync the full max-attempt reservation; unknown usage retains reserve; failures remain in the denominator. This template does not execute or book money.'})
     files = {p.relative_to(output).as_posix(): sha(read(p)) for p in sorted(output.rglob('*')) if p.is_file()}
-    manifest = {'version': 1, 'scope': SCOPE, 'cases_sha256': CORPUS_SHA, 'model': MODEL, 'endpoint': ENDPOINT,
+    manifest = {'version': 2, 'scope': SCOPE, 'cases_sha256': CORPUS_SHA, 'model': MODEL, 'endpoint': ENDPOINT,
                 'data_scope': 'frozen_fictional_only', 'created_on': today(), 'strategy': 'legacy',
                 'harness2_enabled': False, 'app_window': 262144, 'source_version': 'c5-fictional-sources-v1',
                 'jobs': jobs, 'base_calls': 22, 'max_transport_attempts': 40,
                 'total_reserve_micro_cny': sum(j['reserve_micro_cny'] for j in jobs),
                 'file_sha256': files, 'source_sha256': {p: sha(read(REPO / p)) for p in SOURCES},
                 'binary_sha256': sha(binary.read_bytes()),
+                'runner_sha256': sha(runner.resolve(strict=True).read_bytes()) if runner else None,
                 'git_head': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=REPO, text=True).strip(),
                 'worktree_dirty': bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=REPO, text=True).strip()),
-                'external_calls': 0, 'execution_available': False,
+                'external_calls': 0, 'execution_available': runner is not None,
                 'C_rule': 'Revalidate a real candidate against the sealed snapshot; materialize exact C request, remeasure, and remain under its fixed reservation. AI2 failure is a recorded fallback to B, not successful compression.'}
     write(output / 'manifest.json', manifest)
     auth = {'approved': False, 'scope': SCOPE, 'manifest_sha256': sha(read(output / 'manifest.json')),
@@ -214,8 +216,8 @@ def check_authorization(bundle, binary, auth, current_day=None):
     require(type(auth['max_cost_micro_cny']) is int and auth['max_cost_micro_cny'] >= m['total_reserve_micro_cny'], 'authorized cost cap below worst-case reserve')
     require(type(auth['max_transport_attempts']) is int and auth['max_transport_attempts'] == m['max_transport_attempts'], 'attempt scope changed')
     validate_prices(load(bundle / 'price-review.json'), day)
-    return {'preflight': 'passed', 'external_calls': 0, 'execution_available': False,
-            'note': 'Preflight only. This tool has no paid executor, does not consume consent, and cannot promote a runtime strategy.'}
+    return {'preflight': 'passed', 'external_calls': 0, 'execution_available': m.get('execution_available', False),
+            'note': 'Preflight only; execute.py still requires explicit execution, the bound runner, current consent and durable reservation. No runtime strategy is promoted.'}
 
 
 def materialize(bundle, binary, case_id, candidate, output):
@@ -236,11 +238,11 @@ def materialize(bundle, binary, case_id, candidate, output):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest='command', required=True)
-    a = sub.add_parser('prepare'); a.add_argument('--binary', type=Path, required=True); a.add_argument('--images', type=Path, required=True); a.add_argument('--out', type=Path, required=True)
+    a = sub.add_parser('prepare'); a.add_argument('--binary', type=Path, required=True); a.add_argument('--runner', type=Path); a.add_argument('--images', type=Path, required=True); a.add_argument('--out', type=Path, required=True)
     a = sub.add_parser('check-authorization'); a.add_argument('--binary', type=Path, required=True); a.add_argument('--bundle', type=Path, required=True); a.add_argument('--authorization', type=Path, required=True)
     a = sub.add_parser('materialize'); a.add_argument('--binary', type=Path, required=True); a.add_argument('--bundle', type=Path, required=True); a.add_argument('--case', required=True); a.add_argument('--candidate', type=Path, required=True); a.add_argument('--out', type=Path, required=True)
     args = p.parse_args()
-    if args.command == 'prepare': result = prepare(args.binary, args.images, args.out)
+    if args.command == 'prepare': result = prepare(args.binary, args.images, args.out, args.runner)
     elif args.command == 'check-authorization': result = check_authorization(args.bundle, args.binary, load(args.authorization))
     else: result = materialize(args.bundle, args.binary, args.case, args.candidate, args.out)
     print(json.dumps(result, ensure_ascii=False, indent=2))

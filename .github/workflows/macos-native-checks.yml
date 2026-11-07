@@ -79,8 +79,8 @@ jobs:
         run: python3 -B -m unittest discover -s validation/answer-vision -p 'test_*.py'
       - name: Context trial offline preparation and consent gates
         run: |
-          cargo build --locked -p interview-core --example context_trial_prepare
-          C5_PREPARER="$PWD/target/debug/examples/context_trial_prepare" python3 -B -m unittest discover -s validation/context-compaction -p 'test_*.py'
+          cargo build --locked -p interview-core --example context_trial_prepare --example context_trial_run
+          C5_PREPARER="$PWD/target/debug/examples/context_trial_prepare" C5_RUNNER="$PWD/target/debug/examples/context_trial_run" python3 -B -m unittest discover -s validation/context-compaction -p 'test_*.py'
       # These tests use synthetic drivers and isolated fixtures. They do not
       # request capture permissions or prove real-device audio works.
       - name: Device discovery timeout and cancellation

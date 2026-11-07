@@ -2,7 +2,7 @@
 
 本目录的 `cases.json` 延续 C4 冻结六题（3 开发、3 保留），没有改题或用于真实模型调参。`context_measure` 仍只是一项确定性预算示例，不能用于真实视觉调用；它包含无效图片占位符。
 
-新增 `context_trial_prepare` 与 `prepare.py` **只准备和核对**，没有网络执行模式、凭证读取或应用数据库访问。`check-authorization` 通过不意味着执行、收费、人工验收或正式启用。真实付费协调器、持久化尝试账本和模型结果收集仍需后续接入，不能直接将这里的请求交给无预算脚本批量发送。
+新增 `context_trial_prepare` 与 `prepare.py` **只准备和核对**，没有网络执行模式、凭证读取或应用数据库访问。`check-authorization` 通过不意味着执行、收费、人工验收或正式启用。独立的 `execute.py` 已接入生产传输和持久账本，须同时满足本批授权、绑定的执行二进制、当天价格、CNY计价及显式 `--execute`；当前只通过合成验证。不能将这里的请求交给无预算脚本批量发送。
 
 ## 配对协议
 
@@ -18,12 +18,14 @@
 复用既有 Rust/Python/Swift 环境，输出路径必须不存在：
 
 ```sh
-cargo build --locked -p interview-core --example context_trial_prepare
+cargo build --locked -p interview-core --example context_trial_prepare --example context_trial_run
 swift validation/answer-vision/render-fixtures.swift validation/context-compaction/visuals.json /new/c5-images
 python3 -B validation/context-compaction/prepare.py prepare \
   --binary target/debug/examples/context_trial_prepare \
+  --runner target/debug/examples/context_trial_run \
   --images /new/c5-images --out /new/c5-prepared
 C5_PREPARER="$PWD/target/debug/examples/context_trial_prepare" \
+C5_RUNNER="$PWD/target/debug/examples/context_trial_run" \
   python3 -B -m unittest discover -s validation/context-compaction -p 'test_*.py'
 ```
 
@@ -50,4 +52,23 @@ python3 -B validation/context-compaction/prepare.py materialize \
 
 18次AI1 + 4次AI2 = 22次基础调用；AI1每次最多2次传输、AI2不自动重试，最坏40次。金额按整数微元计算：完整序列化文本字节估算 + 图片预留 + 安全余量，以及每次输出上限；长题C按完整配置输入预算预留。当前固定图文准备结果约6.348028元，这是保守计划预留，不是已产生费用或无条件费用保证。未核对的后续价格、超出此协议的调用和人为重跑不在该数值内。
 
-后续真实执行器必须在网络子进程启动前将最大尝试预留写盘并 fsync；未知usage不得记0或释放预留；失败、取消和重试均计入分母与总额；分别记录AI1/AI2、缓存、实际用量和总开销。不得挪用旧30元额度或假定获得过 Key 就已允许本批消费。总开销收益、口语自然度和保真由实际结果及人工核对决定，不能由输入长度推断。
+执行器使用 SQLite FULL 事务，在网络子进程启动前将最大尝试预留提交到磁盘；未知usage不得记0或释放预留；失败、取消和重试均计入分母与总额；分别记录AI1/AI2、缓存、实际用量和总开销。不得挪用旧30元额度或假定获得过 Key 就已允许本批消费。总开销收益、口语自然度和保真由实际结果及人工核对决定，不能由输入长度推断。
+
+
+## 有授权后的执行入口
+
+源码路径：`validation/context-compaction/execute.py` 和 `crates/interview-core/examples/context_trial_run.rs`。下面不含凭证；实际Key仅由获准执行的进程环境 `TINGXIAN_C5_API_KEY` 提供，不读聊天、应用库或现有账号配置。默认命令只作预检，不读Key、不联网。
+
+```sh
+python3 -B validation/context-compaction/execute.py \
+  --binary target/debug/examples/context_trial_prepare \
+  --runner target/debug/examples/context_trial_run \
+  --bundle /new/c5-prepared --authorization /path/to/explicit-c5-authorization.json
+# 仅在这批明确获准后添加 --execute；中断后继续尚未尝试的任务须再加 --resume。
+```
+
+执行前核对账号计价币种为CNY，只留币种，不保存余额。固定顺序每题A、B、必要的AI2、C；最多22任务、40传输尝试。并发文件锁防双启动，SQLite账本记录封存任务、完整预留、结果、原始usage及未知费用。恢复核对账本用量与金额；不重发已保留/中断/已结算任务。未知终态保留全额并停止本轮，显式恢复只能做剩余任务；AI2结果丢失或引用校验失败时C使用B回退并单列标记。
+
+输出上限、进程截止、取消、连续三次失败或超过预留均有停止边界。每次调度前重新核对来源和授权文件；撤回授权停止后续调用。已有请求发生的成本不能撤销，仍保留已知usage或未知预留。跨日价格/原授权过期会阻止恢复，不会自己重开整批。
+
+每段流式事件带时间戳，真正有意义答案的首字时间仍需人工从事件中标注；不将`嗯`、首个非空字符或开始标记冒充该指标。实际模型费用、口语质量、CPU/RSS与长会话仍未测；账本按高峰价计算的usage金额只是保守估值，不是账单。完整故障测试边界见[执行检查点](../../docs/context-c5-execution.md)。
