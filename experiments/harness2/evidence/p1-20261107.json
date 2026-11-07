@@ -1,0 +1,67 @@
+{
+  "stage": "P0 + exploratory P1 six development cases + B controller correction",
+  "route": "U",
+  "upstream_commit": "6868817518876de8fd170c6a8354daca273b6191",
+  "original_runtime_commit": "47c3358933f02a7f2f7087d279fb302b8bc652f4",
+  "amendment_runtime_commit": "a9ec70c7fbd4ae68582adb71dace246289d5a310",
+  "p0": {
+    "tasks": 24,
+    "completed": 24,
+    "artifacts": 96,
+    "fault_tests_passed": 9
+  },
+  "p1": {
+    "original_groups_completed": 15,
+    "after_controller_correction_completed": 17,
+    "groups_requested": 18,
+    "executions": 54,
+    "successful_executions": 49,
+    "file_quote_validation_rejections": 17,
+    "duplicate_skips": 7,
+    "generation_requests": 542,
+    "added_by_amendment": 7,
+    "failed_slots_retried": 0,
+    "estimated_peak_cny": 7.643134,
+    "budget_cny": 30,
+    "actual_provider_bill_cny": null,
+    "unknown_usage_calls": 0,
+    "max_prompt_tokens": 8183,
+    "max_completion_tokens": 8192,
+    "cumulative_prompt_tokens": 1243463,
+    "cumulative_completion_tokens": 644526,
+    "groups": {
+      "A": {
+        "completed": 6,
+        "requested": 6,
+        "estimated_peak_cny": 0.804298,
+        "literal_covered": 72,
+        "atoms_total_including_missing_outputs": 72
+      },
+      "B": {
+        "completed": 6,
+        "requested": 6,
+        "estimated_peak_cny": 3.223202,
+        "literal_covered": 72,
+        "atoms_total_including_missing_outputs": 72
+      },
+      "C0": {
+        "completed": 5,
+        "requested": 6,
+        "estimated_peak_cny": 3.615234,
+        "literal_covered": 57,
+        "atoms_total_including_missing_outputs": 72
+      }
+    }
+  },
+  "latest_offline_regressions": {
+    "broker_and_controller_tests": 9,
+    "real_sandbox_official_core_executions": 4,
+    "real_sandbox_official_core_editors": 3,
+    "fake_requests": 24,
+    "real_api_requests": 0
+  },
+  "human_labels_reviewed": false,
+  "semantic_quality_improvement": "not established",
+  "production_enabled": false,
+  "decision": "Retain independent adapter; do not enable recursive optimization or candidate policies in production."
+}
