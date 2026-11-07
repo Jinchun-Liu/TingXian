@@ -249,6 +249,24 @@ pub struct Flight {
     raw: RawTicket,
     consumed: bool,
 }
+#[derive(Clone, Copy)]
+struct CancelTarget {
+    raw: *mut c_void,
+    cancel: Cancel,
+}
+/// Owner-lane-only revocation capability. It cannot start/output/wait and turns
+/// inert BEFORE the DLL/instance is destroyed. Rc/Cell prevent cross-thread use.
+#[derive(Clone)]
+pub(crate) struct Cancellation(Rc<std::cell::Cell<Option<CancelTarget>>>);
+impl Cancellation {
+    pub(crate) fn cancel(&self) {
+        if let Some(target) = self.0.get() {
+            unsafe {
+                (target.cancel)(target.raw);
+            }
+        }
+    }
+}
 /// !Send/!Sync: constructed, operated and destroyed on the native owner lane.
 /// A borrow of its wake event cannot outlive the library/owner. Drop retires the
 /// sender before freeing either. Recreating this object does not verify drain.
@@ -258,9 +276,11 @@ pub struct NativeTimedVideo {
     identity: Rc<()>,
     generation: u64,
     stopped: bool,
+    cancellation: Cancellation,
 }
 impl Drop for NativeTimedVideo {
     fn drop(&mut self) {
+        self.cancellation.0.set(None);
         unsafe {
             (self.library.cancel)(self.raw.as_ptr());
             (self.library.stop)(self.raw.as_ptr());
@@ -272,13 +292,21 @@ impl NativeTimedVideo {
     pub fn load(pin: PinnedTimedLibrary) -> Result<Self, Error> {
         let library = Library::load(pin)?;
         let raw = NonNull::new(unsafe { (library.create)() }).ok_or(Error::Load(Reason::Launch))?;
+        let cancellation = Cancellation(Rc::new(std::cell::Cell::new(Some(CancelTarget {
+            raw: raw.as_ptr(),
+            cancel: library.cancel,
+        }))));
         Ok(Self {
             raw,
             library,
             identity: Rc::new(()),
             generation: 0,
             stopped: false,
+            cancellation,
         })
+    }
+    pub(crate) fn cancellation(&self) -> Cancellation {
+        self.cancellation.clone()
     }
     pub fn open(&mut self, generation: u64, explicit_intent: bool) -> Result<TimedEndpoint, Error> {
         if !explicit_intent {
@@ -474,4 +502,4 @@ impl NativeTimedVideo {
     }
 }
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

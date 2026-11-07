@@ -58,10 +58,13 @@ pub struct Status {
     pub external_drain_verified: bool,
     pub revoked: bool,
 }
-/// Notification only. The future joint owner must also revoke the video lane,
-/// retain an uncertain-drain barrier across object/process recreation, and wait
-/// for all output cleanup. This flag is not itself a paired stop acknowledgement.
+/// Notification only; a joint owner additionally attaches an owner-lane video
+/// cancellation capability before prepare. This flag is not a drain proof.
 pub struct Revocation(AtomicBool);
+struct Callback {
+    state: Arc<Revocation>,
+    video: Option<crate::timed_video::Cancellation>,
+}
 impl Revocation {
     pub fn revoked(&self) -> bool {
         self.0.load(Ordering::Acquire)
@@ -232,11 +235,14 @@ impl Library {
     }
 }
 unsafe extern "system" fn revoke(context: *mut c_void) {
-    // Box lives through TxAudioDestroy, which destroys Session before this flag.
-    // No trait call, allocation, panic or native reentry from this callback.
-    unsafe { &*(context as *const Arc<Revocation>) }
-        .0
-        .store(true, Ordering::Release);
+    // Session invokes this only on its creator MTA lane, before audio cleanup.
+    // No allocation/wait or audio reentry. The video capability is inert if its
+    // owner is already destroyed; it cannot retain an unloaded function pointer.
+    let callback = unsafe { &*(context as *const Callback) };
+    callback.state.0.store(true, Ordering::Release);
+    if let Some(video) = callback.video.as_ref() {
+        video.cancel();
+    }
 }
 fn check(hr: i32) -> Result<(), Error> {
     if hr == 0 {
@@ -252,7 +258,7 @@ fn endpoint(value: &str) -> Result<Vec<u16>, Error> {
     }
     Ok(wide)
 }
-fn native_now() -> Result<Time, Error> {
+pub(crate) fn native_now() -> Result<Time, Error> {
     let (mut counter, mut frequency) = (0i64, 0i64);
     if unsafe { QueryPerformanceCounter(&mut counter) } == 0
         || unsafe { QueryPerformanceFrequency(&mut frequency) } == 0
@@ -289,7 +295,7 @@ impl Reservation {
 pub struct NativeAudio {
     raw: NonNull<c_void>,
     library: Library,
-    callback: Box<Arc<Revocation>>,
+    callback: Box<Callback>,
     generation: u64,
     format: Option<Format>,
     clock: Option<DeviceClock>,
@@ -310,9 +316,12 @@ impl NativeAudio {
     /// Loading our pinned module/creating an idle owner starts no audio client.
     pub fn load(pin: PinnedAudioLibrary) -> Result<Self, Error> {
         let library = Library::load(pin)?;
-        let mut callback = Box::new(Arc::new(Revocation(AtomicBool::new(false))));
+        let mut callback = Box::new(Callback {
+            state: Arc::new(Revocation(AtomicBool::new(false))),
+            video: None,
+        });
         let raw = NonNull::new(unsafe {
-            (library.create)(revoke, (&mut *callback as *mut Arc<Revocation>).cast())
+            (library.create)(revoke, (&mut *callback as *mut Callback).cast())
         })
         .ok_or(Error::Load(Reason::Launch))?;
         Ok(Self {
@@ -387,7 +396,17 @@ impl NativeAudio {
         })
     }
     pub fn revocation(&self) -> Arc<Revocation> {
-        self.callback.as_ref().clone()
+        self.callback.state.clone()
+    }
+    pub(crate) fn couple_video(
+        &mut self,
+        video: crate::timed_video::Cancellation,
+    ) -> Result<(), Error> {
+        if self.stopped || self.format.is_some() || self.callback.video.is_some() {
+            return Err(Error::Off);
+        }
+        self.callback.video = Some(video);
+        Ok(())
     }
     /// Borrow only while this owner lives. Wait together with the joint owner's
     /// stop signal, then release the borrow before reserve/commit. No polling loop.
@@ -431,7 +450,7 @@ impl NativeAudio {
         frames: usize,
         now: impl FnOnce() -> Result<Time, Error>,
     ) -> Result<Option<Reservation>, Error> {
-        if self.stopped || self.clock.is_none() || self.callback.revoked() {
+        if self.stopped || self.clock.is_none() || self.callback.state.revoked() {
             return Err(Error::Off);
         }
         if frames == 0 || frames > MAX_PACKET_FRAMES {
@@ -500,7 +519,7 @@ impl NativeAudio {
         if !Rc::ptr_eq(&reservation.owner, &self.identity) {
             return Err(Error::Owner);
         }
-        if self.stopped || self.callback.revoked() {
+        if self.stopped || self.callback.state.revoked() {
             return Err(Error::Off);
         }
         if reservation.interval.is_some() || samples.len() != reservation.frames() {
@@ -561,4 +580,4 @@ impl NativeAudio {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

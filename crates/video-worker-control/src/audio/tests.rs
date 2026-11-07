@@ -10,7 +10,7 @@ const BASE: u64 = 100_000_000;
 fn time(offset: u64) -> Time {
     Time::from_qpc_100ns(BASE + offset)
 }
-fn pin(fixture: bool) -> PinnedAudioLibrary {
+pub(crate) fn pin(fixture: bool) -> PinnedAudioLibrary {
     let directory = std::env::var_os("TINGXIAN_AUDIO_TEST_BIN")
         .expect("Set TINGXIAN_AUDIO_TEST_BIN to the actual native build directory");
     let path = PathBuf::from(directory).join(if fixture {
@@ -23,7 +23,7 @@ fn pin(fixture: bool) -> PinnedAudioLibrary {
     let sha256 = format!("{:x}", Sha256::digest(fs::read(&path).unwrap()));
     PinnedAudioLibrary { path, sha256 }
 }
-fn pair() -> AudioPair {
+pub(crate) fn pair() -> AudioPair {
     AudioPair {
         render_id: "fixture-render".into(),
         capture_id: "fixture-capture".into(),
@@ -42,13 +42,13 @@ fn prepared(generation: u64) -> NativeAudio {
 }
 type Step = unsafe extern "system" fn(*mut c_void, u32, u32) -> i32;
 type Read = unsafe extern "system" fn(*mut c_void, *mut f32, u32, *mut u32) -> i32;
-fn step(audio: &NativeAudio, frames: u32, failure: u32) {
+pub(crate) fn step(audio: &NativeAudio, frames: u32, failure: u32) {
     let p = unsafe { GetProcAddress(audio.library.module, c"TxAudioFixtureStep".as_ptr().cast()) }
         .unwrap();
     let function = unsafe { std::mem::transmute::<unsafe extern "system" fn() -> isize, Step>(p) };
     assert_eq!(unsafe { function(audio.raw.as_ptr(), frames, failure) }, 0);
 }
-fn read(audio: &NativeAudio) -> Vec<f32> {
+pub(crate) fn read(audio: &NativeAudio) -> Vec<f32> {
     let p = unsafe { GetProcAddress(audio.library.module, c"TxAudioFixtureRead".as_ptr().cast()) }
         .unwrap();
     let function = unsafe { std::mem::transmute::<unsafe extern "system" fn() -> isize, Read>(p) };
@@ -60,6 +60,19 @@ fn read(audio: &NativeAudio) -> Vec<f32> {
     );
     output.truncate(count as usize);
     output
+}
+pub(crate) fn anchor(audio: &NativeAudio, qpc: u64) {
+    type Anchor = unsafe extern "system" fn(*mut c_void, u64) -> i32;
+    let p = unsafe {
+        GetProcAddress(
+            audio.library.module,
+            c"TxAudioFixtureAnchor".as_ptr().cast(),
+        )
+    }
+    .unwrap();
+    let function =
+        unsafe { std::mem::transmute::<unsafe extern "system" fn() -> isize, Anchor>(p) };
+    assert_eq!(unsafe { function(audio.raw.as_ptr(), qpc) }, 0);
 }
 fn voice(index: u64) -> f32 {
     (0.3 * (std::f64::consts::TAU * 1000.0 * index as f64 / 48000.0).sin()) as f32
@@ -74,6 +87,13 @@ fn native_audio_bridge_pinned_production_has_no_fixture_and_refuses_unknown_pair
         Err(Error::Load(Reason::Integrity))
     ));
     let mut audio = NativeAudio::load(pin(false)).unwrap();
+    assert!(unsafe {
+        GetProcAddress(
+            audio.library.module,
+            c"TxAudioFixtureAnchor".as_ptr().cast(),
+        )
+    }
+    .is_none());
     assert!(
         unsafe { GetProcAddress(audio.library.module, c"TxAudioFixtureStep".as_ptr().cast()) }
             .is_none()

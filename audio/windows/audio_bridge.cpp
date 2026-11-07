@@ -134,6 +134,11 @@ HRESULT WINAPI TxAudioReadyEvent(void* raw, HANDLE* event) noexcept {
 }
 #ifdef TINGXIAN_AUDIO_FIXTURE
 // Test-only control exports; absent from the production DLL's build and .def.
+__declspec(dllexport) HRESULT WINAPI TxAudioFixtureAnchor(void* raw, UINT64 qpc) noexcept {
+    const auto hr = valid(raw); if (FAILED(hr)) return hr;
+    if (owner(raw)->session.status().phase != Phase::prepared) return E_UNEXPECTED;
+    return fixture_anchor(*owner(raw)->backend, qpc);
+}
 __declspec(dllexport) HRESULT WINAPI TxAudioFixtureStep(void* raw, UINT32 consumed, UINT32 failure) noexcept {
     const auto hr = valid(raw); return FAILED(hr) ? hr : fixture_step(*owner(raw)->backend, consumed, failure);
 }

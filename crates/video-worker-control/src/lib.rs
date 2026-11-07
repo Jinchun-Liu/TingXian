@@ -7,6 +7,8 @@ pub mod av_timeline;
 pub mod audio;
 #[cfg(windows)]
 pub mod timed_video;
+#[cfg(windows)]
+pub mod joint;
 mod eye;
 pub use eye::{EyeJob, EyeOutcome, EyeProvider, EyeReport};
 mod stream;

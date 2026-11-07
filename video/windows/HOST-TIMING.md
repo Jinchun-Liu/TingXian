@@ -71,13 +71,14 @@ it cannot be reopened. Status preserves errors and explicitly keeps
 `external_drain_verified=false`; even a local clear cannot prove source event
 queues, the virtual microphone or a meeting client have drained.
 
-The joint AV owner must still reserve both routes, retain one bounded PCM window
-while video admission is pending, respect the audio ticket's deadline, and revoke
-both on any failure. Audio commit and video admission are distinct operations;
-this bridge does **not** make them atomic. That owner must persist the uncertain
-drain barrier across object/process recreation and prevent a new instance from
-bypassing it. Main-window integration and actual installed/device/meeting output
-remain pending. Do not mark the local bridge as synchronized meeting output.
+`crates/video-worker-control/src/joint/` now owns both real bridge adapters,
+retains one bounded PCM window pending video admission, checks the audio deadline,
+and revokes both on failure. Its durable barrier survives object/process exit;
+there is no recovery API until downstream drain/release can be verified. Audio
+commit and video admission remain distinct, **non-atomic** operations. Main-window
+integration, recovery and actual installed/device/meeting output remain pending.
+See `docs/eye-av-owner-validation-2026-11-07.md`; synthetic MF/memory PCM results
+must not be reported as synchronized meeting output.
 
 ## Tests
 

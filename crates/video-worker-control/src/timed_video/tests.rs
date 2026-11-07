@@ -21,7 +21,7 @@ use windows_sys::Win32::{
         Threading::WaitForSingleObject,
     },
 };
-fn pin() -> PinnedTimedLibrary {
+pub(crate) fn pin() -> PinnedTimedLibrary {
     let path = PathBuf::from(
         std::env::var_os("TINGXIAN_VIDEO_TEST_BIN").expect("actual native build directory"),
     )
@@ -31,7 +31,7 @@ fn pin() -> PinnedTimedLibrary {
         path,
     }
 }
-fn now() -> Time {
+pub(crate) fn now() -> Time {
     let (mut ticks, mut frequency) = (0, 0);
     assert_ne!(unsafe { QueryPerformanceCounter(&mut ticks) }, 0);
     assert_ne!(unsafe { QueryPerformanceFrequency(&mut frequency) }, 0);
@@ -42,7 +42,7 @@ fn wait(video: &NativeTimedVideo) {
     let result = unsafe { WaitForSingleObject(event.as_raw_handle(), 100) };
     assert!(result == WAIT_OBJECT_0 || result == WAIT_TIMEOUT);
 }
-fn ready(video: &NativeTimedVideo) {
+pub(crate) fn ready(video: &NativeTimedVideo) {
     let until = Instant::now() + Duration::from_secs(3);
     while video.status().unwrap().phase != Phase::Ready {
         assert!(Instant::now() < until, "sender not ready");
@@ -59,8 +59,8 @@ fn receipt(video: &mut NativeTimedVideo, flight: &mut Flight) -> Admission {
         wait(video);
     }
 }
-struct Reader {
-    child: Child,
+pub(crate) struct Reader {
+    pub(crate) child: Child,
     input: ChildStdin,
     output: ChildStdout,
 }
@@ -73,7 +73,7 @@ impl Drop for Reader {
     }
 }
 impl Reader {
-    fn connect(endpoint: TimedEndpoint) -> Self {
+    pub(crate) fn connect(endpoint: TimedEndpoint) -> Self {
         let bin = PathBuf::from(std::env::var_os("TINGXIAN_VIDEO_TEST_BIN").unwrap());
         let mut command = Command::new(bin.join("tingxian-video-ipc-test.exe"));
         command
@@ -123,7 +123,7 @@ impl Reader {
             thread::sleep(Duration::from_millis(1));
         }
     }
-    fn sample(&mut self, id: u64, capture: u64, presentation: u64) {
+    pub(crate) fn sample(&mut self, id: u64, capture: u64, presentation: u64) {
         let mut bytes = vec![b'T'];
         bytes.extend_from_slice(&id.to_le_bytes());
         bytes.extend_from_slice(&capture.to_le_bytes());
@@ -133,7 +133,7 @@ impl Reader {
         self.input.write_all(&bytes).unwrap();
         self.received(b'T');
     }
-    fn neutral_after_stop(&mut self) {
+    pub(crate) fn neutral_after_stop(&mut self) {
         self.input.write_all(b"N").unwrap();
         self.received(b'N');
     }
@@ -240,9 +240,7 @@ fn timed_bridge_timeline_window_reaches_real_mf_with_original_capture_and_plan()
     let mut clock = DeviceClock::new(generation, 48000).unwrap();
     clock.observe(0, Time::from_qpc_100ns(base)).unwrap();
     clock.observe(4800, observed).unwrap();
-    let interval = clock
-        .interval_from_frame(5760, 480, observed)
-        .unwrap();
+    let interval = clock.interval_from_frame(5760, 480, observed).unwrap();
     let ticket = video.reserve().unwrap().unwrap();
     assert!(video.reserve().unwrap().is_none());
     let mut staged = None;
@@ -283,9 +281,7 @@ fn timed_bridge_missing_timeline_input_delivers_scheduled_neutral() {
         .observe(0, Time::from_qpc_100ns(observed.qpc_100ns() - 100000))
         .unwrap();
     clock.observe(480, observed).unwrap();
-    let interval = clock
-        .interval_from_frame(1440, 480, observed)
-        .unwrap();
+    let interval = clock.interval_from_frame(1440, 480, observed).unwrap();
     let ticket = video.reserve().unwrap().unwrap();
     let mut staged = None;
     let mut presentation = 0;

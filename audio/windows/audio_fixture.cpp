@@ -61,3 +61,9 @@ HRESULT fixture_read(Backend& backend, float* out, UINT32 capacity, UINT32* samp
     *samples = f.count;
     return S_OK;
 }
+HRESULT fixture_anchor(Backend& backend, UINT64 qpc) noexcept {
+    auto& f = static_cast<Fixture&>(backend);
+    if (!qpc || f.now.position || f.now.padding || f.count) return E_INVALIDARG;
+    f.now.qpc_100ns = qpc;
+    return S_OK;
+}
