@@ -5,6 +5,11 @@ use sqlx::{Row, Sqlite, Transaction};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const LIMIT: usize = 16 * 1024 * 1024;
+const SAVED_LIMIT:usize=32*1024*1024;
+const HISTORY_LIMIT:i64=256*1024*1024;
+const HISTORY_COUNT:i64=1000;
+const VERSION_PREFIX:&str="preparation-version/";
+const META_PREFIX:&str="preparation-meta/";
 const LIBRARY: &str = "preparation_library_id";
 const SECTIONS: [&str; 5] = ["context", "task", "action", "result", "learning"];
 
@@ -271,6 +276,59 @@ fn validate_consolidation(candidate:&Value,sources:&BTreeMap<&str,&Value>,inputs
     Ok(retained)
 }
 
+fn read_saved(raw:&str)->Result<Value>{
+    check(raw.len()<=SAVED_LIMIT,"已存准备版本超过32 MiB")?;
+    let value:Value=serde_json::from_str(raw).map_err(|_|"已存准备版本不可读；保留原记录")?;
+    check(value["candidate"].is_object() && value["source_names"].is_object() && value["saved_at"].is_string() && value["index_version"].is_string(),"已存准备版本格式无效；保留原记录")?;
+    Ok(value)
+}
+async fn latest(tx:&mut Transaction<'_,Sqlite>)->Result<Option<String>>{
+    sqlx::query_scalar("SELECT value FROM background_library WHERE key='preparation'").fetch_optional(&mut **tx).await.map_err(|e|e.to_string())
+}
+async fn history_size(tx:&mut Transaction<'_,Sqlite>,limit:i64)->Result<i64>{
+    let bytes:i64=sqlx::query_scalar("SELECT coalesce(sum(length(CAST(value AS BLOB))),0) FROM background_library WHERE key GLOB 'preparation-version/*' OR key GLOB 'preparation-meta/*'").fetch_one(&mut **tx).await.map_err(|e|e.to_string())?;
+    check(bytes<=limit,"岗位准备历史达到256 MiB上限，本次未保存；旧版本保留，请先备份整理")?;Ok(bytes)
+}
+fn history_summary(raw:&str,saved:&Value)->Value{
+    json!({"id":digest(raw.as_bytes()),"saved_at":saved["saved_at"],"role":saved["candidate"]["task"]["role"],"organization":saved["candidate"]["task"]["organization"],"candidate_hash":saved["candidate"]["candidate_hash"],"restored_from":saved["restored_from"]})
+}
+async fn archive_saved(tx:&mut Transaction<'_,Sqlite>,raw:&str)->Result<()> {
+    let saved=read_saved(raw)?;let id=digest(raw.as_bytes());let key=format!("{VERSION_PREFIX}{id}");
+    let existing:Option<String>=sqlx::query_scalar("SELECT value FROM background_library WHERE key=?").bind(&key).fetch_optional(&mut **tx).await.map_err(|e|e.to_string())?;
+    if let Some(existing)=existing {check(existing==raw,"旧准备版本摘要不一致，本次未保存")?;return Ok(());}
+    let count:i64=sqlx::query_scalar("SELECT count(*) FROM background_library WHERE key GLOB 'preparation-meta/*'").fetch_one(&mut **tx).await.map_err(|e|e.to_string())?;
+    check(count<HISTORY_COUNT,"岗位准备已达1000个版本，本次未保存；旧版本保留")?;
+    let last:Option<String>=sqlx::query_scalar("SELECT max(key) FROM background_library WHERE key GLOB 'preparation-meta/*'").fetch_one(&mut **tx).await.map_err(|e|e.to_string())?;
+    let serial=match last {Some(key)=>key.strip_prefix(META_PREFIX).and_then(|v|v.parse::<u64>().ok()).ok_or("历史序号无效")?.checked_add(1).ok_or("历史序号已达上限")?,None=>1};
+    sqlx::query("INSERT INTO background_library VALUES(?,?)").bind(key).bind(raw).execute(&mut **tx).await.map_err(|e|e.to_string())?;
+    sqlx::query("INSERT INTO background_library VALUES(?,?)").bind(format!("{META_PREFIX}{serial:020}")).bind(history_summary(raw,&saved).to_string()).execute(&mut **tx).await.map_err(|e|e.to_string())?;
+    history_size(tx,HISTORY_LIMIT).await?;Ok(())
+}
+async fn version_raw(tx:&mut Transaction<'_,Sqlite>,id:&str)->Result<String>{
+    hex(&json!(id))?;
+    let archived:Option<String>=sqlx::query_scalar("SELECT value FROM background_library WHERE key=?").bind(format!("{VERSION_PREFIX}{id}")).fetch_optional(&mut **tx).await.map_err(|e|e.to_string())?;
+    let raw=match archived {Some(raw)=>raw,None=>latest(tx).await?.ok_or("没有找到准备版本")?};
+    check(digest(raw.as_bytes())==id,"准备版本缺失或摘要不一致")?;read_saved(&raw)?;Ok(raw)
+}
+async fn saved_view(tx:&mut Transaction<'_,Sqlite>,raw:&str)->Result<Value>{
+    let saved=read_saved(raw)?;let current=scope(tx).await;
+    let valid=current.as_ref().is_ok_and(|s|validate(&saved["candidate"],s).is_ok());
+    let previous=latest(tx).await?;let previous_hash=previous.as_ref().map(|s|digest(s.as_bytes()));let id=digest(raw.as_bytes());
+    Ok(json!({"candidate":saved["candidate"],"source_names":saved["source_names"],"saved_at":saved["saved_at"],"id":id,"current":previous_hash.as_deref()==Some(id.as_str()),"restored_from":saved["restored_from"],
+        "index_version":current.as_ref().ok().map(|s|s.export["index_version"].clone()),"previous_hash":previous_hash,"source_binding_valid":valid,"local_only":true,"personal_facts_confirmed":false}))
+}
+async fn save_current(tx:&mut Transaction<'_,Sqlite>,candidate:&Value,current:&Scope,previous:Option<&str>,restored_from:Option<&str>)->Result<()> {
+    if let Some(raw)=previous {
+        let old=read_saved(raw)?;
+        // A repeated save is idempotent; old UI snapshots still fail CAS first.
+        if old["candidate"]==*candidate {return Ok(());}
+        archive_saved(tx,raw).await?;
+    }
+    let saved=json!({"candidate":candidate,"source_names":source_names(current),"saved_at":chrono::Utc::now().to_rfc3339(),"index_version":current.export["index_version"],"restored_from":restored_from}).to_string();
+    archive_saved(tx,&saved).await?;
+    sqlx::query("INSERT OR REPLACE INTO background_library VALUES('preparation',?)").bind(saved).execute(&mut **tx).await.map_err(|e|e.to_string())?;Ok(())
+}
+
 impl Index {
     pub async fn preparation_export(&self) -> Result<Value> {
         let _guard=self.gate.lock().await;let mut tx=self.pool.begin().await.map_err(|e|e.to_string())?;
@@ -291,18 +349,60 @@ impl Index {
         check(current.export["index_version"]==version,"资料库已变化，请重新核对")?;validate(candidate,&current)?;
         let previous: Option<String>=sqlx::query_scalar("SELECT value FROM background_library WHERE key='preparation'").fetch_optional(&mut *tx).await.map_err(|e|e.to_string())?;
         check(previous.as_ref().map(|v|digest(v.as_bytes())).as_deref()==previous_hash,"已保存的准备资料已变化，请重新核对")?;
-        let saved=json!({"candidate":candidate,"source_names":source_names(&current),"saved_at":chrono::Utc::now().to_rfc3339(),"index_version":version});
-        sqlx::query("INSERT OR REPLACE INTO background_library VALUES('preparation',?)").bind(saved.to_string()).execute(&mut *tx).await.map_err(|e|e.to_string())?;
+        save_current(&mut tx,candidate,&current,previous.as_deref(),None).await?;
         tx.commit().await.map_err(|e|e.to_string())
     }
     pub async fn preparation_view(&self) -> Result<Value> {
         let _guard=self.gate.lock().await;let mut tx=self.pool.begin().await.map_err(|e|e.to_string())?;
         let raw: Option<String>=sqlx::query_scalar("SELECT value FROM background_library WHERE key='preparation'").fetch_optional(&mut *tx).await.map_err(|e|e.to_string())?;
         let Some(raw)=raw else{return Ok(Value::Null)};
-        let saved: Value=serde_json::from_str(&raw).map_err(|_|"准备资料不可读")?;
-        let valid=match scope(&mut tx).await {Ok(s)=>validate(&saved["candidate"],&s).is_ok(),Err(_)=>false};
         // Retain old local history for inspection; never register it in FTS,
         // fact cards, settings or model input. Eligibility is checked afresh.
-        Ok(json!({"candidate":saved["candidate"],"source_names":saved["source_names"],"saved_at":saved["saved_at"],"source_binding_valid":valid,"local_only":true,"personal_facts_confirmed":false}))
+        saved_view(&mut tx,&raw).await
+    }
+    pub async fn preparation_history(&self,before:Option<&str>)->Result<Value>{
+        if let Some(cursor)=before {check(cursor.len()==20 && cursor.bytes().all(|b|b.is_ascii_digit()),"历史分页标识无效")?;}
+        let _guard=self.gate.lock().await;let mut tx=self.pool.begin().await.map_err(|e|e.to_string())?;
+        let current=latest(&mut tx).await?;let current_hash=current.as_ref().map(|raw|digest(raw.as_bytes()));
+        let rows=sqlx::query("SELECT key,value FROM background_library WHERE key GLOB 'preparation-meta/*' AND (? IS NULL OR key < ?) ORDER BY key DESC LIMIT 21").bind(before).bind(before.map(|v|format!("{META_PREFIX}{v}"))).fetch_all(&mut *tx).await.map_err(|e|e.to_string())?;
+        let more=rows.len()>20;let cursor=rows.get(19).map(|r|r.get::<String,_>("key").strip_prefix(META_PREFIX).map(str::to_owned).ok_or("历史分页无效")).transpose()?;let mut values=vec![];
+        for row in rows.into_iter().take(20){let raw:String=row.get("value");let mut value:Value=serde_json::from_str(&raw).map_err(|_|"版本摘要不可读")?;value["current"]=json!(value["id"].as_str()==current_hash.as_deref());values.push(value);}
+        let legacy=if before.is_none() {if let Some(raw)=&current {
+            let present:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM background_library WHERE key=?)").bind(format!("{VERSION_PREFIX}{}",current_hash.as_ref().unwrap())).fetch_one(&mut *tx).await.map_err(|e|e.to_string())?;
+            if present {Value::Null}else{let mut summary=history_summary(raw,&read_saved(raw)?);summary["current"]=true.into();summary}
+        } else {Value::Null}}else{Value::Null};
+        let bytes=history_size(&mut tx,i64::MAX).await?;
+        Ok(json!({"rows":values,"legacy_current":legacy,"next_before":if more {cursor}else{None},"bytes":bytes,"limit_bytes":HISTORY_LIMIT}))
+    }
+    pub async fn preparation_version_view(&self,id:&str)->Result<Value>{
+        let _guard=self.gate.lock().await;let mut tx=self.pool.begin().await.map_err(|e|e.to_string())?;
+        let raw=version_raw(&mut tx,id).await?;saved_view(&mut tx,&raw).await
+    }
+    pub async fn preparation_version_export(&self,id:&str)->Result<Value>{
+        let _guard=self.gate.lock().await;let mut tx=self.pool.begin().await.map_err(|e|e.to_string())?;
+        // Export for inspection is allowed even when its sources are stale.
+        let raw=version_raw(&mut tx,id).await?;Ok(read_saved(&raw)?["candidate"].clone())
+    }
+    pub async fn preparation_restore(&self,id:&str,version:&str,previous_hash:Option<&str>)->Result<Value>{
+        let _guard=self.gate.lock().await;let mut tx=self.pool.begin().await.map_err(|e|e.to_string())?;
+        let raw=version_raw(&mut tx,id).await?;let saved=read_saved(&raw)?;let current=scope(&mut tx).await?;
+        check(current.export["index_version"]==version,"资料库已变化，请重新查看版本")?;
+        validate(&saved["candidate"],&current)?;
+        let previous=latest(&mut tx).await?;check(previous.as_ref().map(|s|digest(s.as_bytes())).as_deref()==previous_hash,"当前准备已变化，请重新查看版本")?;
+        save_current(&mut tx,&saved["candidate"],&current,previous.as_deref(),Some(id)).await?;
+        let restored=latest(&mut tx).await?.ok_or("恢复版本不存在")?;let view=saved_view(&mut tx,&restored).await?;
+        tx.commit().await.map_err(|e|e.to_string())?;Ok(view)
+    }
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+    #[tokio::test]
+    async fn storage_limit_is_bytes_not_character_count(){
+        let dir=tempfile::tempdir().unwrap();let index=Index::open(&dir.path().join("index.sqlite")).await.unwrap();let mut tx=index.pool.begin().await.unwrap();
+        sqlx::query("INSERT INTO background_library VALUES('preparation-version/test','中文')").execute(&mut *tx).await.unwrap();
+        assert!(history_size(&mut tx,5).await.is_err());assert_eq!(history_size(&mut tx,6).await.unwrap(),6);
+        tx.rollback().await.unwrap();assert!(index.preparation_history(None).await.unwrap()["rows"].as_array().unwrap().is_empty());
     }
 }

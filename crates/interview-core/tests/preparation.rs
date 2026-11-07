@@ -41,6 +41,7 @@ async fn consolidated_cli_roundtrip_retains_originals_and_rejects_silent_loss(){
     assert!(index.preparation_preview(&c).await.is_err());assert_eq!(index.preparation_view().await.unwrap()["source_binding_valid"],false);
 }
 fn rehash(v:&mut Value){v.as_object_mut().unwrap().remove("candidate_hash");v["candidate_hash"]=json!(hash(v));}
+fn renamed(c:&Value,name:&str)->Value{let mut value=c.clone();value["stories"][0]["title"]=name.into();rehash(&mut value);value}
 async fn preview(index:&Index,c:&Value)->Value {index.preparation_preview(c).await.unwrap()}
 async fn save(index:&Index,c:&Value,p:&Value) {index.preparation_save(c,p["index_version"].as_str().unwrap(),p["previous_hash"].as_str()).await.unwrap();}
 
@@ -108,4 +109,61 @@ async fn candidate_validation_rejects_fact_pollution_tampering_and_missing_scope
     for mut x in edits {rehash(&mut x);assert!(index.preparation_preview(&x).await.is_err());}
     let mut x=c.clone();x["candidate_hash"]="0".repeat(64).into();assert!(index.preparation_preview(&x).await.is_err());
     assert!(index.preparation_view().await.unwrap().is_null());assert!(!index.has_manual_assertions().await.unwrap());
+}
+
+#[tokio::test]
+async fn preparation_history_preserves_legacy_and_restore_appends_without_changing_facts(){
+    let dir=tempfile::tempdir().unwrap().keep();let path=dir.join("index.sqlite");let index=Index::open(&path).await.unwrap();apply(&index,&bundle()).await;
+    let first=candidate(&index.preparation_export().await.unwrap(),&dir);let p=preview(&index,&first).await;
+    // Exact pre-history record shape; listing/viewing must not mutate it.
+    let legacy=json!({"candidate":first,"source_names":p["source_names"],"saved_at":"2026-11-01T00:00:00Z","index_version":p["index_version"]}).to_string();
+    sqlx::query("INSERT INTO background_library VALUES('preparation',?)").bind(&legacy).execute(&index.pool).await.unwrap();
+    let old=index.preparation_view().await.unwrap();let list=index.preparation_history(None).await.unwrap();assert_eq!(list["legacy_current"]["id"],old["id"]);assert!(list["rows"].as_array().unwrap().is_empty());
+    let second=renamed(&first,"另一个候选表达");save(&index,&second,&preview(&index,&second).await).await;
+    assert_eq!(index.preparation_history(None).await.unwrap()["rows"].as_array().unwrap().len(),2);
+    let facts=index.fact_card().await.unwrap();let version=index.setting("version").await.unwrap();
+    let selected=index.preparation_version_view(old["id"].as_str().unwrap()).await.unwrap();assert_eq!(selected["current"],false);assert_eq!(selected["source_binding_valid"],true);
+    let restored=index.preparation_restore(selected["id"].as_str().unwrap(),selected["index_version"].as_str().unwrap(),selected["previous_hash"].as_str()).await.unwrap();
+    assert_eq!(restored["candidate"],first);assert_eq!(restored["restored_from"],old["id"]);assert_ne!(restored["id"],old["id"]);
+    let reopened=Index::open(&path).await.unwrap();assert_eq!(reopened.preparation_view().await.unwrap()["id"],restored["id"]);
+    assert_eq!(reopened.preparation_history(None).await.unwrap()["rows"].as_array().unwrap().len(),3);
+    let p=preview(&index,&first).await;save(&index,&first,&p).await;assert_eq!(index.preparation_history(None).await.unwrap()["rows"].as_array().unwrap().len(),3,"duplicate save appended a version");
+    assert_eq!(index.fact_card().await.unwrap().text,facts.text);assert_eq!(index.setting("version").await.unwrap(),version);assert!(index.background_inputs(false).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn preparation_history_restore_rechecks_sources_and_latest_writer(){
+    let dir=tempfile::tempdir().unwrap().keep();let index=Index::open(&dir.join("index.sqlite")).await.unwrap();apply(&index,&bundle()).await;
+    let first=candidate(&index.preparation_export().await.unwrap(),&dir);save(&index,&first,&preview(&index,&first).await).await;let old=index.preparation_view().await.unwrap();
+    let second=renamed(&first,"版本二");save(&index,&second,&preview(&index,&second).await).await;
+    assert!(index.preparation_restore(old["id"].as_str().unwrap(),old["index_version"].as_str().unwrap(),old["previous_hash"].as_str()).await.is_err(),"stale writer overwrote another save");
+    let selected=index.preparation_version_view(old["id"].as_str().unwrap()).await.unwrap();let d=index.documents().await.unwrap().remove(0);
+    index.exclude_source(SourceExclusion{path:d.path,expected_root:d.root,expected_hash:d.hash,excluded:true}).await.unwrap();
+    assert_eq!(index.preparation_version_view(old["id"].as_str().unwrap()).await.unwrap()["source_binding_valid"],false);
+    assert!(index.preparation_restore(old["id"].as_str().unwrap(),selected["index_version"].as_str().unwrap(),selected["previous_hash"].as_str()).await.is_err());
+    assert_eq!(index.preparation_version_export(old["id"].as_str().unwrap()).await.unwrap(),first,"history export should remain possible after withdrawal");
+    assert_eq!(index.preparation_view().await.unwrap()["candidate"],second);
+}
+
+#[tokio::test]
+async fn preparation_history_paginates_without_duplicates_after_new_save(){
+    let dir=tempfile::tempdir().unwrap().keep();let index=Index::open(&dir.join("index.sqlite")).await.unwrap();apply(&index,&bundle()).await;let first=candidate(&index.preparation_export().await.unwrap(),&dir);
+    for i in 0..22 {let c=renamed(&first,&format!("合成版本{i}"));save(&index,&c,&preview(&index,&c).await).await;}
+    let page=index.preparation_history(None).await.unwrap();assert_eq!(page["rows"].as_array().unwrap().len(),20);assert_eq!(page["rows"][0]["current"],true);
+    let c=renamed(&first,"新增版本");save(&index,&c,&preview(&index,&c).await).await;
+    let older=index.preparation_history(page["next_before"].as_str()).await.unwrap();assert_eq!(older["rows"].as_array().unwrap().len(),2);assert!(older["next_before"].is_null());
+    for row in older["rows"].as_array().unwrap(){assert!(!page["rows"].as_array().unwrap().iter().any(|old|old["id"]==row["id"]));}
+    assert!(index.preparation_history(Some("invalid")).await.is_err());
+}
+
+#[tokio::test]
+async fn preparation_history_failed_commit_and_corrupt_archive_preserve_current(){
+    let dir=tempfile::tempdir().unwrap().keep();let index=Index::open(&dir.join("index.sqlite")).await.unwrap();apply(&index,&bundle()).await;let first=candidate(&index.preparation_export().await.unwrap(),&dir);
+    save(&index,&first,&preview(&index,&first).await).await;let current=index.preparation_view().await.unwrap();
+    sqlx::query("CREATE TRIGGER fail_preparation BEFORE INSERT ON background_library WHEN NEW.key='preparation' BEGIN SELECT RAISE(FAIL,'synthetic disk failure'); END").execute(&index.pool).await.unwrap();
+    let second=renamed(&first,"未保存版本");assert!(index.preparation_save(&second,current["index_version"].as_str().unwrap(),current["previous_hash"].as_str()).await.is_err());
+    assert_eq!(index.preparation_view().await.unwrap()["id"],current["id"]);assert_eq!(index.preparation_history(None).await.unwrap()["rows"].as_array().unwrap().len(),1);
+    sqlx::query("UPDATE background_library SET value='{}' WHERE key=?").bind(format!("preparation-version/{}",current["id"].as_str().unwrap())).execute(&index.pool).await.unwrap();
+    assert!(index.preparation_version_view(current["id"].as_str().unwrap()).await.is_err());assert!(index.preparation_version_export(current["id"].as_str().unwrap()).await.is_err());
+    assert_eq!(index.preparation_view().await.unwrap()["candidate"],first);
 }
