@@ -2,9 +2,9 @@ name: Windows native video source
 on:
   push:
     branches: [feat/windows-eye-local-20261106, feat/windows-eye-output-20261107]
-    paths: ['video/windows/**', 'video/eye/**', 'crates/video-worker-control/**', 'Cargo.lock', '.github/workflows/video-source-checks.yml']
+    paths: ['video/windows/**', 'video/eye/**', 'audio/windows/**', 'crates/video-worker-control/**', 'Cargo.lock', '.github/workflows/video-source-checks.yml']
   pull_request:
-    paths: ['video/windows/**', 'video/eye/**', 'crates/video-worker-control/**', 'Cargo.lock', '.github/workflows/video-source-checks.yml']
+    paths: ['video/windows/**', 'video/eye/**', 'audio/windows/**', 'crates/video-worker-control/**', 'Cargo.lock', '.github/workflows/video-source-checks.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -30,6 +30,14 @@ jobs:
           cmake --build "$env:RUNNER_TEMP/eye-worker-build" --config Release --parallel 2
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           ctest --test-dir "$env:RUNNER_TEMP/eye-worker-build" -C Release --output-on-failure
+      - name: Build audio adapter and test without streams
+        run: |
+          cmake -S audio/windows -B "$env:RUNNER_TEMP/audio-output-build" -A x64
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build "$env:RUNNER_TEMP/audio-output-build" --config Release --parallel 2
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ctest --test-dir "$env:RUNNER_TEMP/audio-output-build" -C Release --output-on-failure
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.99.1
@@ -74,5 +82,9 @@ jobs:
             ${{ runner.temp }}/video-source-build/Testing/Temporary/LastTest.log
             video/windows/LICENSE-Microsoft.txt
             video/windows/THIRD-PARTY.md
+            ${{ runner.temp }}/audio-output-build/Release/tingxian-audio-output.lib
+            ${{ runner.temp }}/audio-output-build/Release/tingxian-audio-output-test.exe
+            ${{ runner.temp }}/audio-output-build/Release/tingxian-audio-probe.exe
+            ${{ runner.temp }}/audio-output-build/Testing/Temporary/LastTest.log
           if-no-files-found: error
           retention-days: 14
