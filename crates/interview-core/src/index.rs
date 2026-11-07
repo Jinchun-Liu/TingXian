@@ -113,6 +113,7 @@ impl Index {
         Ok(sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key=?").bind(key).fetch_optional(&self.pool).await.map_err(|e|e.to_string())?.unwrap_or_default())
     }
     pub async fn set(&self, key: &str, value: &str) -> Result<()> {
+        if key=="aliases" {return self.set_aliases(value,None).await;}
         if key=="facts" {return Err("事实卡须通过明确确认的更正入口保存，不能直接覆盖".into());}
         sqlx::query("INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)").bind(key).bind(value).execute(&self.pool).await.map_err(|e|e.to_string())?;
         Ok(())

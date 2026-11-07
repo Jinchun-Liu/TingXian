@@ -1,4 +1,5 @@
 'use client';
+import {AliasSettings} from '@/components/interview/AliasSettings';
 
 import {LiveTranscription} from '@/components/interview/LiveTranscription';
 import {useInterviewRecovery} from '@/lib/use-interview-recovery';
@@ -96,7 +97,6 @@ export default function InterviewPage() {
   const [filter, setFilter] = useState('');
   const [selected, setSelected] = useState<Record<string, Choice>>({});
   const incompleteStructured = Object.values(selected).some(s => isStructuredPath(s.path) && !s.structured?.pointers.length);
-  const [aliases, setAliases] = useState('');
   const [key, setKey] = useState('');
   const [history, setHistory] = useState<Turn[]>([]);
   const historyRef = useRef<Turn[]>([]);
@@ -180,7 +180,7 @@ export default function InterviewPage() {
 
   const refresh = useCallback(async () => {
     const s = await invoke<Status>('interview_status');
-    setStatus(s); setRoot(current => current || s.root || s.suggested_root || ""); setAliases(s.aliases);
+    setStatus(s); setRoot(current => current || s.root || s.suggested_root || "");
   }, []);
   const refreshDocuments = useCallback(async () => {
     // Reviewing a document must not overwrite unsaved facts, aliases or the
@@ -696,9 +696,9 @@ export default function InterviewPage() {
         const next=await invoke<FactCard>('profile_facts_correct',{update});
         setStatus(current=>current?{...current,facts:next.text,fact_card:next}:current);setNotice(`事实卡 v${next.version} 已确认保存，旧值与来源保留。`);return next;
       }} />}
-      <label className="block text-sm">术语别名（每行一组，英文逗号分隔）<textarea className="w-full border rounded p-2 mt-1 h-28 text-sm" value={aliases} onChange={e => setAliases(e.target.value)} /></label>
+      <AliasSettings locked={busy || !!status?.session_active || recording.isRecording || generating} sourceRevision={status?.index_version} />
       <RequestSettings locked={busy || !!status?.session_active || recording.isRecording || generating} onSaved={config=>{setStatus(s=>s?{...s,model:config.model}:s);setConnectionRevision(r=>r+1);}} />
-      <div className="flex gap-2"><Input type="password" aria-label="临时 API Key" autoComplete="off" value={key} onChange={e => setKey(e.target.value)} placeholder="替换本进程 API Key（不回显、不写入前端存储）" /><Button disabled={busy || status?.session_active} onClick={() => run(async () => { await invoke('interview_config', { aliases, key: key || null }); setKey(''); setConnectionRevision(r=>r+1); await refresh(); })}>保存配置</Button><button type="button" onClick={()=>sendCommand('audio')}>音频设置</button></div>
+      <div className="flex gap-2"><Input type="password" aria-label="临时 API Key" autoComplete="off" value={key} onChange={e => setKey(e.target.value)} placeholder="替换本进程 API Key（不回显、不写入前端存储）" /><Button disabled={busy || status?.session_active} onClick={() => run(async () => { await invoke('interview_config', { key: key || null }); setKey(''); setConnectionRevision(r=>r+1); await refresh(); })}>保存配置</Button><button type="button" onClick={()=>sendCommand('audio')}>音频设置</button></div>
     </section>}
     {savedSessions !== null && <section className="shrink-0 max-h-[35vh] overflow-y-auto border rounded-lg p-4 text-sm space-y-2"><header className="tx-section-head"><h2>会议记录</h2><Button variant="ghost" size="sm" onClick={()=>setSavedSessions(null)}>返回对话</Button></header>{(history.length>0 || question || confirmedAnswer) && <label className="block"><input type="checkbox" disabled={busy || recording.isRecording || generating} checked={allowReplaceSession} onChange={e=>setAllowReplaceSession(e.target.checked)} /> 我已保存需要的内容，允许替换当前显示（未保存内容会丢失）</label>}{!savedSessions.length && <p>暂无已保存会话</p>}{savedSessions.map(s=><div key={s.id} className="tx-history-row"><span>{new Date(s.saved_at).toLocaleString('zh-CN')} · {s.turns} 条发言 · {s.calls} 次调用</span><Button size="sm" variant="outline" disabled={busy || recording.isRecording || generating || (!!(history.length || question || confirmedAnswer) && !allowReplaceSession)} onClick={()=>restoreSession(s.id)}>恢复这份会话</Button><SavedSessionPreview id={s.id}/></div>)}{savedBefore!==null && <Button variant="outline" disabled={busy} onClick={()=>listSessions(true)}>更早的保存记录</Button>}<RecoveryDrafts drafts={draftRecovery.drafts} disabled={busy || recording.isRecording || generating || (!!(history.length || question || confirmedAnswer) && !allowReplaceSession)} onRestore={id=>void restoreSession(id)}/><PreviousMeetings initialId={initialMeetingId}/></section>}
     <section aria-label="转写与对话" className="flex min-h-0 flex-1 flex-col rounded-xl border bg-white overflow-hidden">

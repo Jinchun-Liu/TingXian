@@ -170,16 +170,10 @@ impl Index {
             sqlx::query("INSERT INTO chunks VALUES(?,?,?,?)").bind(&id).bind(path).bind(format!("模型整理 {}",i+1)).bind(&text).execute(&mut *tx).await.map_err(|e|e.to_string())?;
             sqlx::query("INSERT INTO search VALUES(?,?)").bind(&id).bind(self.tokens(&text).join(" ")).execute(&mut *tx).await.map_err(|e|e.to_string())?;
         }
-        if merge_terms && !bundle.profile.aliases.trim().is_empty(){
-            let old:Option<String>=sqlx::query_scalar("SELECT value FROM settings WHERE key='aliases'").fetch_optional(&mut *tx).await.map_err(|e|e.to_string())?;
-            let mut lines=old.as_deref().filter(|s|!s.is_empty()).unwrap_or(crate::DEFAULT_ALIASES).lines().collect::<Vec<_>>();
-            for line in bundle.profile.aliases.lines().map(str::trim).filter(|s|!s.is_empty()){if !lines.contains(&line){lines.push(line)}}
-            let aliases=lines.join("\n"); if aliases.chars().count()>4000{return Err("合并后术语超过 4000 字，请先精简".into())}
-            sqlx::query("INSERT OR REPLACE INTO settings VALUES('aliases',?)").bind(aliases).execute(&mut *tx).await.map_err(|e|e.to_string())?;
-        }
         crate::background_dependencies::publish(&mut tx,bundle,observed).await?;
         sqlx::query("INSERT OR REPLACE INTO background_library VALUES('profile',?)").bind(json!({"profile":bundle.profile,"share":share,"metrics":metrics,"settings":bundle.settings}).to_string()).execute(&mut *tx).await.map_err(|e|e.to_string())?;
         sqlx::query("UPDATE settings SET value=CAST(value AS INTEGER)+1 WHERE key='version'").execute(&mut *tx).await.map_err(|e|e.to_string())?;
+        if merge_terms && !bundle.profile.aliases.trim().is_empty(){crate::alias_sources::merge(&mut tx,&bundle.profile.aliases).await?;}
         tx.commit().await.map_err(|e|e.to_string())
     }
     pub async fn background_role(&self)->Result<Option<String>>{

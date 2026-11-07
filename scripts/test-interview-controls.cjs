@@ -30,6 +30,7 @@ let native = { recording: false, enabled: false, epoch: 0 }, failClear = false, 
 const invoke = async (name, args) => {
   calls.push({ name, args });
   if(name.startsWith('interview_recovery_'))return recoveryNative(name,args);
+  if(name==='interview_aliases_state')return {aliases:'kept aliases',blocked_lines:[]};
   if(name==='interview_preferences_save'){scene=args.preferences.scenario;return {...args.preferences};}
   if(name==='interview_preferences_get')return {scenario:scene,role:'',organization:'',context:'',terminology:'',answer_language:'auto',transcription_language:'auto'};
   if(name==='interview_preferences_state')return {preferences:{scenario:scene,role:'',organization:'',context:'',terminology:'',answer_language:'auto',transcription_language:'auto'},blocked_fields:[]};
@@ -52,7 +53,7 @@ const invoke = async (name, args) => {
   }
 
   if (name === 'rag_search') {assert.ok(args.question);return {evidence:[],conflicts:[conflict]};}
-  if (name === 'interview_config') {assert.equal(Object.hasOwn(args,'facts'),false,'ordinary config must not submit or confirm a fact draft');return;}
+  if (name === 'interview_config') {assert.equal(Object.hasOwn(args,'aliases'),false,'key save must not overwrite alias edits');assert.equal(Object.hasOwn(args,'facts'),false,'ordinary config must not submit or confirm a fact draft');return;}
   if(name==='api_get_meetings')return [];
   if (name === 'interview_status') return { cloud_asr_mode:asrMode,preferences:{scenario:scene}, root:'', suggested_root:'', model:requestConfig.model, aliases:'kept aliases', facts:'kept confirmed fact', key_configured:configuredKey, index_version:indexDocuments ? '1' : '2', index_documents:indexDocuments, index_chunks:indexDocuments ? 3 : 0, session_active:false };
   if (name === 'interview_audio_start') {
@@ -161,8 +162,10 @@ function text(node) { return typeof node === 'string' ? node : (node?.children||
   await click('刷新已导入资料');
   assert.equal(tree.root.findByProps({'aria-label':'资料根目录'}).props.value,'/synthetic/next-import','review refresh must not retarget the next import');
   assert.equal(tree.root.findByProps({placeholder:'只填写本人核对过的事实与来源，不粘贴 AI 建议。'}).props.value,'unsaved fact draft','review refresh must not overwrite unsaved facts');
+  await act(async()=>tree.root.findByProps({'aria-label':'术语别名'}).props.onChange({target:{value:'未保存别名,alias'}}));
   await click('保存配置');
   assert.equal(tree.root.findByProps({placeholder:'只填写本人核对过的事实与来源，不粘贴 AI 建议。'}).props.value,'unsaved fact draft','saving aliases/key must leave the unsaved fact draft alone');
+  assert.equal(tree.root.findByProps({'aria-label':'术语别名'}).props.value,'未保存别名,alias','key save and status refresh must preserve the alias draft');
   await click('资料与设置');
   await act(async()=>tree.root.findByProps({id:'question'}).props.onChange({target:{value:'本科毕业时间'}}));
   await click('本地检索');

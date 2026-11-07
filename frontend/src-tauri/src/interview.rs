@@ -124,6 +124,29 @@ pub async fn interview_preferences_get<R:tauri::Runtime>(app:tauri::AppHandle<R>
     state.index(&app).await?.preferences().await
 }
 #[tauri::command]
+pub async fn interview_aliases_state<R:tauri::Runtime>(window:tauri::WebviewWindow<R>,app:tauri::AppHandle<R>,state:State<'_,InterviewState>)->Result<interview_core::alias_sources::AliasState,String> {
+    if window.label()!="main" {return Err("请在主窗口查看别名".into());}
+    state.index(&app).await?.alias_state().await
+}
+#[tauri::command]
+pub async fn interview_aliases_save<R:tauri::Runtime>(window:tauri::WebviewWindow<R>,app:tauri::AppHandle<R>,state:State<'_,InterviewState>,aliases:String,expected:String)->Result<(),String> {
+    if window.label()!="main" {return Err("请在主窗口修改别名".into());}
+    crate::interview_exit::ensure_not_exiting(&app)?;
+    let _guard=state.lifecycle.try_lock().map_err(|_|"请先完成或取消当前操作")?;
+    if state.session.load(Ordering::SeqCst)||crate::audio::recording_commands::is_recording().await {return Err("请结束当前会话后修改别名".into());}
+    crate::interview_exit::ensure_not_exiting(&app)?;
+    state.index(&app).await?.set_aliases(&aliases,Some(&expected)).await
+}
+#[tauri::command]
+pub async fn interview_aliases_manual<R:tauri::Runtime>(window:tauri::WebviewWindow<R>,app:tauri::AppHandle<R>,state:State<'_,InterviewState>,lines:Vec<String>,expected:String)->Result<(),String> {
+    if window.label()!="main" {return Err("请在主窗口核对别名".into());}
+    crate::interview_exit::ensure_not_exiting(&app)?;
+    let _guard=state.lifecycle.try_lock().map_err(|_|"请先完成或取消当前操作")?;
+    if state.session.load(Ordering::SeqCst)||crate::audio::recording_commands::is_recording().await {return Err("请结束当前会话后核对别名".into());}
+    crate::interview_exit::ensure_not_exiting(&app)?;
+    state.index(&app).await?.confirm_manual_aliases(&lines,&expected).await
+}
+#[tauri::command]
 pub async fn interview_preferences_state<R:tauri::Runtime>(window:tauri::WebviewWindow<R>,app:tauri::AppHandle<R>,state:State<'_,InterviewState>)->Result<interview_core::preference_sources::PreferenceState,String> {
     if window.label()!="main" {return Err("请在主窗口查看设置来源".into());}
     state.index(&app).await?.preference_state().await
@@ -206,14 +229,14 @@ pub async fn interview_request_config_save<R:tauri::Runtime>(app:tauri::AppHandl
     state.index(&app).await?.set_request_config(&config).await?;state.connection.invalidate();Ok(config)
 }
 #[tauri::command]
-pub async fn interview_config<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,facts:Option<String>,aliases:String,key:Option<String>)->Result<(),String> {
-    if aliases.chars().count()>4000 {return Err("别名过长".into());}
-    if interview_core::contains_credential(&aliases) {return Err("别名含API凭证格式，未保存；请将凭证放入专用API Key输入框".into());}
+pub async fn interview_config<R:tauri::Runtime>(app:tauri::AppHandle<R>,window:tauri::WebviewWindow<R>,state:State<'_,InterviewState>,facts:Option<String>,aliases:Option<String>,key:Option<String>)->Result<(),String> {
+    if window.label()!="main" {return Err("请在主窗口修改配置".into());}
+    crate::interview_exit::ensure_not_exiting(&app)?;
     let _guard=state.lifecycle.try_lock().map_err(|_|"请先完成或取消当前资料操作")?;
     if state.session.load(Ordering::SeqCst){return Err("请结束本次会话后修改资料配置".into());}
     let index=state.index(&app).await?;
     if let Some(text)=facts {if text!=index.fact_card().await?.text {return Err("请使用事实更正入口核对来源并确认，普通配置不会覆盖事实卡".into());}}
-    index.set("aliases",&aliases).await?;
+    if let Some(aliases)=aliases {index.set_aliases(&aliases,None).await?;}
     if let Some(key)=key {if !key.trim().is_empty(){*state.key.lock().await=Some(key.trim().into());state.connection.invalidate();}}
     Ok(())
 }
@@ -523,7 +546,7 @@ mod import_command_tests {
         tauri::async_runtime::block_on(index.set("aliases","original alias")).unwrap();assert!(state.index.set(index).is_ok());let lifecycle=state.lifecycle.clone();
         let app=tauri::test::mock_builder().manage(state).invoke_handler(tauri::generate_handler![profile_facts_correct,profile_facts_current,profile_facts_history,interview_config])
             .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
-        let webview=tauri::WebviewWindowBuilder::new(&app,"test",Default::default()).build().unwrap();
+        let webview=tauri::WebviewWindowBuilder::new(&app,"main",Default::default()).build().unwrap();
         let invoke=|cmd:&str,body:Value|tauri::test::get_ipc_response(&webview,tauri::webview::InvokeRequest {cmd:cmd.into(),callback:tauri::ipc::CallbackFn(0),error:tauri::ipc::CallbackFn(1),url:"tauri://localhost".parse().unwrap(),body:tauri::ipc::InvokeBody::Json(body),headers:Default::default(),invoke_key:tauri::test::INVOKE_KEY.to_string()});
         let update=json!({"update":{"expected_version":0,"text":"synthetic checked fact","source_note":"Synthetic self attestation","sources":[],"reason":"Synthetic correction","confirmed":true}});
         let guard=tauri::async_runtime::block_on(lifecycle.lock_owned());assert!(invoke("profile_facts_correct",update.clone()).is_err());drop(guard);
@@ -630,7 +653,7 @@ mod import_command_tests {
 pub async fn rag_search<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>,question:String)->Result<interview_core::RetrievalReview,String> {
     if question.chars().count()>1500 {return Err("问题超过 1500 字符".into());}
     let _guard=state.lifecycle.try_lock().map_err(|_|"请先完成或取消当前资料操作")?;
-    let index=state.index(&app).await?;let aliases=index.setting("aliases").await?;
+    let index=state.index(&app).await?;let aliases=index.request_aliases().await?;
     let facts=index.fact_card().await?;
     index.search_review(&question,if aliases.is_empty(){DEFAULT_ALIASES}else{&aliases},Some(&facts)).await
 }
@@ -681,7 +704,7 @@ async fn start_answer(app:tauri::AppHandle,state:&InterviewState,question_id:Str
             let screenshot=if let Some(display_id)=screenshot {Some(crate::interview_screenshot::capture(display_id,cancel.clone()).await?)}else{None};
             if cancel.is_cancelled(){return Err("已取消".to_string());}
             let started=std::time::Instant::now();
-            let aliases=index.setting("aliases").await?;
+            let aliases=index.request_aliases().await?;
             let facts=index.request_fact_card().await?;
             let review=index.search_review(&question,if aliases.is_empty(){DEFAULT_ALIASES}else{&aliases},Some(&facts)).await?;
             let evidence=review.evidence;
@@ -756,6 +779,36 @@ mod source_withdrawal_tests {
         let guard=tauri::async_runtime::block_on(state.lifecycle.clone().lock_owned());assert!(invoke(&main,"interview_preferences_manual",body.clone()).is_err());drop(guard);
         assert!(invoke(&main,"interview_preferences_manual",json!({"fields":[{"field":"context","expected":"旧值"}]})).is_err());
         let result=invoke(&main,"interview_preferences_manual",body).unwrap().deserialize::<Value>().unwrap();assert_eq!(result["blocked_fields"],json!([]));assert_eq!(result["preferences"]["context"],"需核对的虚构背景");
+    }
+    #[test]
+    fn alias_ipc_checks_window_session_lifecycle_and_expected_editor_value() {
+        let root=std::env::temp_dir().join(format!("tingxian-alias-review-{}",uuid::Uuid::new_v4()));std::fs::create_dir(&root).unwrap();
+        let index=tauri::async_runtime::block_on(Index::open(&root.join("synthetic.sqlite"))).unwrap();
+        tauri::async_runtime::block_on(async {
+            index.set("aliases","企业,契约").await.unwrap();
+            index.set("alias_sources",&json!({"format":"alias-sources-v1","lines":{(interview_core::digest("企业,契约".as_bytes())):"missing"},"snapshots":{}}).to_string()).await.unwrap();
+        });
+        let state=InterviewState::default();assert!(state.index.set(index).is_ok());
+        let app=tauri::test::mock_builder().manage(state).manage(crate::interview_exit::ExitState::default())
+            .invoke_handler(tauri::generate_handler![interview_aliases_state,interview_aliases_save,interview_aliases_manual,interview_config])
+            .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let main=tauri::WebviewWindowBuilder::new(&app,"main",Default::default()).build().unwrap();
+        let display=tauri::WebviewWindowBuilder::new(&app,"display",Default::default()).build().unwrap();
+        let invoke=|window:&tauri::WebviewWindow<tauri::test::MockRuntime>,cmd:&str,body:Value|tauri::test::get_ipc_response(window,tauri::webview::InvokeRequest {cmd:cmd.into(),callback:tauri::ipc::CallbackFn(0),error:tauri::ipc::CallbackFn(1),url:"tauri://localhost".parse().unwrap(),body:tauri::ipc::InvokeBody::Json(body),headers:Default::default(),invoke_key:tauri::test::INVOKE_KEY.to_string()});
+        let save=json!({"aliases":"企业,契约\n本人,manual","expected":"企业,契约"});let manual=json!({"lines":["企业,契约"],"expected":"企业,契约"});
+        for (cmd,body) in [("interview_aliases_state",json!({})),("interview_aliases_save",save.clone()),("interview_aliases_manual",manual.clone()),("interview_config",json!({"aliases":"bypass"}))] {assert!(invoke(&display,cmd,body).is_err());}
+        let view=invoke(&main,"interview_aliases_state",json!({})).unwrap().deserialize::<Value>().unwrap();assert_eq!(view["blocked_lines"],json!(["企业,契约"]));
+        let state=app.state::<InterviewState>();
+        state.session.store(true,Ordering::SeqCst);
+        assert!(invoke(&main,"interview_aliases_save",save.clone()).is_err());assert!(invoke(&main,"interview_aliases_manual",manual.clone()).is_err());
+        state.session.store(false,Ordering::SeqCst);
+        let guard=tauri::async_runtime::block_on(state.lifecycle.clone().lock_owned());assert!(invoke(&main,"interview_aliases_save",save.clone()).is_err());assert!(invoke(&main,"interview_aliases_manual",manual.clone()).is_err());drop(guard);
+        assert!(invoke(&main,"interview_aliases_save",json!({"aliases":"stale","expected":"old"})).is_err());
+        assert!(invoke(&main,"interview_config",json!({"key":null})).is_ok());
+        assert_eq!(invoke(&main,"interview_aliases_state",json!({})).unwrap().deserialize::<Value>().unwrap()["aliases"],"企业,契约");
+        assert!(invoke(&main,"interview_aliases_save",save).is_ok());assert!(invoke(&main,"interview_aliases_manual",manual).is_err());
+        assert!(invoke(&main,"interview_aliases_manual",json!({"lines":["企业,契约"],"expected":"企业,契约\n本人,manual"})).is_ok());
+        assert_eq!(invoke(&main,"interview_aliases_state",json!({})).unwrap().deserialize::<Value>().unwrap()["blocked_lines"],json!([]));
     }
     #[tokio::test]
     async fn source_withdrawal_interrupts_background_before_waiting_for_its_lifecycle_lock(){

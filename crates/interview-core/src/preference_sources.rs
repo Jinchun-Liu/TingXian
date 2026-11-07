@@ -68,7 +68,7 @@ async fn write(tx:&mut Tx<'_>,mut lineage:Lineage)->Result<()> {
     sqlx::query("INSERT OR REPLACE INTO settings VALUES(?,?)").bind(KEY).bind(value)
         .execute(&mut **tx).await.map_err(|e|e.to_string())?;Ok(())
 }
-pub(crate) async fn bind(tx:&mut Tx<'_>,changes:&[Change])->Result<()> {
+pub(crate) async fn capture(tx:&mut Tx<'_>)->Result<Value> {
     let raw:Option<String>=sqlx::query_scalar("SELECT value FROM background_library WHERE key='profile_dependencies'")
         .fetch_optional(&mut **tx).await.map_err(|e|e.to_string())?;
     let snapshot=match raw {
@@ -78,6 +78,10 @@ pub(crate) async fn bind(tx:&mut Tx<'_>,changes:&[Change])->Result<()> {
             .fetch_one(&mut **tx).await.map_err(|e|e.to_string())?;
             json!({"format":"legacy-settings-source-v1","library_version":version})},
     };
+    Ok(snapshot)
+}
+pub(crate) async fn bind(tx:&mut Tx<'_>,changes:&[Change])->Result<()> {
+    let snapshot=capture(tx).await?;
     let key=crate::digest(snapshot.to_string().as_bytes());
     let mut lineage=read(tx).await?;
     lineage.snapshots.insert(key.clone(),snapshot);
@@ -87,7 +91,7 @@ pub(crate) async fn bind(tx:&mut Tx<'_>,changes:&[Change])->Result<()> {
     }
     write(tx,lineage).await
 }
-async fn current(tx:&mut Tx<'_>,snapshot:&Value)->Result<bool> {
+pub(crate) async fn current(tx:&mut Tx<'_>,snapshot:&Value)->Result<bool> {
     if snapshot["format"]=="legacy-settings-source-v1" {
         let sql=format!("SELECT value=? AND NOT {} FROM settings WHERE key='version'",crate::background_dependencies::legacy_invalid_sql());
         return sqlx::query_scalar(&sql).bind(snapshot["library_version"].as_str().unwrap_or("invalid"))

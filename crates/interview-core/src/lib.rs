@@ -43,3 +43,5 @@ pub mod assertions;
 pub mod background_dependencies;
 
 pub mod preference_sources;
+
+pub mod alias_sources;
