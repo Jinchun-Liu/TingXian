@@ -655,7 +655,7 @@ async fn start_answer(app:tauri::AppHandle,state:&InterviewState,question_id:Str
             }
             if answer_first {
                 let system=messages[0]["content"].as_str().unwrap_or_default();
-                messages[0]["content"]=json!(format!("{system}\n本工作区输出格式优先：先直接回答，再单独一行输出 <<<QUESTION>>>，随后输出完整纠正问题，保留所有条件和子问题。"));
+                messages[0]["content"]=json!(format!("{system}\n{}",interview_core::ANSWER_FIRST_RULES));
             }
             if !meeting_instruction.is_empty() {
                 let system=messages[0]["content"].as_str().unwrap_or_default();

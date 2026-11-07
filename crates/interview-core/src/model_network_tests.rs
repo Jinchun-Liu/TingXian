@@ -45,6 +45,23 @@ fn warnings(events:&[StreamEvent])->usize {events.iter().filter(|e|matches!(e,St
 fn completed(events:&[StreamEvent])->bool {events.iter().any(|e|matches!(e,StreamEvent::Done{..}))}
 
 #[tokio::test]
+async fn abnormal_finish_never_becomes_success_and_final_usage_survives(){
+    for reason in [json!("aborted"),json!("insufficient_system_resource"),json!("content_filter"),json!("tool_calls"),json!("function_call"),json!("future_unknown_reason"),json!(false),json!(42),json!({"unexpected":"stop"})] {
+        let end=format!("data: {}\n\n",json!({"choices":[{"finish_reason":reason}]}));
+        // Some compatible endpoints send a final stop/usage frame afterwards.
+        let usage=format!("data: {}\n\n",json!({"choices":[{"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":6,"total_tokens":16}}));
+        let server=serve(vec![ok(vec![(0,delta("建议回答：仅生成了第一个条件。")),(0,end),(0,usage),(0,done())])]).await;
+        let (result,events)=run(&server,CancellationToken::new()).await;
+        assert!(result.is_err(),"{reason} was accepted as complete");assert!(!completed(&events));assert_eq!(attempts(&events),1);
+        assert!(events.iter().any(|e|matches!(e,StreamEvent::Delta{text} if text.contains("第一个条件"))));
+        assert!(events.iter().any(|e|matches!(e,StreamEvent::Usage{usage,..} if usage["total_tokens"]==16)));
+    }
+    let end=format!("data: {}\n\n",json!({"choices":[{"finish_reason":"stop"}],"usage":{"total_tokens":16}}));
+    let server=serve(vec![ok(vec![(0,delta("建议回答：完整答案。")),(0,end),(0,done())])]).await;
+    let (result,events)=run(&server,CancellationToken::new()).await;assert!(result.is_ok());assert!(completed(&events));
+}
+
+#[tokio::test]
 async fn unsupported_capabilities_block_before_transport_and_usage_absence_stays_unknown(){
     use crate::{CapabilitySupport as S,ModelCapabilities};
     let server=serve(vec![ok(vec![(0,delta("建议回答：合成结果")),(0,done())])]).await;

@@ -22,6 +22,7 @@ pub const ANSWER_STYLE: &str = r#"自适应回答规则：以下字数以中文�
 // A ceiling, not a target: the prompt keeps simple answers short while leaving
 // room for a complete multi-part answer. Existing timeout/cancel rules still apply.
 pub const MAX_ANSWER_TOKENS: u32 = 4096;
+pub const ANSWER_FIRST_RULES:&str="本工作区输出格式优先：先直接回答，再单独一行输出 <<<QUESTION>>>，随后输出完整纠正问题，保留所有条件和子问题。";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Turn { pub question: String, pub confirmed_answer: Option<String>, #[serde(default)] pub suggested_answer: Option<String> }
@@ -168,14 +169,14 @@ where F:FnMut(StreamEvent)+Send {
                     _=>format!("模型服务返回 HTTP {}；请检查网络、模型参数或服务状态",status.as_u16()),
                 });
             }
-            let mut stream=response.bytes_stream();let mut decoder=SseDecoder::default();let mut usage=None;let mut truncated=false;let mut answer=String::new();
+            let mut stream=response.bytes_stream();let mut decoder=SseDecoder::default();let mut usage=None;let mut incomplete=None;let mut answer=String::new();
             loop {
                 let item=stream.next().await;
                 let Some(item)=item else {return Err("流意外结束，已保留部分答案；未标记完成".into());};
                 let bytes=item.map_err(|_|"流中断，已保留部分答案；请手动重试")?;
                 for data in decoder.push(&bytes)? {
                     if data=="[DONE]" {
-                        if truncated {return Err("输出达到长度限制，已保留部分答案；未标记完整完成".into());}
+                        if let Some(reason)=incomplete {return Err(reason);}
                         if !has_response_body(&answer) {return Err("未检测到建议正文，已保留返回文字；未标记完成".into());}
                         emit(StreamEvent::Done{usage,elapsed_ms:start.elapsed().as_millis(),first_text_ms:first});return Ok(());
                     }
@@ -185,7 +186,22 @@ where F:FnMut(StreamEvent)+Send {
                         emit(StreamEvent::Usage{attempt:attempt+1,usage:value["usage"].clone()});
                     }
                     if value.get("error").is_some() {return Err("服务在流中返回错误".into());}
-                    if value["choices"][0]["finish_reason"] == "length" {truncated=true;}
+                    let finish=&value["choices"][0]["finish_reason"];
+                    if !finish.is_null() {
+                        let reason=finish.as_str().unwrap_or("invalid_type");
+                        let message=match reason {
+                            "stop"=>None,
+                            "length"=>Some("输出达到长度限制，已保留部分答案；未标记完整完成"),
+                            "content_filter"=>Some("服务商内容限制中止了回答，已保留返回文字；未标记完整完成"),
+                            "tool_calls"|"function_call"=>Some("服务商返回了工具请求，本应用未执行；已保留返回文字，未标记完整完成"),
+                            "insufficient_system_resource"=>Some("服务商资源不足中止了回答，已保留部分答案；请稍后手动重试"),
+                            "aborted"=>Some("服务商中止了回答，已保留部分答案；未标记完整完成"),
+                            _=>Some("服务商返回未识别的结束状态，已保留返回文字；未标记完整完成"),
+                        };
+                        // Once interrupted, a later stop frame cannot turn the same
+                        // response into success. Continue to collect final usage.
+                        if let Some(message)=message {incomplete.get_or_insert_with(||message.to_string());}
+                    }
                     if let Some(text)=value["choices"][0]["delta"]["content"].as_str() {
                         if !text.trim().is_empty() && first.is_none() {first=Some(start.elapsed().as_millis());}
                         if answer.len()+text.len()>64*1024 {return Err("返回文字超过64 KiB，已保留接收到的部分；未标记完成".into());}
