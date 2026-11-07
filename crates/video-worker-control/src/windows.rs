@@ -179,7 +179,7 @@ fn launch(worker: &BundledWorker, signal: &Signal, work: &Work, generation: u64)
         Work::Inspect => format!("--inspect-v1 {} {}", owner.0 as usize, event.0 as usize),
         Work::Eye(job) => format!("--eye-offline-v1 {} {} {} {} {} {} {} {} {}", owner.0 as usize, event.0 as usize,
             writer.0 as usize, eye_handles[0].0 as usize, eye_handles[1].0 as usize, job.width, job.height, job.frames, generation),
-        Work::Stream(_) => format!("--eye-stream-v1 {} {} {} {} 1280 720 {}",owner.0 as usize,event.0 as usize,
+        Work::Stream(job) => format!("--eye-stream-v{} {} {} {} {} 1280 720 {}",job.shared.protocol.input(),owner.0 as usize,event.0 as usize,
             writer.0 as usize,stream_reader.as_ref().unwrap().0 as usize,generation),
     };
     let mut command: Vec<u16> = format!("\"{}\" {}", worker.path.display(), args).encode_utf16().chain(Some(0)).collect();

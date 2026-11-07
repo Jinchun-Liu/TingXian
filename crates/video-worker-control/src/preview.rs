@@ -32,10 +32,10 @@ impl Default for PreviewStatus {
     fn default()->Self {Self{phase:PreviewPhase::Waiting,reason:None,received:0,rejected:0,
         replaced:0,discarded:0,expired:0,presented:0,repeated:0,neutral:0}}
 }
-struct Handle(HANDLE);
+pub(crate) struct Handle(pub(crate) HANDLE);
 unsafe impl Send for Handle {}
 impl Drop for Handle {fn drop(&mut self){unsafe{CloseHandle(self.0);}}}
-fn handle(raw:HANDLE)->Result<Handle,Reason> {
+pub(crate) fn handle(raw:HANDLE)->Result<Handle,Reason> {
     if raw.is_null()||raw==INVALID_HANDLE_VALUE{Err(Reason::EyeOutput)}else{Ok(Handle(raw))}
 }
 #[derive(Clone,Copy)]
@@ -51,7 +51,7 @@ impl Header {
 
 // Stack OVERLAPPED and its buffer stay alive until completion, including after
 // cancellation. A cancellation request alone never proves I/O retirement.
-fn transfer(pipe:&Handle,write:bool,bytes:&mut [u8],lease:&Shared,deadline:Instant)->Result<(),Reason> {
+pub(crate) fn transfer(pipe:&Handle,write:bool,bytes:&mut [u8],lease:&Shared,deadline:Instant)->Result<(),Reason> {
     let event=handle(unsafe{CreateEventW(null(),1,0,null())})?;
     let mut done=0;
     while done<bytes.len() {
@@ -83,6 +83,32 @@ fn transfer(pipe:&Handle,write:bool,bytes:&mut [u8],lease:&Shared,deadline:Insta
     if lease.closed(){Err(Reason::Abandoned)}else{Ok(())}
 }
 
+/// Shared authenticated native pipe transport. v3 is a corrected-frame reader,
+/// never MF activation or a legacy preview with relabelled timestamps.
+pub(crate) fn connect_native(endpoint:&NativeOutputEndpoint,lease:&Shared,version:u16)->Result<Handle,Reason> {
+    let b=endpoint.activation_blob();
+    if !matches!(version,1|3)||u32::from_le_bytes(b[..4].try_into().unwrap())!=u32::from(version){return Err(Reason::Protocol);}
+    let name:Vec<u16>=b[4..196].chunks_exact(2).map(|c|u16::from_le_bytes([c[0],c[1]])).collect();
+    let pipe=handle(unsafe{CreateFileW(name.as_ptr(),FILE_READ_DATA|FILE_WRITE_DATA|FILE_READ_ATTRIBUTES|SYNCHRONIZE,
+        0,null(),OPEN_EXISTING,FILE_FLAG_OVERLAPPED|SECURITY_SQOS_PRESENT|SECURITY_IDENTIFICATION,null_mut())})?;
+    let mut pid=0;let mut session=0;
+    if unsafe{GetNamedPipeServerProcessId(pipe.0,&mut pid)}==0||unsafe{GetNamedPipeServerSessionId(pipe.0,&mut session)}==0
+        ||pid!=u32::from_le_bytes(b[196..200].try_into().unwrap())||session!=u32::from_le_bytes(b[200..204].try_into().unwrap()){return Err(Reason::Protocol);}
+    let deadline=Instant::now()+IO_BOUND;
+    let mut hello=[0u8;40];hello[0..4].copy_from_slice(&0x31565854u32.to_le_bytes());
+    hello[4..6].copy_from_slice(&version.to_le_bytes());hello[6..8].copy_from_slice(&1u16.to_le_bytes());hello[8..12].copy_from_slice(&32u32.to_le_bytes());
+    transfer(&pipe,true,&mut hello,lease,deadline)?;
+    let mut capability=b[204..236].to_vec();
+    let sent=transfer(&pipe,true,&mut capability,lease,deadline);
+    for byte in &mut capability{unsafe{std::ptr::write_volatile(byte,0);}}
+    sent?;
+    let mut ack=[0;40];transfer(&pipe,false,&mut ack,lease,deadline)?;
+    let mut expected=[0;40];expected[..4].copy_from_slice(&0x31565854u32.to_le_bytes());
+    expected[4..6].copy_from_slice(&version.to_le_bytes());expected[6..8].copy_from_slice(&2u16.to_le_bytes());
+    if ack!=expected{return Err(Reason::Protocol);}
+    Ok(pipe)
+}
+
 pub struct NativePreview {
     pipe:Option<Handle>,lease:Arc<Shared>,generation:u64,worker_generation:Option<u64>,last_id:u64,last_time:u64,
     frame:Option<PreviewFrame>,last_presented:u64,status:PreviewStatus,
@@ -100,23 +126,7 @@ impl StreamFeed {
 impl NativePreview {
     fn connect(endpoint:NativeOutputEndpoint,lease:Arc<Shared>)->Result<Self,Reason> {
         let generation=lease.while_open(|open,g|if open{Some(g)}else{None}).ok_or(Reason::Abandoned)?;
-        let b=endpoint.activation_blob();
-        let name:Vec<u16>=b[4..196].chunks_exact(2).map(|c|u16::from_le_bytes([c[0],c[1]])).collect();
-        let pipe=handle(unsafe{CreateFileW(name.as_ptr(),FILE_READ_DATA|FILE_WRITE_DATA|FILE_READ_ATTRIBUTES|SYNCHRONIZE,
-            0,null(),OPEN_EXISTING,FILE_FLAG_OVERLAPPED|SECURITY_SQOS_PRESENT|SECURITY_IDENTIFICATION,null_mut())})?;
-        let mut pid=0;let mut session=0;
-        if unsafe{GetNamedPipeServerProcessId(pipe.0,&mut pid)}==0||unsafe{GetNamedPipeServerSessionId(pipe.0,&mut session)}==0
-            ||pid!=u32::from_le_bytes(b[196..200].try_into().unwrap())||session!=u32::from_le_bytes(b[200..204].try_into().unwrap()){return Err(Reason::Protocol);}
-        let deadline=Instant::now()+IO_BOUND;
-        let mut hello=[0u8;40];hello[0..4].copy_from_slice(&0x31565854u32.to_le_bytes());
-        hello[4..6].copy_from_slice(&1u16.to_le_bytes());hello[6..8].copy_from_slice(&1u16.to_le_bytes());hello[8..12].copy_from_slice(&32u32.to_le_bytes());
-        transfer(&pipe,true,&mut hello,&lease,deadline)?;
-        let mut capability=b[204..236].to_vec();
-        let sent=transfer(&pipe,true,&mut capability,&lease,deadline);
-        for byte in &mut capability{unsafe{std::ptr::write_volatile(byte,0);}}
-        sent?;
-        let mut ack=[0;40];transfer(&pipe,false,&mut ack,&lease,deadline)?;
-        if !Header::parse(&ack)?.control(2,0){return Err(Reason::Protocol);}
+        let pipe=connect_native(&endpoint,&lease,1)?;
         Ok(Self{pipe:Some(pipe),lease,generation,worker_generation:None,last_id:0,last_time:0,frame:None,last_presented:0,status:PreviewStatus::default(),output:None,output_intent:0,last_output:None})
     }
     /// Explicit native host intent only. Never accepts a DLL pin from WebView.

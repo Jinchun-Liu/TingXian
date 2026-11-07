@@ -1,5 +1,10 @@
 # Windows 验收与交接
 
+2026-11-08 [AV-E5b QPC 宿主接收](eye-qpc-host-validation-2026-11-08.md)：固定 worker
+到 Rust 接收器/Timeline 的原采集时间、校正像素与停止租约检查通过；本机筛选去重
+31 项 Rust 回归。初始测试编译失败保留；没有物理采集/播放、SDK、设备注册或安装。
+共同输出所有者绑定尚未完成，不将入队/预览当成会议端音画同步。
+
 2026-11-08 [AV-E5a 原生眼部 QPC](eye-qpc-stream-validation-2026-11-08.md)：worker 显式
 区分原采集/完成时刻，旧毫秒和已排期视频协议保留。实际子进程纯色结果检查通过；
 眼部 CTest 2/2、原生视频 5/5、Rust stream 17/17。新 QPC 尚未接入 Rust 共同 owner，

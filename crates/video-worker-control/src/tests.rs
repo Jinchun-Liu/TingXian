@@ -4,7 +4,7 @@ mod stream_tests;
 use sha2::{Digest, Sha256};
 use std::{fs, path::Path, sync::atomic::{AtomicU64, Ordering}, thread, time::{Instant, SystemTime, UNIX_EPOCH}};
 static COUNTER: AtomicU64 = AtomicU64::new(0);
-fn fixture(name: &str) -> BundledWorker {
+pub(crate) fn fixture(name: &str) -> BundledWorker {
     let bin = PathBuf::from(std::env::var_os("TINGXIAN_VIDEO_TEST_BIN").expect("explicit compiled fixture directory"));
     let root = PathBuf::from(std::env::var_os("TINGXIAN_VIDEO_TEST_ROOT").expect("explicit synthetic evidence root"));
     let folder = root.join(format!("case-{}-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos(), COUNTER.fetch_add(1, Ordering::SeqCst)));

@@ -18,6 +18,10 @@ mod preview;
 #[cfg(windows)]
 pub use preview::{NativePreview, PreviewFrame, PreviewPhase, PreviewStatus};
 #[cfg(windows)]
+mod eye_qpc;
+#[cfg(windows)]
+pub use eye_qpc::{QpcStreamFeed, QpcStreamFrame, NativeCorrections, CorrectedEyeFrame, CorrectionStatus};
+#[cfg(windows)]
 mod output;
 #[cfg(windows)]
 pub use output::{PinnedOutputLibrary, RelayPhase, RelayStatus, OutputSnapshot};
@@ -98,6 +102,12 @@ impl Controller {
     pub fn begin_stream_if_current(self:&Arc<Self>,worker:Option<BundledWorker>,provider:EyeProvider,generation:u64)->Result<Option<(Run,StreamFeed)>,&'static str> {
         let (job,feed)=stream::pair(provider);
         Ok(self.begin_inner(worker,Some(generation),Work::Stream(job))?.map(|run|(run,feed)))
+    }
+    /// Explicit native QPC input; grants no camera, SDK or output-device permission.
+    #[cfg(windows)]
+    pub fn begin_qpc_stream_if_current(self:&Arc<Self>,worker:Option<BundledWorker>,provider:EyeProvider,generation:u64)->Result<Option<(Run,QpcStreamFeed)>,&'static str> {
+        let (job,feed)=stream::pair_protocol(provider,stream::Protocol::Qpc);
+        Ok(self.begin_inner(worker,Some(generation),Work::Stream(job))?.map(|run|(run,QpcStreamFeed::new(feed))))
     }
     fn begin_inner(self:&Arc<Self>,worker:Option<BundledWorker>,generation:Option<u64>,work:Work)->Result<Option<Run>,&'static str> {
         let mut inner = self.inner.lock().unwrap_or_else(|e|e.into_inner());

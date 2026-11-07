@@ -1,6 +1,6 @@
 //! Bounded inherited-pipe transport owned by the controller's existing Job.
 use super::*;
-use crate::{stream::{Next, Shared, StreamJob}, Controller, NativeOutputEndpoint, StreamReport};
+use crate::{stream::{Next, Shared, StreamJob, Protocol}, Controller, NativeOutputEndpoint, StreamReport};
 use std::{sync::Arc, thread::{self, JoinHandle}};
 use windows_sys::Win32::System::{IO::CancelSynchronousIo, Pipes::PeekNamedPipe};
 
@@ -21,13 +21,13 @@ fn send_input(pipe:Handle,shared:Arc<Shared>,generation:u64) {
         let frame=match shared.next() {Next::Frame(frame)=>Some(frame),Next::Finish=>None,Next::Closed=>return};
         let mut header=[0u8;40];
         header[0..4].copy_from_slice(&0x31495854u32.to_le_bytes());
-        header[4..6].copy_from_slice(&1u16.to_le_bytes());
+        header[4..6].copy_from_slice(&shared.protocol.input().to_le_bytes());
         header[6..8].copy_from_slice(&(if frame.is_some(){1u16}else{2}).to_le_bytes());
         header[16..24].copy_from_slice(&generation.to_le_bytes());
         if let Some(frame)=&frame {
             header[8..12].copy_from_slice(&(frame.bgr.len() as u32).to_le_bytes());
             header[24..32].copy_from_slice(&frame.id.to_le_bytes());
-            header[32..40].copy_from_slice(&frame.captured_ms.to_le_bytes());
+            header[32..40].copy_from_slice(&frame.time.to_le_bytes());
         }
         let header_written=!shared.closed()&&write_all(&pipe,&header);
         match frame {
@@ -66,16 +66,20 @@ impl Drop for Owned { fn drop(&mut self) {let _=self.retire();} }
 struct Wire { bytes:Vec<u8>,announced:bool }
 impl Drop for Wire { fn drop(&mut self){for b in &mut self.bytes {unsafe{std::ptr::write_volatile(b,0);}}} }
 impl Wire {
+    #[cfg(test)]
     fn ready(&mut self,generation:u64,pid:u32)->Result<Option<NativeOutputEndpoint>,Reason> {
+        self.ready_protocol(generation,pid,Protocol::Legacy)
+    }
+    fn ready_protocol(&mut self,generation:u64,pid:u32,protocol:Protocol)->Result<Option<NativeOutputEndpoint>,Reason> {
         if self.announced||self.bytes.len()<4 {return Ok(None);}
         let b=&self.bytes;
         if u32::from_le_bytes(b[0..4].try_into().unwrap())!=READY_MAGIC {return Ok(None);}
         if b.len()<READY_BYTES {return Ok(None);}
-        if u16::from_le_bytes(b[4..6].try_into().unwrap())!=1
+        if u16::from_le_bytes(b[4..6].try_into().unwrap())!=protocol.input()
             ||u16::from_le_bytes(b[6..8].try_into().unwrap())!=1
             ||u32::from_le_bytes(b[8..12].try_into().unwrap())!=236
             ||b[12..16]!=[0;4]||u64::from_le_bytes(b[16..24].try_into().unwrap())!=generation {return Err(Reason::Protocol);}
-        let endpoint=NativeOutputEndpoint::parse(&b[24..READY_BYTES],pid)?;
+        let endpoint=NativeOutputEndpoint::parse_version(&b[24..READY_BYTES],pid,protocol.endpoint())?;
         let remaining=self.bytes.len()-READY_BYTES;
         self.bytes.copy_within(READY_BYTES..,0);
         self.bytes[remaining..].fill(0);self.bytes.truncate(remaining);self.announced=true;
@@ -108,7 +112,7 @@ fn monitor(process:&Process,signal:&Signal,job:&StreamJob,generation:u64,timeout
     let mut wire=Wire::default();let started=Instant::now();let mut stop_deadline=None;
     loop {
         wire.pump(&process.output)?;
-        if let Some(endpoint)=wire.ready(generation,unsafe{GetProcessId(process.process.0)})? {
+        if let Some(endpoint)=wire.ready_protocol(generation,unsafe{GetProcessId(process.process.0)},job.shared.protocol)? {
             if !controller.publish_stream_endpoint(generation,endpoint) {return Err(Reason::Abandoned);}
         }
         match unsafe {WaitForSingleObject(process.process.0,10)} {
@@ -121,11 +125,11 @@ fn monitor(process:&Process,signal:&Signal,job:&StreamJob,generation:u64,timeout
     // Child exit closes its last report writer. Drain remaining bytes before
     // parsing, but never revive readiness after it has already exited.
     wire.pump(&process.output)?;
-    let _=wire.ready(generation,unsafe{GetProcessId(process.process.0)})?;
+    let _=wire.ready_protocol(generation,unsafe{GetProcessId(process.process.0)},job.shared.protocol)?;
     let mut code=0;
     if unsafe{GetExitCodeProcess(process.process.0,&mut code)}==0{return Err(Reason::Cleanup);}
     if code!=0{return Err(Reason::WorkerExit);}
-    let report=StreamReport::parse(&wire.bytes,job.provider,generation)?;
+    let report=StreamReport::parse_protocol(&wire.bytes,job.provider,generation,job.shared.protocol)?;
     if (report.outcome==EyeOutcome::Completed&&!wire.announced)
         ||(report.outcome==EyeOutcome::Cancelled&&!signal.stopped()){return Err(Reason::Protocol);}
     Ok(report)
@@ -155,5 +159,13 @@ mod tests {
         }
         let mut partial=Wire{bytes:ready()[..259].to_vec(),announced:false};assert!(partial.ready(7,123).unwrap().is_none());
         assert!(!partial.announced);
+    }
+    #[test]
+    fn qpc_ready_requires_both_input_and_result_versions_without_downgrade() {
+        for input in [1u16,2,3] { for endpoint in [1u32,2,3] {
+            let mut bytes=ready();bytes[4..6].copy_from_slice(&input.to_le_bytes());bytes[24..28].copy_from_slice(&endpoint.to_le_bytes());
+            let mut wire=Wire{bytes,announced:false};
+            assert_eq!(wire.ready_protocol(7,123,Protocol::Qpc).is_ok(),input==2&&endpoint==3);
+        }}
     }
 }
