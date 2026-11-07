@@ -16,6 +16,11 @@ GPU loading, automatic download or registry modification in this DLL.
 
 ## Frame and lifecycle behavior
 
+The following describes v1. [Explicit scheduled v2](TIMING.md) adds separate QPC
+capture/presentation times and a four-slot queue for the shared AV route. The
+legacy caller is unchanged; the joint AV owner and installed meeting path remain
+pending.
+
 - Default is a neutral NV12 frame (Y=32, UV=128), including after restart.
 - `BeginVideo` creates a fresh generation. `SubmitNv12` requires that generation,
   increasing frame IDs, exactly 1,382,400 bytes and a local `GetTickCount64`

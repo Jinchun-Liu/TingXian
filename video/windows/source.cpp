@@ -167,16 +167,24 @@ public:
         TX_CHECK(buffer.As(&image));
         BYTE* scanline = nullptr; BYTE* allocation = nullptr; LONG pitch = 0; DWORD length = 0;
         TX_CHECK(image->Lock2DSize(MF2DBuffer_LockFlags_Write, &scanline, &pitch, &allocation, &length));
-        last_time_ = (std::max)(MFGetSystemTime(), last_time_ + 1);
         bool locked = true;
-        const HRESULT result = mailbox_->write(scanline, pitch, allocation, length, [&]() -> HRESULT {
+        const HRESULT result = mailbox_->write_sample(scanline, pitch, allocation, length,
+            UINT64(MFGetSystemTime()), last_time_, [&](const TimedSample* timing, LONGLONG pts) -> HRESULT {
             const HRESULT unlocked = image->Unlock2D();
             locked = false;
             TX_CHECK(unlocked);
-            TX_CHECK(sample->SetSampleTime(last_time_));
+            TX_CHECK(sample->SetSampleTime(pts));
             TX_CHECK(sample->SetSampleDuration(FrameDuration));
+            if (timing) {
+                auto delivered = *timing;
+                delivered.delivered_qpc = UINT64(MFGetSystemTime());
+                TX_CHECK(sample->SetBlob(SampleTimingAttribute, reinterpret_cast<const BYTE*>(&delivered), sizeof(delivered)));
+            }
+            else TX_CHECK(sample->DeleteItem(SampleTimingAttribute));
             if (token) TX_CHECK(sample->SetUnknown(MFSampleExtension_Token, token));
-            return events_->QueueEventParamUnk(MEMediaSample, GUID_NULL, S_OK, sample.Get());
+            else TX_CHECK(sample->DeleteItem(MFSampleExtension_Token));
+            TX_CHECK(events_->QueueEventParamUnk(MEMediaSample, GUID_NULL, S_OK, sample.Get()));
+            last_time_ = pts; return S_OK;
         });
         if (locked) image->Unlock2D();
         return result;
@@ -203,7 +211,7 @@ public:
 
 class Source final : public RuntimeClass<RuntimeClassFlags<ClassicCom>,
     ChainInterfaces<IMFMediaSourceEx, IMFMediaSource, IMFMediaEventGenerator>,
-    IMFGetService, IKsControl, IMFSampleAllocatorControl, IFrameReceiver, IFrameTransport>, public Tracked {
+    IMFGetService, IKsControl, IMFSampleAllocatorControl, IFrameReceiver, IFrameTransport, ITimedFrameReceiver>, public Tracked {
     std::mutex lock_;
     bool shutdown_ = false;
     bool started_ = false;
@@ -371,6 +379,28 @@ public:
     STDMETHODIMP BeginVideo(UINT64* generation) override {
         std::lock_guard guard(lock_);
         return shutdown_ ? MF_E_SHUTDOWN : mailbox_->begin(generation);
+    }
+    STDMETHODIMP GetTimingVersion(UINT32* version) override {
+        if (!version) return E_POINTER;
+        std::lock_guard guard(lock_);
+        if (shutdown_) return MF_E_SHUTDOWN;
+        *version = 2; return S_OK;
+    }
+    STDMETHODIMP BeginTimedVideo(UINT64 epoch, UINT64* generation) override {
+        std::lock_guard guard(lock_);
+        return shutdown_ ? MF_E_SHUTDOWN : mailbox_->begin_timed(epoch, generation);
+    }
+    STDMETHODIMP SubmitTimedNv12(UINT64 generation, UINT64 sequence, const TimedFrame* timing,
+        const BYTE* data, UINT32 size) override {
+        std::lock_guard guard(lock_);
+        return shutdown_ ? MF_E_SHUTDOWN : mailbox_->submit_timed(generation, sequence, timing,
+            data, size, UINT64(MFGetSystemTime()));
+    }
+    STDMETHODIMP GetTimedMetrics(TimedMetrics* metrics) override {
+        if (!metrics) return E_POINTER;
+        std::lock_guard guard(lock_);
+        if (shutdown_) return MF_E_SHUTDOWN;
+        *metrics = mailbox_->timed_metrics(); return S_OK;
     }
     STDMETHODIMP SubmitNv12(UINT64 generation, UINT64 id, UINT64 captured, const BYTE* data, UINT32 size) override {
         std::lock_guard guard(lock_);

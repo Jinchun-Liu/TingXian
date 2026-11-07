@@ -1,5 +1,8 @@
 # Local video pipe protocol v1
 
+[Scheduled v2](TIMING.md) is explicitly negotiated for common-timeline output.
+This document continues to describe v1; neither version silently falls back.
+
 `FramePublisher` belongs in the optional user-mode eye worker. `PipeReceiver`
 belongs in the media source. They exchange actual NV12 bytes across Windows
 processes. The independent installer and main-window prerequisite worker exist;

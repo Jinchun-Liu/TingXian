@@ -38,7 +38,9 @@ struct TransportTestPeer {
         // Independent malformed wire header; production submit() rejects this size.
         struct Wire { UINT32 magic; UINT16 version, kind; UINT32 bytes, reserved; UINT64 epoch, id, captured; };
         static_assert(sizeof(Wire) == 40);
-        Wire header{0x31565854, 1, 4, 0xffffffff, 0, 1, 1, GetTickCount64()};
+        const bool timed = publisher.endpoint_.version == 2;
+        Wire header{0x31565854, UINT16(publisher.endpoint_.version), UINT16(timed ? 6 : 4),
+            0xffffffff, 0, 1, 1, timed ? 0 : GetTickCount64()};
         HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         if (!event) return HRESULT_FROM_WIN32(GetLastError());
         OVERLAPPED operation{}; operation.hEvent = event; DWORD sent = 0;
@@ -98,15 +100,15 @@ void pipe_read(HANDLE pipe, void* data, DWORD size) {
     }
     throw std::runtime_error("control peer timeout");
 }
-struct Command { UINT32 kind; UINT32 reserved = 0; UINT64 epoch = 1; UINT64 id = 1; BYTE y = 160; BYTE uv = 96; BYTE padding[6]{}; };
-enum : UINT32 { StartEpoch = 1, Pixels = 2, StopEpoch = 3, Close = 4, Crash = 5, Oversized = 6 };
+struct Command { UINT32 kind; UINT32 reserved = 0; UINT64 epoch = 1; UINT64 id = 1; BYTE y = 160; BYTE uv = 96; BYTE padding[6]{}; TimedFrame timing; };
+enum : UINT32 { StartEpoch = 1, Pixels = 2, StopEpoch = 3, Close = 4, Crash = 5, Oversized = 6, ScheduledPixels = 7, QueueProbe = 8 };
 struct Ready { HRESULT result = E_FAIL; BOOL restricted_acl = FALSE; VideoPipeEndpoint endpoint{}; };
 
-int publisher_child(HANDLE control, HANDLE report) {
+int publisher_child(HANDLE control, HANDLE report, bool timed = false) {
     try {
         FramePublisher publisher;
         Ready ready;
-        ready.result = publisher.open(&ready.endpoint);
+        ready.result = timed ? publisher.open_timed(&ready.endpoint) : publisher.open(&ready.endpoint);
         if (SUCCEEDED(ready.result)) ready.restricted_acl = TransportTestPeer::restricted_acl(publisher);
         pipe_write(report, &ready, sizeof(ready));
         if (FAILED(ready.result)) return 2;
@@ -121,6 +123,21 @@ int publisher_child(HANDLE control, HANDLE report) {
                 std::fill(pixels.begin(), pixels.begin() + Width * Height, command.y);
                 std::fill(pixels.begin() + Width * Height, pixels.end(), command.uv);
                 result = publisher.submit(command.epoch, command.id, GetTickCount64(), pixels.data(), FrameBytes);
+            } else if (command.kind == ScheduledPixels) {
+                std::fill_n(pixels.begin(), Width * Height, command.y);
+                std::fill(pixels.begin() + Width * Height, pixels.end(), command.uv);
+                const bool neutral = command.timing.flags == TimedNeutral;
+                result = publisher.submit_timed(command.epoch, command.id, command.timing,
+                    neutral ? nullptr : pixels.data(), neutral ? 0 : FrameBytes);
+            } else if (command.kind == QueueProbe) {
+                // Batch in the producer: parent/child control polling is not the
+                // media cadence and must not expire slots before testing capacity.
+                UINT64 now=0; if(!qpc_now(now)) return 3;
+                for(UINT64 i=1;i<=5;++i) {
+                    TimedFrame timing{0,0,now+950000+i*10000,TimedNeutral};
+                    result=publisher.submit_timed(command.epoch,i,timing,nullptr,0);
+                    if(FAILED(result)) break;
+                }
             } else if (command.kind == StopEpoch) result = publisher.end(command.epoch);
             else if (command.kind == Oversized) result = TransportTestPeer::oversized(publisher);
             else if (command.kind == Crash) ExitProcess(0); // deliberately skip destructors in this synthetic child only
@@ -189,7 +206,7 @@ struct Child {
     DWORD pid = 0;
     HRESULT handshake = E_PENDING;
     bool crashed = false;
-    explicit Child(bool simulate_start_failure = false, HANDLE* observed_process = nullptr, bool eye_output = false) {
+    explicit Child(bool simulate_start_failure = false, HANDLE* observed_process = nullptr, bool eye_output = false, bool timed = false) {
         SECURITY_ATTRIBUTES security{sizeof(security), nullptr, TRUE};
         Handle child_control, child_report;
         expect(CreatePipe(&child_control.value, &control.value, &security, 0), "create control pipe");
@@ -209,7 +226,7 @@ struct Child {
         const DWORD length = GetModuleFileNameW(nullptr, executable, _countof(executable));
         if (!length || length == _countof(executable)) { DeleteProcThreadAttributeList(attributes); throw std::runtime_error("executable path unavailable"); }
         std::wstring command = L"\"" + std::wstring(executable)
-            + (eye_output ? L"\" --eye-publisher-test " : L"\" --publisher-test ")
+            + (eye_output ? L"\" --eye-publisher-test " : timed ? L"\" --timed-publisher-test " : L"\" --publisher-test ")
             + std::to_wstring(reinterpret_cast<UINT_PTR>(child_control.value)) + L" "
             + std::to_wstring(reinterpret_cast<UINT_PTR>(child_report.value));
         STARTUPINFOEXW startup{}; startup.StartupInfo.cb = sizeof(startup); startup.lpAttributeList = attributes;
@@ -298,13 +315,17 @@ struct SourceFixture {
         while (GetTickCount64() < deadline) { if (predicate()) return; Sleep(1); }
         throw std::runtime_error(message);
     }
-    void pixels(BYTE y_value, BYTE uv_value, int v_value = -1) {
+    void pixels(BYTE y_value, BYTE uv_value, int v_value = -1, TimedSample* timing = nullptr, LONGLONG* pts = nullptr) {
         check(stream->RequestSample(nullptr), "request IPC sample");
         auto event = next_event(stream.Get(), MEMediaSample);
         PROPVARIANT value{}; check(event->GetValue(&value), "sample value");
         ComPtr<IMFSample> sample;
         HRESULT hr = value.vt == VT_UNKNOWN ? value.punkVal->QueryInterface(IID_PPV_ARGS(&sample)) : E_UNEXPECTED;
         PropVariantClear(&value); check(hr, "sample");
+        if (timing) { UINT32 size = 0; check(sample->GetBlob(SampleTimingAttribute,
+            reinterpret_cast<BYTE*>(timing), sizeof(*timing), &size), "actual MF timing metadata");
+            expect(size == sizeof(*timing) && timing->version == 2, "MF timing ABI"); }
+        if (pts) check(sample->GetSampleTime(pts), "actual MF sample PTS");
         ComPtr<IMFMediaBuffer> buffer; check(sample->GetBufferByIndex(0, &buffer), "buffer");
         ComPtr<IMF2DBuffer2> image; check(buffer.As(&image), "2D buffer");
         BYTE *scanline = nullptr, *base = nullptr; LONG pitch = 0; DWORD length = 0;
@@ -323,6 +344,74 @@ struct SourceFixture {
 };
 
 void run(const wchar_t* dll) {
+    {
+        SourceFixture timed_source(dll);
+        ComPtr<ITimedFrameReceiver> timed; check(timed_source.source.As(&timed), "explicit v2 interface");
+        UINT32 version=0; check(timed->GetTimingVersion(&version), "timing capability"); expect(version==2, "not v2");
+        Child child(false,nullptr,false,true); timed_source.connect(child);
+        expect(child.ready.endpoint.version==2, "timing protocol not explicit");
+        check(child.send({StartEpoch}), "timed epoch admitted");
+        Command cmd{ScheduledPixels}; UINT64 now=0; expect(qpc_now(now),"QPC");
+        cmd.timing={41,now,now+800000};
+        check(child.send(cmd),"cross-process scheduled frame admitted");
+        TimedSample stamp; LONGLONG pts=0;
+        timed_source.pixels(32,128,-1,&stamp,&pts);
+        expect(stamp.sequence==0 && !stamp.capture_qpc && UINT64(pts)<cmd.timing.presentation_qpc,
+            "future image released early or test missed future window");
+        const auto deadline=GetTickCount64()+1000;
+        do { Sleep(1); expect(qpc_now(now),"QPC wait"); } while(now<cmd.timing.presentation_qpc && GetTickCount64()<deadline);
+        expect(now>=cmd.timing.presentation_qpc,"planned time wait expired");
+        timed_source.pixels(160,96,-1,&stamp,&pts);
+        expect(stamp.epoch==1 && stamp.sequence==1 && stamp.frame_id==41 && stamp.capture_qpc==cmd.timing.capture_qpc &&
+            stamp.presentation_qpc==cmd.timing.presentation_qpc && UINT64(pts)==cmd.timing.presentation_qpc && stamp.flags==0,
+            "actual MF sample retimed or lost original capture");
+        passed("v2 cross-process admission preserves due pixels, capture QPC and exact MF PTS");
+        timed_source.pixels(160,96,-1,&stamp,&pts);
+        expect(stamp.flags==TimedRepeated && stamp.capture_qpc==cmd.timing.capture_qpc &&
+            UINT64(pts)>cmd.timing.presentation_qpc,"repeat refreshed original capture or PTS");
+        expect(FAILED(child.send(cmd)),"v2 duplicate silently accepted");
+        expect(FAILED(child.send({Pixels})),"v1 payload allowed on v2");
+        cmd.id=2; cmd.epoch=9; expect(FAILED(child.send(cmd)),"wrong epoch accepted");
+        check(child.send({StopEpoch}),"remote timed stop acknowledged");
+        TimedMetrics metrics; check(timed->GetTimedMetrics(&metrics),"timed metrics");
+        expect(!metrics.enabled && metrics.queued==0 && metrics.unique==1 && metrics.repeated==1 && metrics.rejected==2,"receipt/count semantics");
+        timed_source.pixels(32,128,-1,&stamp,&pts);
+        expect(!stamp.frame_id&&!stamp.capture_qpc&&!stamp.sequence,"stop sample retained identity");
+        passed("v2 rejection receipts, repeats and stopped MF samples remain explicit");
+        for(UINT64 epoch=2;epoch<=4;++epoch){
+            Command start{StartEpoch};start.epoch=epoch;check(child.send(start),"v2 restart");
+            cmd.epoch=epoch;cmd.id=1;expect(qpc_now(now),"restart QPC");cmd.timing={0,0,now+500000,TimedNeutral};
+            check(child.send(cmd),"scheduled neutral admitted");
+            Command end{StopEpoch};end.epoch=epoch;check(child.send(end),"queued stop ack");
+            check(timed->GetTimedMetrics(&metrics),"stopped queue");expect(metrics.queued==0,"stop ack before queue clear");
+        }
+        expect(metrics.cleared==3,"pending neutrals not accounted");
+        Command start{StartEpoch};start.epoch=5;check(child.send(start),"backpressure epoch");
+        Command probe{QueueProbe};probe.epoch=5;
+        expect(child.send(probe)==HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW),"wire hid queue backpressure");
+        check(timed->GetTimedMetrics(&metrics),"backpressure queue");expect(metrics.queued==4,"wire queue exceeded cap");
+        Command end{StopEpoch};end.epoch=5;check(child.send(end),"backpressure cleanup");
+        passed("v2 receipt exposes bounded-queue backpressure to its producer");
+        check(child.send({Close}),"close timed child");
+        timed_source.wait([&]{return timed_source.status().state==TransportState::fault;},"timed disconnect missing");
+        timed_source.pixels(32,128); timed.Reset();
+        passed("three v2 restarts clear queued plans before stop receipts");
+    }
+    {
+        SourceFixture source(dll); Child child(false,nullptr,false,true);
+        auto legacy=child.ready.endpoint;legacy.version=1;
+        expect(FAILED(source.transport->ConnectPipe(&legacy)),"v2 silently downgraded");
+        expect(FAILED(child.accepted()),"producer accepted downgraded handshake");
+        source.pixels(32,128); passed("v2 rejects a v1 handshake without protocol downgrade");
+    }
+    {
+        SourceFixture source(dll); Child child(false,nullptr,false,true);source.connect(child);
+        check(child.send({StartEpoch}),"malformed test begin");
+        check(child.send({Oversized}),"v2 oversized wire");
+        source.wait([&]{return source.status().state==TransportState::fault;},"oversized v2 was not rejected");
+        expect(source.status().last_error==E_INVALIDARG,"malformed v2 error hidden");
+        source.pixels(32,128); passed("v2 rejects oversized declarations before payload allocation/read");
+    }
     {
         Handle observed;
         bool failed = false;
@@ -485,6 +574,8 @@ void relay_reader(const wchar_t* dll) {
 }
 
 int wmain(int argc, wchar_t** argv) {
+    if (argc == 4 && wcscmp(argv[1], L"--timed-publisher-test") == 0)
+        return publisher_child(reinterpret_cast<HANDLE>(_wcstoui64(argv[2], nullptr, 10)), reinterpret_cast<HANDLE>(_wcstoui64(argv[3], nullptr, 10)), true);
     if (argc == 4 && wcscmp(argv[1], L"--eye-publisher-test") == 0)
         return eye_publisher_child(reinterpret_cast<HANDLE>(_wcstoui64(argv[2], nullptr, 10)), reinterpret_cast<HANDLE>(_wcstoui64(argv[3], nullptr, 10)));
     if (argc == 4 && wcscmp(argv[1], L"--publisher-test") == 0)

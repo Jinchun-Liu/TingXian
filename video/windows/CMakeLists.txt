@@ -16,6 +16,11 @@ target_compile_definitions(tingxian-video-source-test PRIVATE UNICODE _UNICODE N
 target_compile_options(tingxian-video-source-test PRIVATE /W4 /EHsc /utf-8)
 target_link_libraries(tingxian-video-source-test PRIVATE mfplat mf mfuuid ole32 propsys)
 enable_testing()
+add_executable(tingxian-video-timing-test timing_test.cpp)
+target_compile_definitions(tingxian-video-timing-test PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(tingxian-video-timing-test PRIVATE /W4 /EHsc /utf-8)
+add_test(NAME bounded-video-timing-without-devices COMMAND tingxian-video-timing-test)
+set_tests_properties(bounded-video-timing-without-devices PROPERTIES TIMEOUT 15)
 add_test(NAME media-source-without-device-registration
   COMMAND tingxian-video-source-test $<TARGET_FILE:TingXianVideoSource>)
 set_tests_properties(media-source-without-device-registration PROPERTIES TIMEOUT 30)

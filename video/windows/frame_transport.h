@@ -42,6 +42,7 @@ class FramePublisher {
     std::mutex writer_;
     VideoPipeEndpoint endpoint_{};
     bool connected_ = false;
+    HRESULT open_protocol(VideoPipeEndpoint* endpoint, UINT16 version);
     HRESULT send(UINT16 kind, UINT64 epoch, UINT64 id, UINT64 captured, const BYTE* data, UINT32 bytes);
 public:
     FramePublisher();
@@ -49,9 +50,11 @@ public:
     FramePublisher(const FramePublisher&) = delete;
     FramePublisher& operator=(const FramePublisher&) = delete;
     HRESULT open(VideoPipeEndpoint* endpoint);
+    HRESULT open_timed(VideoPipeEndpoint* endpoint); // Explicit v2; never downgrade.
     HRESULT accept();
     HRESULT begin(UINT64 epoch);
     HRESULT submit(UINT64 epoch, UINT64 id, UINT64 captured, const BYTE* data, UINT32 bytes);
+    HRESULT submit_timed(UINT64 epoch, UINT64 sequence, const TimedFrame& timing, const BYTE* data, UINT32 bytes);
     HRESULT end(UINT64 epoch);
     void cancel() noexcept; // event only; caller may close/join on its owning lane
     void close();
@@ -65,6 +68,7 @@ class PipeReceiver {
     std::mutex lifecycle_;
     std::atomic<TransportState> state_{TransportState::disconnected};
     std::atomic<HRESULT> error_{S_OK};
+    UINT16 protocol_ = 1;
     void disconnect_locked();
     void receive();
 public:
