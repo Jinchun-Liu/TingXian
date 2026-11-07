@@ -76,5 +76,12 @@ let groups=0;async function check(name,run){await run();groups++;console.log('PA
     const h=harness();h.c.study=await study();h.c.changed();await h.c.prepare(h.c.study.attempts[0].id,'background');h.c.assistActive=true;await h.c.send();assert.equal(h.calls.filter(c=>c.name==='education_generate').length,0);assert.match(h.c.error,/实时辅助/);
     h.c.assistActive=false;h.setFail(true);await assert.rejects(h.c.send());assert.equal(h.calls.filter(c=>c.name==='education_generate').length,0);assert.equal(h.c.study.attempts[0].revisions[0].text,answer);h.setFail(false);await h.c.persist();h.c.dispose();
   });
+  await check('two explicit lanes complete independently; earlier evidence remains selectable and immutable',async()=>{
+    const h=harness();h.c.study=await study();h.c.changed();const a=h.c.study.attempts[0].id,gate=deferred();h.setModelGate(gate);
+    await h.c.prepare(a,'interactive');const interactive=h.c.send();while(!h.calls.some(c=>c.name==='education_generate'))await new Promise(r=>setTimeout(r,1));
+    h.setModelGate(null);await h.c.prepare(a,'background');await h.c.send();assert.equal(h.c.study.feedback.length,1);const original=e.clone(h.c.study.feedback[0]);
+    const first=h.calls.find(c=>c.name==='education_generate').args.request;gate.resolve(result(h.c.study,first));await interactive;
+    assert.equal(h.c.study.feedback.length,2);assert.equal(h.c.study.items.length,2);assert.equal(h.c.study.feedback[0].status,'stale');assert.deepEqual(h.c.study.feedback[0].criteria,original.criteria);assert.equal(h.c.study.tasks.filter(t=>t.state==='completed').length,2);assert.equal((await e.restoreStudy(h.c.study)).feedback.length,2);h.c.dispose();
+  });
   console.log(`PASS: ${groups} education contract groups; synthetic providers only; no media or real API`);
 })().catch(e=>{console.error(e);process.exitCode=1;});

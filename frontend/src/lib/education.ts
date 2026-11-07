@@ -94,7 +94,7 @@ export function applyResult(study:Study,request:Request,result:Result):boolean{
   if(result.error){task.state=result.text?'partial':'failed';task.error=result.error;return true;}
   try{
     const feedback=validateFeedback(result.text,study,task,result.model_version);
-    if(!study.feedback.some(f=>f.task_id===task.task_id)){study.feedback.push(feedback);study.items.push({id:task.task_id,goal:study.goal,attempt_refs:[feedback.attempt_id],next_action:feedback.next_action,review_due:null,scheduler_version:null,self_assessment:''});}
+    if(!study.feedback.some(f=>f.task_id===task.task_id)){study.feedback.filter(f=>f.attempt_id===feedback.attempt_id).forEach(f=>f.status='stale');study.feedback.push(feedback);study.items.push({id:task.task_id,goal:study.goal,attempt_refs:[feedback.attempt_id],next_action:feedback.next_action,review_due:null,scheduler_version:null,self_assessment:''});}
     task.state='completed';task.output_revision=feedback.answer_revision;
   }catch(e){task.state='failed';task.error=String(e);}
   return true;

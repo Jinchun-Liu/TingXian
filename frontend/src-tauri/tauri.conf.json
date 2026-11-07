@@ -106,7 +106,10 @@
             "icons/app_icon.icns",
             "icons/app_icon.ico"
         ],
-        "resources": [],
+        "resources": {
+            "../../education/NOTICE.md": "licenses/education/NOTICE.md",
+            "../../education/licenses/": "licenses/education/"
+        },
         "externalBin": [
             "binaries/ffmpeg"
         ],

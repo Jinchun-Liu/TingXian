@@ -3,13 +3,15 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('n
 const req=require('node:module').createRequire(path.resolve(__dirname,'../frontend/package.json'));
 const React=req('react'),{act,create}=req('react-test-renderer'),ts=req('typescript');
 global.crypto=require('node:crypto').webcrypto;global.window={addEventListener(){},removeEventListener(){}};
-const records=new Map(),calls=[],guards=new Set();let failSave=false;
+const records=new Map(),calls=[],guards=new Set();let failSave=false,sessionGate=null;
+const oldSnapshot={version:1,history:[{id:'old-q',role:'remote',question:'合成旧题',suggestion:'AI 草稿',confirmed_answer:null,status:'done',sources:[],time:'00:01',timing:''}],transcripts:[],spoken_dialogue:[],current:{question:'',answer:''},calls:0,usage:'未知'};
 async function invoke(name,args){calls.push(name);
   if(name==='education_cancel')return;
   if(name==='education_list')return [...records.values()].map(s=>({id:s.id,question:s.draft.question,revision:s.store_revision,status:s.status}));
   if(name==='education_save'){if(failSave)throw Error('synthetic disk failure');const d=structuredClone(args.document);assert.equal(args.expected,records.get(d.id)?.store_revision??0);d.store_revision=args.expected+1;records.set(d.id,d);return d.store_revision;}
   if(name==='education_load')return structuredClone(records.get(args.id));
   if(name==='interview_providers_get')return {config:{answers:[],background:{enabled:false}},key_configured:{}};
+  if(name==='tingxian_session_preview')return sessionGate?await sessionGate:structuredClone(oldSnapshot);
   throw Error('Unexpected real operation '+name);
 }
 const cache={};function load(file){if(cache[file])return cache[file];if(file.endsWith('.json'))return JSON.parse(fs.readFileSync(file,'utf8'));
@@ -46,5 +48,8 @@ async function click(name){assert.ok(button(name),name);await act(async()=>{butt
   await act(async()=>{tree.update(React.createElement(EducationPanel,{...props,seed}));await settle();});assert.equal(field('我的练习回答').props.value,'');assert.match(text(tree.toJSON()),/缺少本人作答/);assert.equal(button('保存初答').props.disabled,true);
   assert.ok(!calls.includes('education_generate'));assert.ok(!calls.some(n=>/audio|camera|answer_start/.test(n)));
   await click('返回对话');assert.equal(closed,1);await act(async()=>{tree.unmount();await settle();});assert.equal(guards.size,0);
+  const {SavedSessionPreview}=load(path.resolve(__dirname,'../frontend/src/components/interview/SavedSessionPreview.tsx'));let reviewed=null,release;
+  await act(async()=>{tree=create(React.createElement(SavedSessionPreview,{id:1,onReview:s=>reviewed=s}));});await click('复盘这份会话');assert.deepEqual(reviewed,oldSnapshot);assert.ok(!calls.includes('interview_session_load'),'review must not restore over live assistance');
+  reviewed=null;sessionGate=new Promise(r=>release=r);await act(async()=>{button('复盘这份会话').props.onClick();await settle();});await act(async()=>{tree.unmount();release(oldSnapshot);await settle();});assert.equal(reviewed,null,'late read after navigating away must not reopen education');
   console.log('PASS: actual education panel initial/re-answer/revision, no-model state, export preview, saved recovery, source draft, font, disk failure, mode generation, old AI-only session and quit protection; synthetic native bridge only');
 })().catch(e=>{console.error(e);process.exitCode=1;});
