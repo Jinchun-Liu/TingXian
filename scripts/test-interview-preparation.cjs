@@ -6,6 +6,7 @@ const candidate={candidate_hash:'candidate',execution_mode:'fixture',task:{role:
  role_view:[{id:'req-1',text:'契约测试',matches:[{record_id:'r1',relevance:'supporting',reason:'只能证明本地测试'}],references:[],gaps:[{text:'生产经验待补'}]}],
  source_records:[{record_id:'r1',claim:'计划补充测试，未完成',claim_status:'user_asserted',activity_status:'planned',manual_revision:{basis:'本人核对'},source_refs:[{source_id:'source',locator:'行1',quote:'旧原文，尚未核实'}]}],
  stories:Array.from({length:11},(_,i)=>({id:'story'+i,title:'故事'+(i+1),activity:'planned',sections:{context:[],task:[],action:[{text:'计划补充测试，未完成',record_ids:['r1']}],result:[],learning:[]},missing:{context:'上下文',task:'职责',result:'验证',learning:'反思'}}))};
+candidate.consolidation={conflicts:[{text:'职责描述不一致，未裁定',record_ids:['r1']}],parent_candidate:{stories:structuredClone(candidate.stories)},parts:[{input_hash:'part',requirement_id:'req-1',from_story_ids:['story0'],input_gaps:[{id:'g1',text:'生产经验待补'}],omitted:[{record_id:'r1',reason:'只保留主要叙述，原文仍可查'}],gap_review:[{id:'g1',status:'retained',reason:'缺少生产验证',evidence_ids:[]}]}]};
 const preview={candidate,index_version:'7',previous_hash:'saved-hash',source_binding_valid:true};
 const invoke=async(command,args)=>{
  calls.push({command,args});const held=gate;if(held)await held;if(error)throw Error(error);
@@ -27,6 +28,7 @@ const text=n=>typeof n==='string'?n:(n?.children||[]).map(text).join('');
  await click('导出整理资料');assert(text(tree.toJSON()).includes('已导出'));assert.equal(calls.length,1);
  cancel=true;await click('导入准备候选');assert(!button('保存岗位准备'));cancel=false;
  await click('导入准备候选');assert(text(tree.toJSON()).includes('本人修订：计划'));assert(text(tree.toJSON()).includes('旧原文'));assert(text(tree.toJSON()).includes('生产经验待补'));assert(text(tree.toJSON()).includes('故事10'));assert(!text(tree.toJSON()).includes('故事11'));
+ assert(text(tree.toJSON()).includes('待核对冲突'));assert(text(tree.toJSON()).includes('未裁定'));assert(text(tree.toJSON()).includes('原故事：故事1'));assert(text(tree.toJSON()).includes('未选入：只保留主要叙述'));assert(text(tree.toJSON()).includes('保留缺口：生产经验待补'));
  await click('下一页故事');assert(text(tree.toJSON()).includes('故事11'));await click('上一页故事');
  error='资料库已变化';await click('保存岗位准备');assert(text(tree.toJSON()).includes('资料库已变化'));assert(!text(tree.toJSON()).includes('已保存岗位准备'));assert(button('保存岗位准备'));error=null;
  await click('保存岗位准备');assert.deepEqual(calls.at(-1).args,{candidate,version:'7',previousHash:'saved-hash'});assert(!button('保存岗位准备'));assert(text(tree.toJSON()).includes('个人事实未改变'));

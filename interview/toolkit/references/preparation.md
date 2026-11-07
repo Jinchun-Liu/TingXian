@@ -84,3 +84,29 @@ python toolkit/harness.py preparation-collect --scope current-scope.json --task 
 原生端重新绑定资料库身份、完整有效来源集合、原文位置/哈希/提取版本和当前本人修订；导入到保存之间资料变化或另一个保存操作都会拒绝旧快照。引用存在仅证明绑定，不能证明模型文字被原文蕴含或岗位匹配正确。
 
 已跑 Rust → Python 三命令 → 原生核对/保存 → 重开数据库的合成路径。并未运行 Codex/Claude Code 的真实模型，也未升级已安装桌面应用。
+
+## 跨块整合（工具包 0.6）
+
+仅在需要合并项目、岗位选材或跨块缺口时使用。它是离线 Lead 的可选底层工作，不自动多跑一轮四角色，不进入实时生成。所有命令先从当前 scope 和原始 preparation 响应重建父候选；不能直接输入一个自行改写的旧候选冒充当前资料。父候选和完整原文保留到最终包中，未选资料没有新增检索。
+
+```sh
+python3 toolkit/harness.py consolidation-catalog --scope current-scope.json --task task.json --proposals preparation-responses.json --execution-mode host_model
+python3 toolkit/harness.py consolidation-plan --scope current-scope.json --task task.json --proposals preparation-responses.json --groups groups.json --execution-mode host_model
+python3 toolkit/harness.py consolidation-input --scope current-scope.json --task task.json --proposals preparation-responses.json --groups groups.json --part 1 --execution-mode host_model
+python3 toolkit/harness.py consolidation-collect --scope current-scope.json --task task.json --proposals preparation-responses.json --groups groups.json --responses consolidation-responses.json --execution-mode host_model --output-format json > preparation-consolidated.json
+```
+
+若第一阶段改过窗口、input-cap、output-reserve 或 preview-methods，以上命令必须传相同参数。`--bundle/--library-id/--revisions/--excluded` 也可替代 `--scope`，同样不能混用。
+
+1. 将 catalog 的 messages 交给宿主。返回 `{"format":"consolidation-groups-v1","input_hash":"原样复制","groups":[{"story_ids":["原故事ID"],"reason":"项目身份依据或保持独立的理由"}]}`。每张原故事恰好在一组里；没有故事则 groups=[]。名称相同不能证明身份相同；不确定就分开。context_hint 截到300字符只用于路由，完整引文在下一步。
+2. plan 列出每项岗位要求和每组故事的 input_hash、完整原文范围与预算。input 按编号返回指定 messages。宿主只读本次证据，逐项处理，不能跨输入借用看不到的引用。故事组可以再次分开保留，所有原故事必须映射且不能误用另一故事的个人证据。
+3. 输出 `consolidation-part-v1`，公共字段是 format、input_hash、kind、omitted、conflicts。完整严格契约写在 input 的 system 消息中：岗位型额外返回 requirement、gap_review；故事型额外返回 stories（每张附 from_story_ids）。omitted 逐条解释未保留证据；gap_review 覆盖每个输入缺口。判为 resolved 需要所选个人证据，参考答案不能消除经历缺口。冲突至少引用两条当前输入记录，统一保持 unresolved，不自动裁定谁真谁假。引文存在仍不证明模型判断正确。
+4. 将全部响应存成 JSON 数组。collect 缺块/重复块/越界引用拒绝整包；无关旧块列入 ignored_stale_inputs。`--output-format markdown` 给可读稿，`team` 给同一版四角色 candidate。模型自填 reviewed/quality_pass 不能启用。最终评审必须针对整合后的候选，评审后再改即失效。
+
+默认整合输入上限65536（UTF-8保守上界）、输出预留16384、安全4096；窗口仍是实际声明与262144较小值。可用 `--consolidation-input-cap` 和 `--consolidation-output-reserve` 调整，所有整合命令保持一致。超过单次预算不截断证据或发出部分计划。当前不做无限递归/层级整合；过大的单项选材或组需缩小任务/选材、细分分组或在实际窗口内提高上限。最终含父候选的包最多16 MiB，超出保留旧候选并报错。
+
+plan 的 planned_requests 是新增 `1次分组 + 岗位要求数 + 故事组数`，不包括前期提取/准备、四角色评审、重试、思考开销。全部都是计划数，工具执行模型请求仍为0；宿主实际usage/费用未知时保持null。稳定输入可复用，来源、任务、窗口、规则或分组变化分别使相关 hash 失效；单个来源变化可能影响多个块与分组请求，不承诺只花一次调用。
+
+`tingxian-preparation-v2` 保存完整父候选、原故事映射、每条省略/缺口处理、双方冲突引用以及当前来源。桌面同一个“导入准备候选”入口兼容v1/v2，在保存前重核原文、人工修订、库身份、有效来源全集和审计覆盖。冲突先展示，原故事与判断可展开；仅独立本机准备视图，不变成个人事实或实时提示。
+
+这不是整库语义检查：此前没被选中的材料不会进入整合。程序检验覆盖和引用，不能替代人对项目身份、矛盾和岗位相关性的判断。真实模型、自然口语、费用收益和两宿主推理均待独立验收，不能以合成输出声称通过。

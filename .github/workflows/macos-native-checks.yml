@@ -89,5 +89,6 @@ jobs:
         run: |
           python3 -B scripts/test-toolkit-harness.py
           python3 -B scripts/test-toolkit-preparation.py
+          python3 -B scripts/test-toolkit-consolidation.py
       - name: Portable background worker process recovery
         run: python3 scripts/test-background-process-recovery.py

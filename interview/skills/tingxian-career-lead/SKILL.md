@@ -17,4 +17,4 @@ description: 基于来源化背景和目标岗位生成材料、岗位视图或�
 
 背景整理由现有执行组件完成，不建立另一套数据库。汇总后运行共享工具 `team-audit --run <run.json>`；通过结构校验不等于事实、质量或跨宿主验收通过。安装与完整资源位置见 [可移植包说明](../../toolkit/README.md)。
 
-需要岗位视图或项目故事卡时，读取[来源化岗位准备](../../toolkit/references/preparation.md)。逐块执行 preparation-input，按当前输入哈希复用结果，使用 preparation-collect 生成同一份可评审候选。缺块不能声称完成；跨块项目、局部缺口与矛盾仍需语义整合。
+需要岗位视图或项目故事卡时，读取[来源化岗位准备](../../toolkit/references/preparation.md)。逐块执行 preparation-input，按当前输入哈希复用结果，使用 preparation-collect 生成候选。需要跨块语义整合时再执行 consolidation-catalog/plan/input/collect：同名不等于同一项目，读取各组完整原文，保留省略理由、缺口判断和未决冲突。缺块不输出完整结果；超预算不截断证据。整合属于离线 Lead 的底层工作，额外宿主请求/重试单独计入预算，不假称只有12次API调用。最终四角色评审必须绑定整合后的同一版本，不用整合前评审代替。

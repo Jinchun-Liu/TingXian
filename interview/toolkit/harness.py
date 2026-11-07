@@ -334,7 +334,7 @@ def main():
     archive.add_argument("--role", default="")
     archive.add_argument("--revisions", type=Path)
     archive.add_argument("--excluded", type=Path)
-    for action in ("preparation-plan", "preparation-input", "preparation-collect"):
+    for action in ("preparation-plan", "preparation-input", "preparation-collect", "consolidation-catalog", "consolidation-plan", "consolidation-input", "consolidation-collect"):
         command = sub.add_parser(action)
         command.add_argument("--bundle", type=Path)
         command.add_argument("--library-id")
@@ -346,18 +346,24 @@ def main():
         command.add_argument("--input-cap", type=int, default=32768)
         command.add_argument("--output-reserve", type=int, default=8192)
         command.add_argument("--preview-methods", action="store_true")
-        if action == "preparation-input": command.add_argument("--part", type=int, required=True)
-        if action == "preparation-collect":
+        if action in ("preparation-input","consolidation-input"): command.add_argument("--part", type=int, required=True)
+        if action == "preparation-collect" or action.startswith("consolidation-"):
             command.add_argument("--proposals", type=Path, required=True)
-            command.add_argument("--output-format", choices=("json", "markdown", "team"), default="json")
             command.add_argument("--execution-mode", choices=("fixture", "host_model", "unreported"), default="unreported")
+        if action in ("preparation-collect","consolidation-collect"):
+            command.add_argument("--output-format", choices=("json", "markdown", "team"), default="json")
+        if action.startswith("consolidation-"):
+            command.add_argument("--consolidation-input-cap", type=int, default=65536)
+            command.add_argument("--consolidation-output-reserve", type=int, default=16384)
+            if action != "consolidation-catalog": command.add_argument("--groups", type=Path, required=True)
+            if action == "consolidation-collect": command.add_argument("--responses", type=Path, required=True)
     args = parser.parse_args()
     read = lambda p: json.loads(p.read_text(encoding="utf-8"))
     if args.action == "policy":
         result = compile_policy(load_registry(args.registry), read(args.context), args.preview)
     elif args.action == "team-audit":
         result = audit_team(read(args.run))
-    elif args.action.startswith("preparation-"):
+    elif args.action.startswith(("preparation-","consolidation-")):
         spec = importlib.util.spec_from_file_location("tingxian_preparation", Path(__file__).with_name("preparation.py"))
         preparation = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(preparation)
@@ -376,10 +382,22 @@ def main():
         preparation.task_spec(task)
         method_pack = preparation_policy(load_registry(Path(__file__).with_name("registry.json")), task, args.preview_methods)
         plan = preparation.plan(archive, task, args.context_tokens, args.input_cap, args.output_reserve, method_pack)
-        if args.action == "preparation-plan": result = preparation.manifest(plan)
+        if args.action.startswith("consolidation-"):
+            spec=importlib.util.spec_from_file_location("tingxian_consolidation",Path(__file__).with_name("consolidation.py"))
+            consolidation=importlib.util.module_from_spec(spec);spec.loader.exec_module(consolidation)
+            parent=preparation.collect(plan,read(args.proposals),args.execution_mode)
+            budget=consolidation.limits(args.context_tokens,args.consolidation_input_cap,args.consolidation_output_reserve)
+            if args.action=="consolidation-catalog":result=consolidation.catalog(parent,budget)
+            else:
+                assembled=consolidation.plan(parent,read(args.groups),budget)
+                if args.action=="consolidation-plan":result=consolidation.manifest(assembled)
+                elif args.action=="consolidation-input":result=consolidation.input_packet(assembled,args.part)
+                else:result=consolidation.collect(assembled,read(args.responses),args.execution_mode)
+        elif args.action == "preparation-plan": result = preparation.manifest(plan)
         elif args.action == "preparation-input": result = preparation.input_packet(plan, args.part)
         else:
             result = preparation.collect(plan, read(args.proposals), args.execution_mode)
+        if args.action in ("preparation-collect","consolidation-collect"):
             if args.output_format == "markdown":
                 print(preparation.render(result))
                 return

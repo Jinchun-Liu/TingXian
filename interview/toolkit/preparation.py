@@ -254,6 +254,11 @@ def team_candidate(result):
               for story in result["stories"] for section in story["sections"].values() for fragment in section]
     claims += [{"claim": match["reason"], "evidence_refs": [match["record_id"]]}
                for row in result["role_view"] for match in row["matches"]]
+    consolidation = result.get('consolidation', {})
+    claims += [{"claim": c['text'], "evidence_refs": c['record_ids']} for c in consolidation.get('conflicts', [])]
+    for part in consolidation.get('parts', []):
+        claims += [{"claim": '省略选材理由：'+r['reason'], "evidence_refs": [r['record_id']]} for r in part['omitted']]
+        claims += [{"claim": '缺口处理理由：'+r['reason'], "evidence_refs": r['evidence_ids']} for r in part['gap_review'] if r['evidence_ids']]
     return {"id": result["candidate_hash"], "artifact": copy.deepcopy(result), "claim_evidence_map": claims,
             "gaps": [gap for row in result["role_view"] for gap in row["gaps"]],
             "changelog": ["来源绑定的岗位与经历候选；等待独立语义核对"], "policy_proposals": []}
@@ -282,7 +287,8 @@ def render(result):
     if not result["stories"]:
         lines += ["当前候选未形成有个人来源支持的故事卡。", ""]
     for story in result["stories"]:
-        lines += ["### " + esc(story["title"]), "", "状态：" + {"unknown": "未知", "planned": "计划", "in_progress": "进行中", "completed": "已完成"}[story["activity"]] + " · 分块候选，跨块需合并核对", ""]
+        stage = '跨块整合候选，身份及语义待核对' if result.get('consolidation') else '分块候选，跨块需合并核对'
+        lines += ["### " + esc(story["title"]), "", "状态：" + {"unknown": "未知", "planned": "计划", "in_progress": "进行中", "completed": "已完成"}[story["activity"]] + " · " + stage, ""]
         for section, label in labels.items():
             fragments = story["sections"][section]
             for fragment in fragments:
@@ -290,6 +296,16 @@ def render(result):
             if not fragments:
                 lines += ["- " + label + "待补：" + esc(story["missing"][section])]
         lines += [""]
+    if result.get('consolidation'):
+        lines += ['## 跨块核对记录', '', '整合仅覆盖先前选材，不能证明已检查整库的语义冲突。', '']
+        for conflict in result['consolidation']['conflicts']:
+            lines += ['- 未决冲突：'+esc(conflict['text'])+' '+citation(conflict['record_ids'])]
+        for part in result['consolidation']['parts']:
+            for row in part['omitted']:
+                lines += ['- 省略选材：'+esc(row['reason'])+' '+citation([row['record_id']])]
+            for row in part['gap_review']:
+                lines += ['- 缺口'+('保留' if row['status']=='retained' else '候选认为已补齐，待核对')+'：'+esc(row['reason'])+' '+citation(row['evidence_ids'])]
+        lines += ['']
     lines += ["## 引用记录", ""]
     for r in result["source_records"]:
         lines += ["### " + refs[r["record_id"]], "", f"`{r['record_id']}` · {r['kind']} · {r['claim_status']} · {r['activity_status']}", "",

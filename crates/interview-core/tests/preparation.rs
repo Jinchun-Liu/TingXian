@@ -6,9 +6,39 @@ fn bundle()->Bundle {serde_json::from_value(json!({"format":"meetily-background-
 async fn apply(index:&Index,b:&Bundle) {index.apply_background(b,&index.setting("version").await.unwrap(),false,Value::Null,false).await.unwrap();}
 fn repo()->PathBuf {Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")}
 fn candidate(scope:&Value,dir:&Path)->Value {
+    candidate_mode(scope,dir,false)
+}
+fn candidate_mode(scope:&Value,dir:&Path,consolidate:bool)->Value {
     let input=dir.join("scope.json");std::fs::write(&input,scope.to_string()).unwrap();
-    let output=std::process::Command::new(if cfg!(windows){"python"}else{"python3"}).args(["-B","scripts/preparation-roundtrip-fixture.py"]).arg(&input).current_dir(repo()).output().unwrap();
+    let mut command=std::process::Command::new(if cfg!(windows){"python"}else{"python3"});
+    command.args(["-B","scripts/preparation-roundtrip-fixture.py"]).arg(&input).current_dir(repo());if consolidate{command.arg("--consolidate");}
+    let output=command.output().unwrap();
     assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));serde_json::from_slice(&output.stdout).unwrap()
+}
+
+#[tokio::test]
+async fn consolidated_cli_roundtrip_retains_originals_and_rejects_silent_loss(){
+    let dir=tempfile::tempdir().unwrap().keep();let path=dir.join("index.sqlite");let index=Index::open(&path).await.unwrap();let mut b=bundle();
+    let mut other=b.documents[0].clone();other.id="c".repeat(64);other.name="合成同名项目.md".into();other.records[0].quote="我只做方案评审，没有编写测试。".into();b.documents.push(other);apply(&index,&b).await;
+    let c=candidate_mode(&index.preparation_export().await.unwrap(),&dir,true);assert_eq!(c["format"],"tingxian-preparation-v2");
+    assert_eq!(c["consolidation"]["parent_candidate"]["stories"].as_array().unwrap().len(),2);assert_eq!(c["stories"].as_array().unwrap().len(),1);assert_eq!(c["consolidation"]["conflicts"].as_array().unwrap().len(),1);
+    let p=preview(&index,&c).await;let facts=index.fact_card().await.unwrap();let version=index.setting("version").await.unwrap();save(&index,&c,&p).await;
+    assert_eq!(index.fact_card().await.unwrap().text,facts.text);assert_eq!(index.setting("version").await.unwrap(),version);assert!(index.background_inputs(false).await.unwrap().is_empty());
+    let reopened=Index::open(&path).await.unwrap();assert_eq!(reopened.preparation_view().await.unwrap()["candidate"],c);
+    let mut edits=vec![];
+    let mut x=c.clone();x["consolidation"]["parts"][0]["gap_review"]=json!([]);edits.push(x);
+    let mut x=c.clone();x["consolidation"]["conflicts"][0]["record_ids"].as_array_mut().unwrap().pop();edits.push(x);
+    let mut x=c.clone();x["consolidation"]["conflicts"][0]["status"]="resolved".into();edits.push(x);
+    let mut x=c.clone();x["consolidation"]["budget"]["limits"]["context_tokens"]=json!(1048576);edits.push(x);
+    let mut x=c.clone();x["consolidation"]["budget"]["planned_requests"]=json!(1);edits.push(x);
+    let mut x=c.clone();x["consolidation"]["parts"][0]["input_gaps"][0]["text"]="换掉原始缺口".into();edits.push(x);
+    let mut x=c.clone();x["consolidation"]["parts"][0]["omitted"]=json!([{"record_id":x["role_view"][0]["matches"][0]["record_id"],"reason":"不能同时保留和省略"}]);edits.push(x);
+    let mut x=c.clone();x["consolidation"]["parent_candidate"]["stories"]=json!([]);let mut parent=x["consolidation"]["parent_candidate"].clone();rehash(&mut parent);x["consolidation"]["parent_candidate_hash"]=parent["candidate_hash"].clone();x["consolidation"]["parent_candidate"]=parent;edits.push(x);
+    let mut x=c.clone();let mut extra=x["stories"][0].clone();extra["id"]="f".repeat(64).into();extra["input_hash"]=x["consolidation"]["parts"][0]["input_hash"].clone();x["stories"].as_array_mut().unwrap().push(extra);edits.push(x);
+    let mut x=c.clone();x["consolidation"]["parent_candidate"]=c.clone();edits.push(x);
+    for (i,mut x) in edits.into_iter().enumerate(){rehash(&mut x);assert!(index.preparation_preview(&x).await.is_err(),"accepted malformed consolidation {i}");}
+    let d=index.documents().await.unwrap().remove(0);index.exclude_source(SourceExclusion{path:d.path,expected_root:d.root,expected_hash:d.hash,excluded:true}).await.unwrap();
+    assert!(index.preparation_preview(&c).await.is_err());assert_eq!(index.preparation_view().await.unwrap()["source_binding_valid"],false);
 }
 fn rehash(v:&mut Value){v.as_object_mut().unwrap().remove("candidate_hash");v["candidate_hash"]=json!(hash(v));}
 async fn preview(index:&Index,c:&Value)->Value {index.preparation_preview(c).await.unwrap()}

@@ -93,10 +93,12 @@ async fn scope(tx: &mut Transaction<'_,Sqlite>) -> Result<Scope> {
 fn validate(candidate: &Value, scope: &Scope) -> Result<()> {
     check(candidate.to_string().len()<=LIMIT,"候选包超过16 MiB")?;
     check(!crate::contains_credential(&candidate.to_string()),"候选包含凭证格式")?;
-    shape(candidate,&["format","snapshot_hash","library_id","library_version","task","task_hash","role_view","stories","source_records","unselected_record_ids","accepted_inputs","ignored_stale_inputs","status","selection_status","execution_mode","model_calls_executed_by_tool","model_usage","actual_cost_cny","quality_pass","source_verified","application_imported","harness2_enabled","review_required","budget","candidate_hash"])?;
+    let consolidated=candidate["format"]=="tingxian-preparation-v2";
+    let mut fields=vec!["format","snapshot_hash","library_id","library_version","task","task_hash","role_view","stories","source_records","unselected_record_ids","accepted_inputs","ignored_stale_inputs","status","selection_status","execution_mode","model_calls_executed_by_tool","model_usage","actual_cost_cny","quality_pass","source_verified","application_imported","harness2_enabled","review_required","budget","candidate_hash"];
+    if consolidated {fields.push("consolidation");}shape(candidate,&fields)?;
     let mut content=candidate.clone();content.as_object_mut().unwrap().remove("candidate_hash");
     check(hex(&candidate["candidate_hash"])?==hash(&content),"候选摘要不一致")?;
-    check(candidate["format"]=="tingxian-preparation-v1" && candidate["status"]=="candidate_requires_semantic_review" && candidate["selection_status"]=="model_proposed", "候选包格式无效")?;
+    check((consolidated || candidate["format"]=="tingxian-preparation-v1") && candidate["status"]=="candidate_requires_semantic_review" && candidate["selection_status"]==if consolidated {"consolidated_candidate"}else{"model_proposed"}, "候选包格式无效")?;
     check(candidate["library_id"]==scope.export["library_id"] && candidate["library_version"]==hash(&scope.export["bundle"]) && candidate["snapshot_hash"]==scope.snapshot,"资料库、来源或本人修订已变化；请重新导出并整理")?;
     for key in ["quality_pass","source_verified","application_imported","harness2_enabled"] {check(candidate[key]==false,"候选包不能自行确认事实或启用优化")?;}
     check(candidate["budget"]["execution_profile"]=="offline" && candidate["budget"]["harness2_enabled"]==false
@@ -131,13 +133,13 @@ fn validate(candidate: &Value, scope: &Scope) -> Result<()> {
         for m in matches {shape(m,&["record_id","relevance","reason"])?;cite(&m["record_id"],true)?;check(seen.insert(hex(&m["record_id"])?),"重复匹配")?;check(["direct","supporting"].contains(&m["relevance"].as_str().unwrap_or("")),"相关性标记无效")?;text(&m["reason"],600,false)?;}
         for r in list(&row["references"],51200)? {shape(r,&["record_id","purpose"])?;cite(&r["record_id"],false)?;text(&r["purpose"],600,false)?;}
         let gaps=list(&row["gaps"],6144)?;check(!matches.is_empty() || !gaps.is_empty(),"缺少个人证据时须列出缺口")?;
-        for g in gaps {text(&g["text"],400,false)?;check(g["scope"]=="current_library" || (g["scope"]=="packet_only" && input_ids.contains(hex(&g["input_hash"])?)),"缺口范围无效")?;}
+        for g in gaps {text(&g["text"],400,false)?;check((!consolidated && g["scope"]=="current_library") || (g["scope"]==if consolidated {"consolidated_selected"}else{"packet_only"} && input_ids.contains(hex(&g["input_hash"])?)),"缺口范围无效")?;}
     }
     let mut story_ids=BTreeSet::new();
     for story in list(&candidate["stories"],6144)? {
-        shape(story,&["title","activity","sections","missing","id","input_hash","scope"])?;
+        let mut fields=vec!["title","activity","sections","missing","id","input_hash","scope"];if consolidated {fields.push("from_story_ids");}shape(story,&fields)?;
         text(&story["title"],120,false)?;check(story_ids.insert(hex(&story["id"])?),"重复故事卡")?;
-        check(story["scope"]=="packet_only" && input_ids.contains(hex(&story["input_hash"])?),"故事卡范围无效")?;
+        check(story["scope"]==if consolidated {"consolidated_group"}else{"packet_only"} && input_ids.contains(hex(&story["input_hash"])?),"故事卡范围无效")?;
         check(["unknown","planned","in_progress","completed"].contains(&story["activity"].as_str().unwrap_or("")),"故事完成状态无效")?;
         shape(&story["sections"],&SECTIONS)?;
         let missing=story["missing"].as_object().ok_or("故事缺口格式无效")?;
@@ -156,8 +158,117 @@ fn validate(candidate: &Value, scope: &Scope) -> Result<()> {
         check(story["activity"]!="completed" || (!activities.contains("planned") && !activities.contains("in_progress")),"未完成经历不能升为完成")?;
         check(story["activity"]=="unknown" || activities!=BTreeSet::from(["unknown".into()]),"未知完成状态须保留")?;
     }
+    if consolidated {
+        let parent=&candidate["consolidation"]["parent_candidate"];
+        check(parent["format"]=="tingxian-preparation-v1","整合必须保留原始分块候选，不接受递归整合")?;
+        validate(parent,scope)?;
+        used.extend(validate_consolidation(candidate,&sources,&input_ids)?);
+    }
     check(used==sources.keys().map(|s|s.to_string()).collect(),"候选包含未使用引用")?;
     Ok(())
+}
+
+fn id_set(value:&Value,limit:usize)->Result<BTreeSet<String>> {
+    let rows=list(value,limit)?;let mut ids=BTreeSet::new();
+    for row in rows {check(ids.insert(hex(row)?.to_owned()),"重复的整合标识")?;}Ok(ids)
+}
+fn validate_consolidation(candidate:&Value,sources:&BTreeMap<&str,&Value>,inputs:&BTreeSet<&str>)->Result<BTreeSet<String>> {
+    let c=&candidate["consolidation"];
+    shape(c,&["format","parent_candidate_hash","parent_candidate","parent_story_ids","parent_inputs","catalog_input_hash","grouping_hash","grouping","parts","conflicts","retained_source_ids","ignored_stale_inputs","budget","quality_pass"])?;
+    let parent=&c["parent_candidate"];
+    check(c["parent_candidate_hash"]==parent["candidate_hash"] && c["parent_inputs"]==parent["accepted_inputs"],"原始候选标识不一致")?;
+    for field in ["source_records","unselected_record_ids","task","budget"] {check(candidate[field]==parent[field],"整合改变了原始选材范围或任务")?;}
+    check(c["format"]=="preparation-consolidation-v1" && c["quality_pass"]==false,"整合不能自评通过")?;
+    for field in ["parent_candidate_hash","catalog_input_hash","grouping_hash"] {hex(&c[field])?;}
+    check(c["grouping_hash"]==hash(&json!({"format":"consolidation-groups-v1","input_hash":c["catalog_input_hash"],"groups":c["grouping"]})),"整合分组摘要无效")?;
+    id_set(&c["parent_inputs"],512)?;id_set(&c["ignored_stale_inputs"],1024)?;
+    let retained=id_set(&c["retained_source_ids"],32000000)?;
+    check(retained==sources.keys().map(|x|x.to_string()).collect(),"整合原始证据范围不完整")?;
+    let parents=id_set(&c["parent_story_ids"],6144)?;let mut grouped=BTreeSet::new();let mut group_sets=vec![];
+    let original_stories=list(&parent["stories"],6144)?;
+    check(parents==original_stories.iter().map(|s|s["id"].as_str().unwrap().to_owned()).collect(),"原始故事清单不一致")?;
+    for g in list(&c["grouping"],512)? {
+        shape(g,&["story_ids","reason"])?;text(&g["reason"],600,false)?;
+        let ids=id_set(&g["story_ids"],6144)?;check(!ids.is_empty() && ids.is_subset(&parents) && ids.is_disjoint(&grouped),"故事分组重复或越界")?;
+        grouped.extend(ids.clone());group_sets.push(ids);
+    }
+    check(grouped==parents,"整合分组遗漏故事")?;
+    let b=&c["budget"];
+    shape(b,&["format","parent_candidate_hash","grouping_hash","catalog_input_hash","limits","parts","catalog_input_upper","total_input_upper","planned_requests","model_calls_executed_by_tool","model_usage","actual_cost_cny","execution_profile","harness2_enabled","scope"])?;
+    check(b["format"]=="consolidation-plan-v1" && b["execution_profile"]=="offline" && b["harness2_enabled"]==false && b["model_calls_executed_by_tool"]==0 && b["model_usage"].is_null() && b["actual_cost_cny"].is_null() && b["parent_candidate_hash"]==c["parent_candidate_hash"] && b["grouping_hash"]==c["grouping_hash"],"整合执行或预算状态无效")?;
+    let limits=&b["limits"];shape(limits,&["context_tokens","input_upper_cap","output_reserved","safety_reserved"])?;
+    let number=|v:&Value|->Result<u64>{v.as_u64().filter(|n|*n>0 && *n<=262144).ok_or("整合预算数字无效".into())};
+    let context=number(&limits["context_tokens"])?;let cap=number(&limits["input_upper_cap"])?;
+    check(number(&limits["output_reserved"])?+number(&limits["safety_reserved"])?+cap<=context && limits["safety_reserved"]==4096,"整合预算未保留输出或安全余量")?;
+    check(b["catalog_input_hash"]==c["catalog_input_hash"] && number(&b["catalog_input_upper"])?<=cap,"分组输入预算无效")?;
+    let planned=list(&b["parts"],512)?;let actual=list(&c["parts"],512)?;
+    check(planned.len()==actual.len() && b["planned_requests"]==json!(planned.len()+1),"整合请求数无效")?;
+    let mut total=number(&b["catalog_input_upper"])?;
+    for (planned,actual) in planned.iter().zip(actual) {
+        shape(planned,&["input_hash","kind","record_ids","input_upper"])?;
+        for key in ["input_hash","kind","record_ids"] {check(planned[key]==actual[key],"整合计划与审计记录不一致")?;}
+        let n=number(&planned["input_upper"])?;check(n<=cap,"整合输入超过声明上限")?;total+=n;
+    }
+    check(b["total_input_upper"]==json!(total),"整合累计估计不一致")?;
+    let mut seen=BTreeSet::new();let mut covered=BTreeSet::new();let mut parent_seen=BTreeSet::new();let mut requirements=BTreeSet::new();let mut part_records=BTreeMap::new();let mut story_seen=BTreeSet::new();
+    let role_view=list(&candidate["role_view"],30)?;let stories=list(&candidate["stories"],6144)?;
+    for part in list(&c["parts"],512)? {
+        shape(part,&["input_hash","kind","record_ids","omitted","requirement_id","input_gaps","gap_review","from_story_ids"])?;
+        let h=hex(&part["input_hash"])?;check(inputs.contains(h) && seen.insert(h),"整合输入重复或无效")?;
+        let available=id_set(&part["record_ids"],32000000)?;check(available.is_subset(&retained),"整合引用越界")?;
+        let mut selected=BTreeSet::new();
+        if part["kind"]=="requirement" {
+            let id=text(&part["requirement_id"],40,false)?;check(requirements.insert(id),"重复岗位整合")?;
+            let row=role_view.iter().find(|r|r["id"]==id).ok_or("未知岗位整合")?;
+            let original=list(&parent["role_view"],30)?.iter().find(|r|r["id"]==id).ok_or("原始岗位要求不存在")?;
+            let expected: BTreeSet<String>=list(&original["matches"],51200)?.iter().chain(list(&original["references"],51200)?).map(|r|r["record_id"].as_str().unwrap().to_owned()).collect();
+            check(expected==available,"岗位整合未保留完整原始选材")?;
+            let expected_gaps: BTreeSet<String>=list(&original["gaps"],6144)?.iter().enumerate().map(|(i,g)|hash(&json!([id,i,g]))).collect();
+            let gap_inputs:Vec<Value>=list(&original["gaps"],6144)?.iter().enumerate().map(|(i,g)|json!({"id":hash(&json!([id,i,g])),"text":g["text"],"scope":g["scope"]})).collect();
+            check(part["input_gaps"]==json!(gap_inputs),"原始缺口文字已变化")?;
+            check(id_set(&part["from_story_ids"],6144)?.is_empty(),"岗位整合不能声明故事来源")?;
+            for r in list(&row["matches"],51200)?.iter().chain(list(&row["references"],51200)?) {check(selected.insert(hex(&r["record_id"])?.to_owned()),"重复的整合选材")?;}
+            for gap in list(&row["gaps"],6144)? {check(gap["input_hash"]==h,"岗位缺口来自不同整合输入")?;}
+            let mut gap_ids=BTreeSet::new();
+            for gap in list(&part["gap_review"],6144)? {
+                shape(gap,&["id","status","reason","evidence_ids","output_gap"])?;check(gap_ids.insert(hex(&gap["id"])?),"重复缺口判断")?;text(&gap["reason"],600,false)?;
+                let evidence=id_set(&gap["evidence_ids"],6144)?;check(evidence.is_subset(&selected),"缺口判断引用未保留证据")?;
+                if gap["status"]=="retained" {let pos=gap["output_gap"].as_u64().ok_or("缺口位置无效")?;check(pos<(list(&row["gaps"],6144)?.len() as u64),"保留缺口不可消失")?;}
+                else {check(gap["status"]=="resolved" && gap["output_gap"].is_null() && !evidence.is_empty() && evidence.iter().all(|rid|sources.get(rid.as_str()).is_some_and(|r|r["kind"]=="personal" || r["kind"]=="evidence")),"个人经历缺口不能由参考答案消除")?;}
+            }
+            check(gap_ids.iter().map(|s|s.to_string()).collect::<BTreeSet<_>>()==expected_gaps,"每个原始缺口都须明确处理")?;
+        } else {
+            check(part["kind"]=="story_group" && part["requirement_id"].is_null() && list(&part["gap_review"],6144)?.is_empty() && list(&part["input_gaps"],6144)?.is_empty(),"未知整合输入类型")?;
+            let origins=id_set(&part["from_story_ids"],6144)?;check(group_sets.contains(&origins) && origins.is_disjoint(&parent_seen),"整合故事分组不一致")?;
+            let mut expected=BTreeSet::new();
+            for old in original_stories.iter().filter(|s|origins.contains(s["id"].as_str().unwrap())) {for key in SECTIONS {for f in list(&old["sections"][key],8)? {expected.extend(id_set(&f["record_ids"],12)?);}}}
+            check(expected==available,"故事整合未保留完整原始证据")?;
+            let mut mapped=BTreeSet::new();
+            for story in stories.iter().filter(|s|s["input_hash"]==h) {
+                check(story_seen.insert(hex(&story["id"])?),"故事属于多个整合输入")?;
+                let ids=id_set(&story["from_story_ids"],6144)?;check(!ids.is_empty() && ids.is_subset(&origins) && ids.is_disjoint(&mapped),"故事映射缺失或重复")?;mapped.extend(ids);
+                let ids=id_set(&story["from_story_ids"],6144)?;let mut allowed=BTreeSet::new();
+                for old in original_stories.iter().filter(|s|ids.contains(s["id"].as_str().unwrap())) {
+                    check(story["activity"]!="completed" || (old["activity"]!="planned" && old["activity"]!="in_progress"),"整合不能升级原故事完成状态")?;
+                    for key in SECTIONS {for f in list(&old["sections"][key],8)? {allowed.extend(id_set(&f["record_ids"],12)?);}}
+                }
+                for key in SECTIONS {for f in list(&story["sections"][key],8)? {let ids=id_set(&f["record_ids"],12)?;check(ids.is_subset(&allowed),"故事借用了另一项目映射的证据")?;selected.extend(ids);}}
+            }
+            check(mapped==origins,"整合遗漏原故事")?;parent_seen.extend(origins);
+        }
+        check(selected.is_subset(&available),"整合内容借用其他输入证据")?;
+        let mut omitted=BTreeSet::new();
+        for row in list(&part["omitted"],6144)? {shape(row,&["record_id","reason"])?;let id=hex(&row["record_id"])?;check(available.contains(id) && !selected.contains(id) && omitted.insert(id.to_owned()),"省略证据标记无效")?;text(&row["reason"],600,false)?;}
+        selected.extend(omitted);check(selected==available,"整合无理由遗漏证据")?;
+        covered.extend(available.clone());part_records.insert(h,available);
+    }
+    check(seen==*inputs && covered==retained && parent_seen==parents && requirements.len()==role_view.len() && story_seen.len()==stories.len(),"整合范围不完整")?;
+    for conflict in list(&c["conflicts"],51200)? {
+        shape(conflict,&["text","record_ids","input_hash","status"])?;text(&conflict["text"],800,false)?;
+        let ids=id_set(&conflict["record_ids"],6144)?;let available=part_records.get(hex(&conflict["input_hash"])?).ok_or("冲突来源输入无效")?;
+        check(conflict["status"]=="unresolved" && ids.len()>=2 && ids.is_subset(available),"冲突须保留双方依据且不能自动裁定")?;
+    }
+    Ok(retained)
 }
 
 impl Index {
