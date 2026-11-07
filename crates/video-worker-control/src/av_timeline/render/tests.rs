@@ -411,3 +411,30 @@ fn stream_start_zero_extends_only_history_before_the_first_capture() {
         )
         .unwrap());
 }
+#[test]
+fn full_scale_original_input_does_not_violate_the_native_output_range() {
+    let renderer = SincRenderer::default();
+    let (timeline, g) = prepared(480, 37, |i| if i % 48 < 24 { 1.0 } else { -1.0 });
+    assert!(timeline
+        .with_rendered_window(
+            g,
+            interval(g, 3840, t(800_000), BLOCK),
+            t(800_000),
+            &renderer,
+            |w| {
+                let peak = w.audio.iter().map(|v| v.abs()).fold(0.0f32, f32::max);
+                println!(
+                    "full-scale filtered output peak={peak:.8}, saturated_samples={}",
+                    w.saturated_samples
+                );
+                assert!(
+                    peak <= 1.0,
+                    "valid full-scale input must not fault the native sink"
+                );
+                assert!(w.saturated_samples > 0, "overshoot remains observable");
+                true
+            }
+        )
+        .unwrap());
+    assert!(timeline.snapshot().metrics.saturated_samples > 0);
+}

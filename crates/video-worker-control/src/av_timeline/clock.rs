@@ -64,6 +64,9 @@ impl OutputInterval {
 }
 
 impl DeviceClock {
+    pub fn is_ready(&self) -> bool {
+        !self.failed && self.delta.is_some()
+    }
     pub fn new(generation: u64, position_frequency: u64) -> Result<Self, Error> {
         if generation == 0 || position_frequency == 0 {
             return Err(Error::Clock);
@@ -120,6 +123,31 @@ impl DeviceClock {
         frames: usize,
         now: Time,
     ) -> Result<OutputInterval, Error> {
+        self.interval_scaled(u128::from(position) * u128::from(RATE), frames, now)
+    }
+
+    /// Render clients count submitted sample frames. Preserve a fractional
+    /// device position when frequency is not divisible by the sample rate.
+    /// Flooring frame * frequency / RATE first silently loses timing precision.
+    pub fn interval_from_frame(
+        &self,
+        first_frame: u64,
+        frames: usize,
+        now: Time,
+    ) -> Result<OutputInterval, Error> {
+        self.interval_scaled(
+            u128::from(first_frame) * u128::from(self.frequency),
+            frames,
+            now,
+        )
+    }
+
+    fn interval_scaled(
+        &self,
+        start: u128,
+        frames: usize,
+        now: Time,
+    ) -> Result<OutputInterval, Error> {
         if self.failed || frames == 0 || frames > super::MAX_PACKET_FRAMES {
             return Err(Error::Clock);
         }
@@ -130,8 +158,11 @@ impl DeviceClock {
             .checked_sub(last.time.0)
             .filter(|v| *v <= MAX_OBSERVATION_GAP)
             .ok_or(Error::Clock)?;
-        let offset = position.checked_sub(last.position).ok_or(Error::Clock)?;
-        let delay = u128::from(offset) * u128::from(dt) / u128::from(dp);
+        let offset = start
+            .checked_sub(u128::from(last.position) * u128::from(RATE))
+            .ok_or(Error::Clock)?;
+        let delay = offset.checked_mul(u128::from(dt)).ok_or(Error::Clock)?
+            / (u128::from(dp) * u128::from(RATE));
         if delay > u128::from(MAX_OBSERVATION_GAP) {
             return Err(Error::Clock);
         }
@@ -150,14 +181,15 @@ impl DeviceClock {
         if time.checked_add(duration).ok_or(Error::Clock)? - now.0 > MAX_OBSERVATION_GAP {
             return Err(Error::Clock);
         }
-        let start = u128::from(position) * RATE as u128;
         Ok(OutputInterval {
             generation: self.generation,
             time: Time(time),
             period,
             frames,
             start,
-            end: start + frames as u128 * u128::from(self.frequency),
+            end: start
+                .checked_add(frames as u128 * u128::from(self.frequency))
+                .ok_or(Error::Clock)?,
             frequency: self.frequency,
             observed: last.time,
         })

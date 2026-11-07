@@ -29,6 +29,9 @@ pub struct RenderedWindow<'a> {
     pub audio: &'a [f32],
     pub video: Option<&'a CorrectedFrame>,
     pub status: RenderStatus,
+    /// Finite filter overshoots saturated at the normalized output boundary.
+    /// This is reported separately from missing input/silence; no AGC is used.
+    pub saturated_samples: u32,
 }
 
 /// Prepared 48 kHz drift-compensation filter, not a generic format converter.
@@ -48,12 +51,14 @@ impl Default for SincRenderer {
 struct Scratch {
     input: [f64; INPUT_CAPACITY],
     output: [f32; MAX_PACKET_FRAMES],
+    saturated_samples: u32,
 }
 impl Scratch {
     fn new() -> Self {
         Self {
             input: [0.0; INPUT_CAPACITY],
             output: [0.0; MAX_PACKET_FRAMES],
+            saturated_samples: 0,
         }
     }
 }
@@ -134,7 +139,13 @@ impl SincRenderer {
             if !value.is_finite() {
                 return Err(Error::Render);
             }
-            scratch.output[frame] = value as f32;
+            // Valid normalized input can overshoot after sinc reconstruction.
+            // Bound only the final output, without changing the filter/history,
+            // adding gain control, or relaxing the native sink's validation.
+            if value.abs() > 1.0 {
+                scratch.saturated_samples += 1;
+            }
+            scratch.output[frame] = value.clamp(-1.0, 1.0) as f32;
         }
         Ok(true)
     }
@@ -168,6 +179,7 @@ impl Timeline {
             let media = status == RenderStatus::Media;
             if !media {
                 scratch.output.fill(0.0);
+                scratch.saturated_samples = 0;
             }
             let output = RenderedWindow {
                 generation,
@@ -180,11 +192,12 @@ impl Timeline {
                     None
                 },
                 status,
+                saturated_samples: scratch.saturated_samples,
             };
             if !consume(output) {
                 return Err(Error::Sink);
             }
-            Ok(media)
+            Ok((media, u64::from(scratch.saturated_samples)))
         })
     }
 }

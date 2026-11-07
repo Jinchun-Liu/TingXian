@@ -110,6 +110,7 @@ pub struct Metrics {
     pub silence_frames: u64,
     pub windows: u64,
     pub filter_underrun_windows: u64,
+    pub saturated_samples: u64,
 }
 pub struct Snapshot {
     pub generation: u64,
@@ -440,7 +441,7 @@ impl Timeline {
         self.dispatch(generation, output, now, |view| {
             let ready = view.is_some();
             if consume(view) {
-                Ok(ready)
+                Ok((ready, 0))
             } else {
                 Err(Error::Sink)
             }
@@ -457,7 +458,7 @@ impl Timeline {
         consume: F,
     ) -> Result<bool, Error>
     where
-        F: FnOnce(Option<Window<'_>>) -> Result<bool, Error>,
+        F: FnOnce(Option<Window<'_>>) -> Result<(bool, u64), Error>,
     {
         let mut s = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         s.admit(generation)?;
@@ -512,15 +513,22 @@ impl Timeline {
         } else {
             None
         };
-        let delivered =
+        let (delivered, saturated) =
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consume(view))) {
-                Ok(Ok(delivered)) if !delivered || ready => delivered,
+                Ok(Ok((delivered, saturated)))
+                    if (!delivered || ready)
+                        && saturated <= output.frames as u64
+                        && (delivered || saturated == 0) =>
+                {
+                    (delivered, saturated)
+                }
                 Ok(Err(error)) => return Err(s.fail(error)),
                 _ => return Err(s.fail(Error::Sink)),
             };
         s.output_end = Some((output.end, output.frequency));
         s.presented_capture = Some(first);
         s.metrics.windows += 1;
+        s.metrics.saturated_samples += saturated;
         if delivered {
             s.metrics.output_frames += output.frames as u64;
             if id == s.last_video {

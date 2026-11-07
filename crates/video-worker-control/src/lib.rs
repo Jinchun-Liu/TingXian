@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::{Arc, Condvar, Mutex}, time::Duration};
 pub mod av_timeline;
+#[cfg(windows)]
+pub mod audio;
 mod eye;
 pub use eye::{EyeJob, EyeOutcome, EyeProvider, EyeReport};
 mod stream;

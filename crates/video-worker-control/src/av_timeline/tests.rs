@@ -565,3 +565,31 @@ fn stop_serializes_with_the_borrowed_handoff_and_returns_no_old_window() {
         Err(Error::Stale)
     );
 }
+#[test]
+fn submitted_frame_clock_mapping_preserves_fractional_device_positions() {
+    let mut clock = DeviceClock::new(1, 44_100).unwrap();
+    clock.observe(0, Time::from_qpc_100ns(0)).unwrap();
+    assert!(!clock.is_ready());
+    clock.observe(441, Time::from_qpc_100ns(100_000)).unwrap();
+    assert!(clock.is_ready());
+    let now = Time::from_qpc_100ns(100_000);
+    let first = clock.interval_from_frame(481, 479, now).unwrap();
+    let next = clock.interval_from_frame(960, 479, now).unwrap();
+    assert_eq!(first.first_sample_time().qpc_100ns(), 100_208);
+    assert_eq!(
+        first.end, next.start,
+        "sample intervals must meet exactly in rational device units"
+    );
+    assert_eq!(first.start, 481u128 * 44_100);
+    let prematurely_rounded = clock.interval(481 * 44_100 / 48_000, 479, now).unwrap();
+    assert_eq!(prematurely_rounded.first_sample_time().qpc_100ns(), 100_000);
+    assert_ne!(first.start, prematurely_rounded.start);
+    assert!(
+        clock.interval_from_frame(479, 1, now).is_err(),
+        "no past output"
+    );
+    assert!(
+        clock.interval_from_frame(u64::MAX, 960, now).is_err(),
+        "checked range"
+    );
+}

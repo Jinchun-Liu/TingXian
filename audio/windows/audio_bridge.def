@@ -1,0 +1,12 @@
+EXPORTS
+    TxAudioAbi
+    TxAudioCreate
+    TxAudioPrepare
+    TxAudioStart
+    TxAudioObserve
+    TxAudioReserve
+    TxAudioCommit
+    TxAudioStop
+    TxAudioGetStatus
+    TxAudioReadyEvent
+    TxAudioDestroy

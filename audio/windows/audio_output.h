@@ -88,6 +88,7 @@ public:
     HRESULT prepare(const std::vector<Endpoint>& inventory, const Pair& pair,
                     uint32_t channels, uint64_t generation) noexcept;
     HRESULT start(uint64_t generation, bool explicit_output_intent) noexcept;
+    HRESULT clock_snapshot(uint64_t generation, Snapshot& snapshot) noexcept;
     // S_FALSE means backpressure; caller must not discard source PCM or spin.
     HRESULT reserve(uint64_t generation, uint32_t frames, Ticket& ticket) noexcept;
     HRESULT commit(const Ticket&, Source, const float* mono, uint32_t frames) noexcept;

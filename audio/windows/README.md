@@ -1,7 +1,9 @@
 # Windows original-voice output adapter (experimental)
 
-This optional static library is not yet wired into the Rust timeline, main window,
-virtual camera, installer or meeting software. It creates no virtual microphone.
+This optional native library now has a fixed C ABI and a Rust owner-thread wrapper,
+tested with the Rust timeline through a separate in-memory backend DLL. The main
+window, paired virtual camera, installer and meeting software are not connected.
+It creates no virtual microphone.
 It has no capture API and does not wait for ASR, synthesize speech or change system
 defaults. The app's existing installed processes and user data are untouched.
 
@@ -51,6 +53,37 @@ the future main owner must retain this barrier across object/process recreation.
 Do not expose this adapter as a production restart mechanism before that is solved.
 The in-memory backend verifies and clears its own queue for three restart tests;
 those results do not qualify a real bridge restart.
+
+## Rust bridge
+
+`TingXianAudioOutput.dll` exports the ABI in `audio_bridge.h`; its 24/24/56/48-byte
+format/clock/ticket/status structs are asserted on both sides. `audio.rs` locks
+the DLL and parent directories, checks the native host's build pin and loaded
+path, and uses system-only dependency search. `NativeAudio` and tickets are
+`!Send/!Sync`; native exports additionally enforce their creator thread. The
+callback context remains alive through native destruction. The borrowed event
+can be waited on with the future joint owner's stop signal, without busy polling.
+
+Reservations carry a per-instance `Rc` identity so a ticket surviving destruction
+cannot target a new owner even if its native address/generation is reused. Only
+exact `S_OK` accepts writes; `S_FALSE` is backpressure, with no empty ticket or
+timeline consumption. Clock warmup uses two advancing observations. The frame
+cursor is converted to rational device units without premature integer rounding.
+Cleanup errors, client reset and external drain remain separate status fields.
+The revocation flag is a notification, not yet a paired video stop mechanism.
+
+`TingXianAudioFixture.dll` is a separately named test target. It instantiates only
+an in-memory backend and additionally exports Step/Read controls. Those symbols
+are absent from the product DLL and no fixture controls are provided in the
+public Rust API. Neither DLL is added to the app's installer in this round.
+
+The sinc renderer bounds finite filter overshoots at the final normalized PCM
+boundary and reports `saturated_samples` per window and in timeline metrics.
+This prevents valid full-scale input from faulting the strict native sink;
+ordinary in-range values are unchanged. No AGC, speech generation or broader
+input acceptance is introduced. Non-finite/native out-of-range samples still fail.
+Full-scale saturation can distort peaks; the count is exposed for later quality
+evaluation, not hidden as pristine audio. See [bridge validation](../../docs/eye-audio-bridge-validation-2026-11-07.md).
 
 ## Build and harmless checks
 

@@ -121,6 +121,14 @@ HRESULT Session::reserve(uint64_t generation, uint32_t frames, Ticket& ticket) n
     ticket = pending_;
     return S_OK;
 }
+HRESULT Session::clock_snapshot(uint64_t generation, Snapshot& snapshot) noexcept {
+    snapshot = {};
+    if (GetCurrentThreadId() != owner_) return RPC_E_WRONG_THREAD;
+    if (generation != generation_) return stale_error;
+    if (status_.phase != Phase::running) return state_error;
+    uint64_t consumed = 0;
+    return observe(snapshot, consumed);
+}
 HRESULT Session::commit(const Ticket& t, Source source, const float* mono, uint32_t frames) noexcept {
     if (GetCurrentThreadId() != owner_) return RPC_E_WRONG_THREAD;
     if (t.generation != generation_ || !t.serial || t.serial != pending_.serial) return stale_error;
