@@ -1,5 +1,9 @@
 # Windows 验收与交接
 
+教育后续修复 `4820b38` 的历史题目重答/修订及保存恢复合成回归见
+[接续记录](education-validation-2026-11-07-followup.md)。本机完整前端与 TypeScript 通过，
+本轮未构建安装包，现有安装版及原普通用户安装阻塞不变。下方安装 CI 属于旧提交。
+
 2026-11-07 教育增量独立分支见[EDU-M0/M1 验收](education-validation-2026-11-07.md)。
 最终源码 395b313 的 [Windows CI](https://github.com/Jinchun-Liu/TingXian/actions/runs/42349094148)
 已通过 25 组前端脚本、55 项核心与 4 项选定应用测试、CI 安装及离线自检。目标机安装版
