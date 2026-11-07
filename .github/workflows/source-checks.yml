@@ -31,6 +31,8 @@ jobs:
       - run: python3 -m pip install -r interview/requirements.txt
       - run: python3 scripts/test-background-harness.py
       - run: python3 scripts/test-background-process-recovery.py
+      - run: python3 -B scripts/test-toolkit-harness.py
+      - run: python3 -B scripts/test-toolkit-preparation.py
       - run: node scripts/test-public-source.cjs
       - run: python3 scripts/test-interview-monitor.py
       - run: pnpm exec tsc --noEmit --incremental false

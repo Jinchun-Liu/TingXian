@@ -16,3 +16,5 @@ description: 基于来源化背景和目标岗位生成材料、岗位视图或�
 开始执行前读 [共享执行与评审契约](../../toolkit/references/execution.md)。需要来源与岗位方法时，使用 `python3 <本skill目录>/../../toolkit/harness.py policy --context <context.json> --preview`，仅将返回的本任务片段交给模型，不加载完整注册表或其他角色全文。
 
 背景整理由现有执行组件完成，不建立另一套数据库。汇总后运行共享工具 `team-audit --run <run.json>`；通过结构校验不等于事实、质量或跨宿主验收通过。安装与完整资源位置见 [可移植包说明](../../toolkit/README.md)。
+
+需要岗位视图或项目故事卡时，读取[来源化岗位准备](../../toolkit/references/preparation.md)。逐块执行 preparation-input，按当前输入哈希复用结果，使用 preparation-collect 生成同一份可评审候选。缺块不能声称完成；跨块项目、局部缺口与矛盾仍需语义整合。

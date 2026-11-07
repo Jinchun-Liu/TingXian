@@ -1,0 +1,35 @@
+{
+  "format": "meetily-background-v1",
+  "documents": [
+    {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "name": "synthetic.txt",
+      "records": [
+        {
+          "kind": "personal",
+          "location": "行1",
+          "quote": "只在模拟环境编写了 null 与零的契约测试，未上线。",
+          "note": "测试练习，不代表生产事故经验"
+        },
+        {
+          "kind": "practice",
+          "location": "行2",
+          "quote": "参考答案：线上先止损，再定位根因。",
+          "note": "面试练习，不是个人经历"
+        },
+        {
+          "kind": "technical",
+          "location": "行3",
+          "quote": "Schema 通过不等于业务语义正确。",
+          "note": "通用技术方法"
+        }
+      ]
+    }
+  ],
+  "profile": {
+    "overview": "虚构测试资料",
+    "role": "测试",
+    "aliases": ""
+  }
+}

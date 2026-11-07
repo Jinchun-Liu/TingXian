@@ -28,7 +28,7 @@ def main():
     for name in SKILLS:
         assert f"skills/{name}/SKILL.md" in files
     assert "toolkit/harness.py" in files and "toolkit/registry.json" in files
-    manifest={"schema_version":"tingxian-toolkit-export-1","version":"0.3-candidate",
+    manifest={"schema_version":"tingxian-toolkit-export-1","version":"0.4-candidate",
               "source_commit":subprocess.check_output(["git","rev-parse","HEAD"],cwd=ROOT,text=True).strip(),
               "worktree_dirty":bool(subprocess.check_output(["git","status","--porcelain"],cwd=ROOT)),
               "harness2_enabled":False,"active_policy":"legacy","skills_installed":False,

@@ -1,0 +1,72 @@
+[
+  {
+    "format": "preparation-part-v1",
+    "input_hash": "98ef7689535a63d0db06d5ef094c4bac8c0374765da09b227bbd8d5c883c028d",
+    "requirements": [
+      {
+        "id": "req-1",
+        "matches": [
+          {
+            "record_id": "16879d9cac39b8f3177dc7bc1caffee9c8a90f848a69c9836c0e78bc66f591d3",
+            "relevance": "supporting",
+            "reason": "仅有模拟环境契约测试证据"
+          }
+        ],
+        "references": [
+          {
+            "record_id": "3f673a865d9631acd63c7175d447ef4df1ff6e6fab4d77099f56fac5af57275b",
+            "purpose": "仅作方法参考"
+          },
+          {
+            "record_id": "110f50220bcf1daa8bc76e088ca3924687592362f55fae2f7795069b15a67579",
+            "purpose": "仅作方法参考"
+          }
+        ],
+        "gaps": []
+      },
+      {
+        "id": "req-2",
+        "matches": [],
+        "references": [
+          {
+            "record_id": "3f673a865d9631acd63c7175d447ef4df1ff6e6fab4d77099f56fac5af57275b",
+            "purpose": "仅作方法参考"
+          },
+          {
+            "record_id": "110f50220bcf1daa8bc76e088ca3924687592362f55fae2f7795069b15a67579",
+            "purpose": "仅作方法参考"
+          }
+        ],
+        "gaps": [
+          "本批没有真实线上事故经历的个人证据"
+        ]
+      }
+    ],
+    "stories": [
+      {
+        "title": "模拟契约测试",
+        "activity": "unknown",
+        "sections": {
+          "context": [],
+          "task": [],
+          "action": [
+            {
+              "text": "只在模拟环境编写契约测试，未上线。",
+              "record_ids": [
+                "16879d9cac39b8f3177dc7bc1caffee9c8a90f848a69c9836c0e78bc66f591d3"
+              ]
+            }
+          ],
+          "result": [],
+          "learning": []
+        },
+        "missing": {
+          "context": "需要本人补充并核对证据",
+          "task": "需要本人补充并核对证据",
+          "result": "需要本人补充并核对证据",
+          "learning": "需要本人补充并核对证据"
+        }
+      }
+    ]
+  }
+]

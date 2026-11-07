@@ -141,6 +141,17 @@ def compile_policy(registry, context, preview=False):
             "extra_model_calls": 0, "harness2_enabled": False}
 
 
+def preparation_policy(registry, task, preview=False):
+    """Task-specific background methods, never layout/ATS or all role cards."""
+    allowed = {"CV:C01", "CV:C02", "CV:C03", "CV:C04", "CV:C05", "CV:C06", "CV:C09", "CV:C13", "CV:C19", "CV:C24",
+               "INT:G01", "INT:G03", "INT:G08", "INT:G09"}
+    context = route(" ".join(task["requirements"]), role=task["role"])
+    context.update(tool="background", question_types=["role_fit", "project", "unknown"], preparation_rules=sorted(allowed))
+    pack = compile_policy({**registry, "rules": [r for r in registry["rules"] if r["id"] in allowed]}, context, preview)
+    if not pack["rule_ids"]: return None
+    return {k: pack[k] for k in ("text", "rule_ids", "pack_sha256", "source_map", "preview_only")}
+
+
 def validate_review(review, candidate, evidence_ids):
     require(review.get("schema_version") == "review-1", "Review schema mismatch")
     require(review.get("reviewer") in ROLES, "Unknown reviewer")
@@ -228,28 +239,39 @@ def archive_bundle(bundle, library_id, role, revisions=None, excluded=None):
     spec.loader.exec_module(background)
     background.validate_bundle(bundle)
     require(library_id and isinstance(library_id, str), "Explicit library identity required")
+    background.clean(library_id, 120)
     excluded, revisions = set(excluded or []), revisions or []
     records = []
     for doc in bundle["documents"]:
         for pos, r in enumerate(doc["records"]):
             rid = digest([library_id, doc["id"], doc["hash"], pos, r])
             records.append({"record_id": rid, "namespace": "user_facts" if r["kind"] in ("personal", "evidence") else "task_context",
-                            "kind": r["kind"], "claim": r["note"], "claim_status": "source_asserted",
+                            "kind": r["kind"], "claim": r["quote"], "extraction_note": r["note"], "claim_status": "source_asserted",
                             "activity_status": "unknown", "source_refs": [{"source_id": doc["id"], "source_hash": doc["hash"],
-                            "extraction_revision": digest(doc), "locator": r["location"], "quote": r["quote"]}],
+                            "extraction_revision": digest(doc), "record_index": pos, "locator": r["location"], "quote": r["quote"]}],
                             "excluded": doc["id"] in excluded, "manual_revision": None})
     by_id = {r["record_id"]: r for r in records}
+    revision_ids = set()
     for rev in revisions:
         require(rev.get("record_id") in by_id and isinstance(rev.get("claim"), str) and rev["claim"].strip(), "Invalid manual revision")
         require(rev.get("basis") and rev.get("revision_id"), "Manual assertion needs revision id and user basis")
+        background.clean(rev["claim"], 2000)
+        background.clean(rev["basis"], 1000)
+        background.clean(rev["revision_id"], 120)
         original = by_id[rev["record_id"]]
+        require(not original.get("superseded") and rev["revision_id"] not in revision_ids, "Stale or duplicate manual revision")
+        activity = rev.get("activity", original["activity_status"])
+        require(activity in ("unknown", "planned", "in_progress", "completed"), "Invalid activity status")
+        revision_ids.add(rev["revision_id"])
         original["superseded"] = True
-        records.append({**original, "record_id": digest([original["record_id"], rev]), "claim": rev["claim"],
-                        "claim_status": "user_asserted", "superseded": False,
-                        "manual_revision": {"id": rev["revision_id"], "basis": rev["basis"], "supersedes": original["record_id"]}})
+        revised = {**original, "record_id": digest([original["record_id"], rev]), "claim": rev["claim"],
+                   "claim_status": "user_asserted", "activity_status": activity, "superseded": False,
+                   "manual_revision": {"id": rev["revision_id"], "basis": rev["basis"], "supersedes": original["record_id"]}}
+        records.append(revised)
+        by_id[revised["record_id"]] = revised
     active = [r for r in records if not r["excluded"] and not r.get("superseded")]
     # Role views are pointers; the full archive is never shortened to a summary.
-    return {"schema_version": "tingxian-fact-view-1", "library_id": library_id,
+    return {"schema_version": "tingxian-fact-view-2", "library_id": library_id,
             "library_version": digest(bundle), "validity_hash": digest(sorted(excluded)),
             "records": records, "role_view": {"role": role, "record_ids": [r["record_id"] for r in active], "selection_status": "unranked_requires_role_review"},
             "gaps": ["角色相关性、原文蕴含及完成状态需模型或用户复核；格式检查不证明真实性"],
@@ -312,12 +334,46 @@ def main():
     archive.add_argument("--role", default="")
     archive.add_argument("--revisions", type=Path)
     archive.add_argument("--excluded", type=Path)
+    for action in ("preparation-plan", "preparation-input", "preparation-collect"):
+        command = sub.add_parser(action)
+        command.add_argument("--bundle", type=Path, required=True)
+        command.add_argument("--library-id", required=True)
+        command.add_argument("--task", type=Path, required=True)
+        command.add_argument("--revisions", type=Path)
+        command.add_argument("--excluded", type=Path)
+        command.add_argument("--context-tokens", type=int, default=262144)
+        command.add_argument("--input-cap", type=int, default=32768)
+        command.add_argument("--output-reserve", type=int, default=8192)
+        command.add_argument("--preview-methods", action="store_true")
+        if action == "preparation-input": command.add_argument("--part", type=int, required=True)
+        if action == "preparation-collect":
+            command.add_argument("--proposals", type=Path, required=True)
+            command.add_argument("--output-format", choices=("json", "markdown", "team"), default="json")
+            command.add_argument("--execution-mode", choices=("fixture", "host_model", "unreported"), default="unreported")
     args = parser.parse_args()
     read = lambda p: json.loads(p.read_text(encoding="utf-8"))
     if args.action == "policy":
         result = compile_policy(load_registry(args.registry), read(args.context), args.preview)
     elif args.action == "team-audit":
         result = audit_team(read(args.run))
+    elif args.action.startswith("preparation-"):
+        spec = importlib.util.spec_from_file_location("tingxian_preparation", Path(__file__).with_name("preparation.py"))
+        preparation = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(preparation)
+        archive = archive_bundle(read(args.bundle), args.library_id, "",
+                                 read(args.revisions) if args.revisions else [], read(args.excluded) if args.excluded else [])
+        task = read(args.task)
+        preparation.task_spec(task)
+        method_pack = preparation_policy(load_registry(Path(__file__).with_name("registry.json")), task, args.preview_methods)
+        plan = preparation.plan(archive, task, args.context_tokens, args.input_cap, args.output_reserve, method_pack)
+        if args.action == "preparation-plan": result = preparation.manifest(plan)
+        elif args.action == "preparation-input": result = preparation.input_packet(plan, args.part)
+        else:
+            result = preparation.collect(plan, read(args.proposals), args.execution_mode)
+            if args.output_format == "markdown":
+                print(preparation.render(result))
+                return
+            if args.output_format == "team": result = preparation.team_candidate(result)
     else:
         result = archive_bundle(read(args.bundle), args.library_id, args.role,
                                 read(args.revisions) if args.revisions else [], read(args.excluded) if args.excluded else [])
