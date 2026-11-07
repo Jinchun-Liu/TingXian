@@ -205,7 +205,8 @@ HRESULT FramePublisher::accept() {
     hr = transfer(pipe_, true, &ack, sizeof(ack), stop_);
     connected_ = SUCCEEDED(hr); return hr;
 }
-HRESULT FramePublisher::send(UINT16 kind, UINT64 epoch, UINT64 id, UINT64 captured, const BYTE* data, UINT32 bytes) {
+HRESULT FramePublisher::send(UINT16 kind, UINT64 epoch, UINT64 id, UINT64 captured, const BYTE* data, UINT32 bytes, bool* received) {
+    if (received) *received = false;
     std::lock_guard guard(writer_);
     if (!connected_ || pipe_ == INVALID_HANDLE_VALUE) return HRESULT_FROM_WIN32(ERROR_PIPE_NOT_CONNECTED);
     if ((kind == Frame && endpoint_.version != 1) || (kind == ScheduledFrame && endpoint_.version != 2)) return E_INVALIDARG;
@@ -220,6 +221,10 @@ HRESULT FramePublisher::send(UINT16 kind, UINT64 epoch, UINT64 id, UINT64 captur
         if (SUCCEEDED(hr) && (!basic_header(receipt, 2) || receipt.kind != Receipt || receipt.bytes != sizeof(HRESULT) ||
             receipt.epoch != epoch || receipt.id != id || receipt.captured)) hr = E_INVALIDARG;
         if (SUCCEEDED(hr)) hr = transfer(pipe_, false, &admitted, sizeof(admitted), stop_);
+        // v2 admission is exactly S_OK or a failing HRESULT. An undefined positive
+        // status is a protocol failure, not evidence that the receiver admitted it.
+        if (SUCCEEDED(hr) && admitted != S_OK && SUCCEEDED(admitted)) hr = E_INVALIDARG;
+        if (SUCCEEDED(hr) && received) *received = true;
     }
     if (FAILED(hr)) { connected_ = false; DisconnectNamedPipe(pipe_); }
     // A negative admission is not a transport fault. No receipt proves delivery
@@ -231,14 +236,15 @@ HRESULT FramePublisher::submit(UINT64 epoch, UINT64 id, UINT64 captured, const B
     if (!epoch || !id || !data || bytes != FrameBytes) return E_INVALIDARG;
     return send(Frame, epoch, id, captured, data, bytes);
 }
-HRESULT FramePublisher::submit_timed(UINT64 epoch, UINT64 sequence, const TimedFrame& timing, const BYTE* data, UINT32 bytes) {
+HRESULT FramePublisher::submit_timed(UINT64 epoch, UINT64 sequence, const TimedFrame& timing, const BYTE* data, UINT32 bytes, bool* receipt) {
+    if (receipt) *receipt = false;
     if (!epoch || !sequence || timing.flags > TimedNeutral || timing.reserved ||
         (timing.flags == TimedNeutral ? (data || bytes) : (!data || bytes != FrameBytes))) return E_INVALIDARG;
     try {
         std::vector<BYTE> payload(sizeof(timing) + bytes);
         std::memcpy(payload.data(), &timing, sizeof(timing));
         if (bytes) std::memcpy(payload.data() + sizeof(timing), data, bytes);
-        const auto result = send(ScheduledFrame, epoch, sequence, 0, payload.data(), UINT32(payload.size()));
+        const auto result = send(ScheduledFrame, epoch, sequence, 0, payload.data(), UINT32(payload.size()), receipt);
         SecureZeroMemory(payload.data(), payload.size()); return result;
     } catch (const std::bad_alloc&) { return E_OUTOFMEMORY; }
 }

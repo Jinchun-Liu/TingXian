@@ -43,7 +43,7 @@ class FramePublisher {
     VideoPipeEndpoint endpoint_{};
     bool connected_ = false;
     HRESULT open_protocol(VideoPipeEndpoint* endpoint, UINT16 version);
-    HRESULT send(UINT16 kind, UINT64 epoch, UINT64 id, UINT64 captured, const BYTE* data, UINT32 bytes);
+    HRESULT send(UINT16 kind, UINT64 epoch, UINT64 id, UINT64 captured, const BYTE* data, UINT32 bytes, bool* receipt = nullptr);
 public:
     FramePublisher();
     ~FramePublisher();
@@ -54,7 +54,8 @@ public:
     HRESULT accept();
     HRESULT begin(UINT64 epoch);
     HRESULT submit(UINT64 epoch, UINT64 id, UINT64 captured, const BYTE* data, UINT32 bytes);
-    HRESULT submit_timed(UINT64 epoch, UINT64 sequence, const TimedFrame& timing, const BYTE* data, UINT32 bytes);
+    HRESULT submit_timed(UINT64 epoch, UINT64 sequence, const TimedFrame& timing, const BYTE* data, UINT32 bytes,
+        bool* receipt = nullptr);
     HRESULT end(UINT64 epoch);
     void cancel() noexcept; // event only; caller may close/join on its owning lane
     void close();

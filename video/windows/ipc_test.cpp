@@ -551,16 +551,25 @@ void run(const wchar_t* dll) {
 // Rust's production preview/output adapter drives this reader over stdin/stdout.
 // The capability is an inherited pipe payload, never a command-line/log value.
 // Actual COM/MF samples, no virtual camera registration or physical capture.
-void relay_reader(const wchar_t* dll) {
+void relay_reader(const wchar_t* dll, bool timed = false) {
     const auto input = GetStdHandle(STD_INPUT_HANDLE), output = GetStdHandle(STD_OUTPUT_HANDLE);
     expect(GetFileType(input) == FILE_TYPE_PIPE && GetFileType(output) == FILE_TYPE_PIPE, "relay test requires private pipes");
     VideoPipeEndpoint endpoint{}; pipe_read(input, &endpoint, sizeof(endpoint));
-    expect(valid_video_endpoint(endpoint), "relay endpoint invalid");
+    expect(valid_video_endpoint(endpoint) && endpoint.version == (timed ? 2u : 1u), "relay endpoint invalid");
     SourceFixture source(dll, &endpoint); SecureZeroMemory(&endpoint, sizeof(endpoint));
     BYTE reply = 'R'; pipe_write(output, &reply, 1); UINT64 expected = 0;
     for (;;) {
         BYTE command = 0; pipe_read(input, &command, 1);
-        if (command == 'P') {
+        if (command == 'T' && timed) {
+            TimedFrame expected_frame;pipe_read(input,&expected_frame,sizeof(expected_frame));
+            source.wait([&]{UINT64 now=0;return qpc_now(now)&&now>=expected_frame.presentation_qpc;},"planned sample not due");
+            TimedSample stamp;LONGLONG pts=0;
+            const bool neutral=expected_frame.flags==TimedNeutral;
+            source.pixels(neutral?32:160,neutral?128:96,-1,&stamp,&pts);
+            expect(stamp.frame_id==expected_frame.frame_id&&stamp.capture_qpc==expected_frame.capture_qpc&&
+                stamp.presentation_qpc==expected_frame.presentation_qpc&&UINT64(pts)==expected_frame.presentation_qpc,
+                "Rust v2 timeline lost actual MF time/identity");
+        } else if (command == 'P' && !timed) {
             ++expected; source.wait([&]{return source.metrics().accepted >= expected;}, "relay pixels not received");
             source.pixels(188, 128); // synthetic worker's corrected gray, not input gray
         } else if (command == 'N') {
@@ -580,13 +589,14 @@ int wmain(int argc, wchar_t** argv) {
         return eye_publisher_child(reinterpret_cast<HANDLE>(_wcstoui64(argv[2], nullptr, 10)), reinterpret_cast<HANDLE>(_wcstoui64(argv[3], nullptr, 10)));
     if (argc == 4 && wcscmp(argv[1], L"--publisher-test") == 0)
         return publisher_child(reinterpret_cast<HANDLE>(_wcstoui64(argv[2], nullptr, 10)), reinterpret_cast<HANDLE>(_wcstoui64(argv[3], nullptr, 10)));
-    const bool relay = argc == 3 && wcscmp(argv[1], L"--relay-reader") == 0;
+    const bool timed_relay = argc == 3 && wcscmp(argv[1], L"--timed-relay-reader") == 0;
+    const bool relay = timed_relay || (argc == 3 && wcscmp(argv[1], L"--relay-reader") == 0);
     if (argc != 2 && !relay) return 2;
     bool com = false, mf = false; int result = 1;
     try {
         check(CoInitializeEx(nullptr, COINIT_MULTITHREADED), "COM initialize"); com = true;
         check(MFStartup(MF_VERSION, MFSTARTUP_FULL), "MF initialize"); mf = true;
-        if (relay) relay_reader(argv[2]);
+        if (relay) relay_reader(argv[2],timed_relay);
         else {
             run(argv[1]);
             std::cout << "{\"checks\":" << groups << ",\"result\":\"pass\",\"two_processes\":true,\"synthetic_only\":true,\"device_registered\":false}\n";

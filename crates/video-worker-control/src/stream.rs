@@ -13,7 +13,10 @@ pub struct NativeOutputEndpoint { bytes: [u8;236] }
 impl NativeOutputEndpoint {
     pub fn activation_blob(&self) -> &[u8;236] { &self.bytes }
     pub(crate) fn parse(bytes: &[u8], pid: u32) -> Result<Self,Reason> {
-        if bytes.len()!=236 || u32::from_le_bytes(bytes[0..4].try_into().unwrap())!=1
+        Self::parse_version(bytes,pid,1)
+    }
+    pub(crate) fn parse_version(bytes: &[u8], pid: u32, version:u32) -> Result<Self,Reason> {
+        if !matches!(version,1|2) || bytes.len()!=236 || u32::from_le_bytes(bytes[0..4].try_into().unwrap())!=version
             || u32::from_le_bytes(bytes[196..200].try_into().unwrap())!=pid || pid==0
             || bytes[204..236].iter().all(|b|*b==0) { return Err(Reason::Protocol); }
         let name: Vec<u16> = bytes[4..196].chunks_exact(2).map(|c|u16::from_le_bytes([c[0],c[1]])).collect();

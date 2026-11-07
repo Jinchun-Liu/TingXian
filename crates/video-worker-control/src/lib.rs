@@ -5,6 +5,8 @@ use std::{path::PathBuf, sync::{Arc, Condvar, Mutex}, time::Duration};
 pub mod av_timeline;
 #[cfg(windows)]
 pub mod audio;
+#[cfg(windows)]
+pub mod timed_video;
 mod eye;
 pub use eye::{EyeJob, EyeOutcome, EyeProvider, EyeReport};
 mod stream;

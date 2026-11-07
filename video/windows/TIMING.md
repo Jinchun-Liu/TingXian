@@ -67,7 +67,9 @@ Unknown kinds, malformed headers and invalid control order close the connection.
 After successful Begin, valid frame admission/rejection, or completed End, the
 receiver sends kind 7: header version 2, matching epoch/sequence, zero captured,
 payload length 4 and an HRESULT payload. This receipt proves admission or mailbox
-clear only. It does not prove a sample reached MF, the audio endpoint, FrameServer
+clear only. Only S_OK is an admission; a failing HRESULT is a rejection, and an
+undefined positive status is a protocol fault with unknown admission. This does
+not prove a sample reached MF, the audio endpoint, FrameServer
 or the meeting. A failed I/O after writing is an unknown admission outcome; stop
 both routes in the future owner instead of blindly retrying. Stale/invalid/full
 frame admissions report failure and remain countable without dropping the pipe.
@@ -87,8 +89,9 @@ admission errors, backpressure, three restarts and version/malformed rejection.
 Legacy source and eye-output regressions remain required. No test registers or
 opens a camera/mic, plays audio, starts NVIDIA or modifies installed components.
 
-Rust's existing native video endpoint/relay still selects v1. The next step is a
-separate v2 host bridge and shared AV owner with bounded asynchronous admission,
+Rust's existing preview/relay still selects v1. A separate [v2 host bridge](HOST-TIMING.md)
+now provides bounded asynchronous admission and explicit receipts. The next step
+is the shared AV owner with bounded PCM staging,
 paired faults and a persistent drain barrier. Main-window controls, original
 microphone capture, installed FrameServer/virtual audio, SDK processing and
 meeting-receiver P95 skew remain unverified. A pipe receipt or local preview

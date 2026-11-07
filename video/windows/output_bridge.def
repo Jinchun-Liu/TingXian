@@ -8,3 +8,14 @@ EXPORTS
     TxOutputClose
     TxOutputGetStatus
     TxOutputDestroy
+    TxTimedAbi
+    TxTimedCreate
+    TxTimedOpen
+    TxTimedReserve
+    TxTimedStage
+    TxTimedTake
+    TxTimedStatus
+    TxTimedEvent
+    TxTimedCancel
+    TxTimedStop
+    TxTimedDestroy
