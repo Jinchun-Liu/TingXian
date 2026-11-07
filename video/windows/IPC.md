@@ -1,9 +1,11 @@
 # Local video pipe protocol v1
 
 `FramePublisher` belongs in the optional user-mode eye worker. `PipeReceiver`
-belongs in the media source. They now exchange actual NV12 bytes across Windows
-processes. The application/worker and virtual-device installer are still absent;
-no camera or audio is opened by this transport.
+belongs in the media source. They exchange actual NV12 bytes across Windows
+processes. The independent installer and main-window prerequisite worker exist;
+[EyePipeOutput](EYE-OUTPUT.md) now connects completed provider results to the pipe.
+The actual SDK worker and main-window media controls remain separate integration
+work. No camera or audio is opened by this transport.
 
 ## Identity and activation
 

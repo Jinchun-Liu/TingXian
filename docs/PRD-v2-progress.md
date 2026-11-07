@@ -27,7 +27,8 @@
 
 新连接工作位于独立 `feat/windows-eye-output-20261107`，见[输出验收](eye-output-validation-2026-11-07.md)：
 将校正后 BGR 经独立有界发送线程转成声明一致的 NV12，接入现有受限管道和 MF 样本。
-本机源码/自有合成验证与后续 CI 分列；没有启用 NVIDIA、摄像头、虚拟设备或更新安装版。
+本机相关 3 组 CTest 通过；92ac4c2 的原生 CI 7 组 CTest、137 条 Provider 断言及
+22 项监督器测试通过。没有启用 NVIDIA、摄像头、虚拟设备或更新安装版。
 教育 M0/M1 在独立 `feat/interview-learning-20261107` 的 4c7b910 保留，不进入 M2/M3。
 
 续作新增[受监督的原生离线 worker](eye-worker-validation-2026-11-07.md)，复用受限
