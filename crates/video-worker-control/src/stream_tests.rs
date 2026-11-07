@@ -55,7 +55,7 @@ fn endpoint_bytes()->[u8;236] {
 #[test]
 fn stream_latest_queue_is_bounded_and_cancel_revokes_unclaimed_endpoint() {
     let (job,feed)=crate::stream::pair(EyeProvider::Synthetic);
-    assert!(feed.submit(frame(1,1)).is_err());job.shared.admit();
+    assert!(feed.submit(frame(1,1)).is_err());job.shared.admit(1);
     assert!(job.shared.publish(NativeOutputEndpoint::parse(&endpoint_bytes(),1).unwrap()));
     assert!(!feed.submit(frame(1,1)).unwrap());assert!(feed.submit(frame(2,2)).unwrap());assert!(feed.submit(frame(2,3)).is_err());
     assert!(feed.submit(StreamFrame{id:3,captured_ms:3,bgr:vec![0;1]}).is_err());
@@ -127,4 +127,71 @@ fn stream_report_rejects_wrong_identity_unbalanced_counts_and_media_claims() {
     }
     let endpoint=endpoint_bytes();assert!(NativeOutputEndpoint::parse(&endpoint,1).is_ok());assert!(NativeOutputEndpoint::parse(&endpoint,2).is_err());
     let mut invalid=endpoint;invalid[204..].fill(0);assert!(NativeOutputEndpoint::parse(&invalid,1).is_err());assert!(NativeOutputEndpoint::parse(&endpoint[..235],1).is_err());
+}
+
+struct StopOnDrop(Arc<Controller>);
+impl Drop for StopOnDrop {fn drop(&mut self){self.0.request_stop();self.0.wait_idle(Duration::from_secs(3));}}
+fn await_preview(preview:&mut NativePreview) {
+    let deadline=Instant::now()+Duration::from_secs(3);
+    while !preview.poll(Duration::from_millis(20)).expect("native preview packet") {
+        assert!(Instant::now()<deadline,"no corrected preview frame");
+    }
+}
+#[test]
+fn preview_real_worker_three_restarts_keep_pixels_time_and_host_generation() {
+    let state=Arc::new(Controller::default());let _stop=StopOnDrop(state.clone());
+    for _ in 0..3 {
+        let (run,feed)=start(&state,fixture("eye-stream.exe"));let generation=state.snapshot().generation;
+        let running=thread::spawn(move||run.execute());let mut preview=feed.open_preview(Duration::from_secs(3)).unwrap();
+        assert!(matches!(feed.take_endpoint(Duration::ZERO),Err(Reason::EyeOutput)));
+        preview.with_current(|f|assert!(f.is_none(),"no fabricated initial preview"));
+        let captured=tick();feed.submit(frame(17,captured)).unwrap();await_preview(&mut preview);
+        preview.with_current(|value|{
+            let f=value.unwrap();assert_eq!((f.generation,f.id,f.captured_ms),(generation,17,captured));
+            assert!(f.nv12[..1280*720].iter().all(|v|*v==188));assert!(f.nv12[1280*720..].iter().all(|v|*v==128));
+        });
+        preview.with_current(|f|assert_eq!(f.unwrap().id,17));
+        let report=preview.status();assert_eq!((report.received,report.presented,report.repeated),(1,1,1));
+        let json=serde_json::to_string(&report).unwrap();assert!(!json.contains("TingXian.Video")&&!json.contains("nv12")&&!json.contains("capability"));
+        state.request_stop();preview.with_current(|f|assert!(f.is_none(),"late frame after controller stop"));
+        assert_eq!(preview.status().phase,PreviewPhase::Stopped);assert!(state.wait_idle(Duration::from_secs(3)));
+        assert_eq!(running.join().unwrap().phase,Phase::Off);drop(preview);
+    }
+}
+#[test]
+fn preview_expiry_and_replacement_do_not_relabel_capture_or_count_repeats_as_unique() {
+    let state=Arc::new(Controller::default());let _stop=StopOnDrop(state.clone());
+    let (run,feed)=start(&state,fixture("eye-stream.exe"));let running=thread::spawn(move||run.execute());
+    let mut preview=feed.open_preview(Duration::from_secs(3)).unwrap();
+    feed.submit(frame(1,tick())).unwrap();await_preview(&mut preview);
+    let captured=tick();feed.submit(frame(2,captured)).unwrap();await_preview(&mut preview);
+    preview.with_current(|f|{let f=f.unwrap();assert_eq!((f.id,f.captured_ms),(2,captured));});
+    assert_eq!(preview.status().replaced,1);
+    while tick()-captured<=250{thread::sleep(Duration::from_millis(2));}
+    preview.with_current(|f|assert!(f.is_none(),"expired face must become neutral even without another packet"));
+    assert_eq!((preview.status().expired,preview.status().presented),(1,1));
+    feed.submit(frame(3,tick())).unwrap();await_preview(&mut preview);
+    state.request_stop();preview.with_current(|f|assert!(f.is_none()));
+    assert_eq!((preview.status().replaced,preview.status().discarded),(1,1),"stop discard is not a replacement or successful presentation");
+    assert_eq!(running.join().unwrap().phase,Phase::Off);
+}
+#[test]
+fn preview_native_handoff_serializes_stop_and_drop_disconnects_the_owned_worker() {
+    let state=Arc::new(Controller::default());let _stop=StopOnDrop(state.clone());
+    let (run,feed)=start(&state,fixture("eye-stream.exe"));let running=thread::spawn(move||run.execute());
+    let mut preview=feed.open_preview(Duration::from_secs(3)).unwrap();
+    feed.submit(frame(1,tick())).unwrap();await_preview(&mut preview);
+    let (entered,entry)=std::sync::mpsc::channel();let (release,wait_release)=std::sync::mpsc::channel();
+    let presenting=thread::spawn(move||{preview.with_current(|f|{assert!(f.is_some());entered.send(()).unwrap();wait_release.recv().unwrap();});preview});
+    entry.recv_timeout(Duration::from_secs(2)).unwrap();
+    let stopping_state=state.clone();let (stopped,stop_receipt)=std::sync::mpsc::channel();
+    let stopping=thread::spawn(move||{stopping_state.request_stop();stopped.send(()).unwrap();});
+    assert!(stop_receipt.recv_timeout(Duration::from_millis(30)).is_err(),"stop returned before in-flight handoff ended");
+    release.send(()).unwrap();let mut preview=presenting.join().unwrap();stopping.join().unwrap();
+    preview.with_current(|f|assert!(f.is_none()));assert_eq!(running.join().unwrap().phase,Phase::Off);
+    let (run,feed)=start(&state,fixture("eye-stream.exe"));let running=thread::spawn(move||run.execute());
+    let mut preview=feed.open_preview(Duration::from_secs(3)).unwrap();feed.submit(frame(1,tick())).unwrap();await_preview(&mut preview);
+    drop(preview);feed.submit(frame(2,tick())).unwrap();
+    let done=running.join().unwrap();assert_eq!(done.phase,Phase::Fault);assert_eq!(done.reason,Some(Reason::EyeProcessing));
+    assert!(state.wait_idle(Duration::ZERO));
 }

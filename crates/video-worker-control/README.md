@@ -1,8 +1,10 @@
 # Video worker controller
 
-This is the main-app side of the native worker boundary. Only explicit local
-prerequisite inspection exists today; no SDK/camera/output start command is
-implemented. The production worker reports `runtime: not_pinned`, never ready.
+This is the main-app side of the native worker boundary. The shipped Tauri command
+still only exposes explicit prerequisite inspection (`runtime: not_pinned`).
+Native callers also have separate, explicitly admitted offline and streaming eye
+jobs and a corrected-frame preview receiver. These are not camera, virtual-device
+or webview start commands, and are not enabled in the current installed app.
 
 The caller supplies a bundled path and a digest embedded at app build time, never
 webview input. Before launch, the EXE and parent directories are opened without
@@ -38,3 +40,36 @@ They execute the real production inspection and separate synthetic fixtures; no
 physical camera, virtual device, GPU/SDK, audio or network is started. Keep all
 fixture directories and failures. A passing controller suite does not verify Tauri
 webview authority, packaged installation, eye inference or meeting reception.
+
+## Native preview receive lane
+
+After reserving and dispatching a stream, `StreamFeed::open_preview` consumes its
+single-use output endpoint. Call it and `NativePreview::poll` on a dedicated native
+media lane. The endpoint must not enter webview IPC, logs or preferences. The pipe
+is opened without inheritable handles and with identification-only security QoS;
+the receiver verifies server PID/session and the capability handshake. It creates
+no camera device and loads no vendor runtime itself.
+
+`poll` accepts at most one fixed-size 720p limited-range BT.709 NV12 frame at a time.
+Only one latest completed frame plus the current incoming payload is retained.
+The host generation is bound to the stream's ready message and endpoint; the
+worker-local epoch is checked separately and retained as `worker_generation`.
+Frame ID and original GetTickCount64 timestamp are preserved. Invalid packets fail
+closed, with absolute 500 ms packet I/O deadlines; idle polling is not a fault.
+Pending I/O is cancelled and its completion observed before releasing its buffer.
+This is a bounded native transport policy, not a hard realtime OS guarantee.
+
+`with_current` passes a borrowed frame or `None` for a neutral placeholder. The
+handoff holds the stream lease so controller Stop cannot return and then admit a
+delayed old-frame callback. The callback must be short, synchronous and must not
+call back into Controller/StreamFeed or enqueue the borrowed frame for later
+presentation. It must not be used as a blocking UI or GPU operation. Stopped,
+future-dated and older-than-250-ms frames are never handed off; there is no raw
+fallback. Status contains only counts/phase/reason, not image or endpoint data.
+
+Stop the owning controller before dropping the receiver during normal shutdown.
+Dropping the receiver alone disconnects its pipe and faults the worker output;
+it is not a success acknowledgment. No detached receive thread is created here.
+Preview consumes the sole endpoint: simultaneous preview and virtual output still
+need a separately controlled native fanout. Main-window rendering, that output
+owner, real SDK streaming, installation and meeting reception remain unverified.

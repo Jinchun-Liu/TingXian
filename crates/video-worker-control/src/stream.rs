@@ -35,6 +35,7 @@ pub struct StreamInputStatus {
 }
 #[derive(Default)]
 struct State {
+    generation: u64,
     admitted: bool, ready: bool, closed: bool, ending: bool,
     pending: Option<StreamFrame>, endpoint: Option<NativeOutputEndpoint>,
     last_id:u64,last_time:u64,stats:StreamInputStatus,
@@ -43,7 +44,15 @@ struct State {
 pub(crate) struct Shared { state:Mutex<State>,changed:Condvar }
 pub(crate) enum Next { Frame(StreamFrame), Finish, Closed }
 impl Shared {
-    pub(crate) fn admit(&self) { self.state.lock().unwrap_or_else(|e|e.into_inner()).admitted=true; }
+    pub(crate) fn admit(&self,generation:u64) {
+        let mut s=self.state.lock().unwrap_or_else(|e|e.into_inner());s.admitted=true;s.generation=generation;
+    }
+    // Hold the same lease lock through native frame handoff. Stop cannot finish
+    // closing this stream and then allow a delayed preview callback to present.
+    pub(crate) fn while_open<T>(&self,f:impl FnOnce(bool,u64)->T)->T {
+        let s=self.state.lock().unwrap_or_else(|e|e.into_inner());
+        f(s.admitted&&s.ready&&!s.closed,s.generation)
+    }
     pub(crate) fn publish(&self,endpoint:NativeOutputEndpoint)->bool {
         let mut s=self.state.lock().unwrap_or_else(|e|e.into_inner());
         if !s.admitted || s.closed || s.ready { return false; }

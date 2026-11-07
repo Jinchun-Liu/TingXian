@@ -7,6 +7,10 @@ pub use eye::{EyeJob, EyeOutcome, EyeProvider, EyeReport};
 mod stream;
 pub use stream::{NativeOutputEndpoint, StreamFeed, StreamFrame, StreamInputStatus, StreamReport, STREAM_BGR_BYTES};
 #[cfg(windows)]
+mod preview;
+#[cfg(windows)]
+pub use preview::{NativePreview, PreviewFrame, PreviewPhase, PreviewStatus};
+#[cfg(windows)]
 mod windows;
 #[cfg(all(test, windows))]
 mod tests;
@@ -103,7 +107,7 @@ impl Controller {
         };
         let id = inner.snapshot.generation;
         inner.snapshot.phase = Phase::Preparing; inner.snapshot.reason = None;
-        let stream=if let Work::Stream(job)=&work { job.shared.admit();Some(job.shared.clone()) } else { None };
+        let stream=if let Work::Stream(job)=&work { job.shared.admit(id);Some(job.shared.clone()) } else { None };
         inner.active = Some(Active { id, signal: signal.clone(), stream });
         Ok(Some(Run { controller: self.clone(), signal, worker, work, id, finished: false }))
     }
