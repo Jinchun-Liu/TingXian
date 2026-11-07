@@ -670,14 +670,16 @@ async fn start_answer(app:tauri::AppHandle,state:&InterviewState,question_id:Str
     Ok(())
 }
 #[tauri::command]
-pub async fn answer_cancel(state:State<'_,InterviewState>)->Result<(),String> {state.cancel_answers().await}
+pub async fn answer_cancel<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>)->Result<(),String> {crate::education::cancel_all(&app);state.cancel_answers().await}
 #[tauri::command]
-pub async fn session_clear(state:State<'_,InterviewState>)->Result<(),String> {
+pub async fn session_clear<R:tauri::Runtime>(app:tauri::AppHandle<R>,state:State<'_,InterviewState>)->Result<(),String> {
+    crate::education::cancel_all(&app);
     let _guard=state.lifecycle.lock().await;state.cancel().await;let _network=state.network.write().await;state.session.store(false,Ordering::SeqCst);Ok(())
 }
 
 #[tauri::command]
 pub async fn interview_history_clear(app:tauri::AppHandle,state:State<'_,InterviewState>,snapshot:Value)->Result<crate::interview_history::ClearReport,String> {
+    crate::education::cancel_all(&app);
     let _guard=state.lifecycle.lock().await;
     state.cancel().await;
     let _network=state.network.write().await;

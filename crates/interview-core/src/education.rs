@@ -64,12 +64,17 @@ pub async fn evaluate(request:&Request,profile:&crate::ProviderProfile,key:&str,
 
 struct Job {session:String,generation:u64,cancel:CancellationToken}
 #[derive(Default)]
-pub struct Tasks {active:Mutex<HashMap<String,Job>>,seen:Mutex<HashMap<String,(String,Option<ReviewResult>)>>,floors:Mutex<HashMap<String,u64>>}
+pub struct Tasks {active:Mutex<HashMap<String,Job>>,seen:Mutex<HashMap<String,(String,Option<ReviewResult>)>>,floors:Mutex<HashMap<String,u64>>,epoch:std::sync::atomic::AtomicU64}
 pub struct Lease {owner:Arc<Tasks>,lane:String,pub cancel:CancellationToken}
 fn identity(r:&Request)->String{format!("{}:{}:{}:{}:{}:{}:{}",r.session_id,r.generation,r.input_hash,r.profile_id,r.context_limit,r.lane,r.profile_stamp)}
 impl Tasks {
     pub fn begin(self:&Arc<Self>,r:&Request)->Result<Lease>{
+        self.begin_scoped(r,self.scope())
+    }
+    pub fn scope(&self)->u64{self.epoch.load(std::sync::atomic::Ordering::SeqCst)}
+    pub fn begin_scoped(self:&Arc<Self>,r:&Request,epoch:u64)->Result<Lease>{
         let mut active=self.active.lock().unwrap();if active.contains_key(&r.lane){return Err("该教育通道仍在收尾，请等待或取消；输入已保留".into());}
+        if epoch!=self.scope(){return Err("全局取消后旧教育请求已失效，未发送".into());}
         if r.generation<*self.floors.lock().unwrap().get(&r.session_id).unwrap_or(&0){return Err("教育输入代次已过期，未发送".into());}
         let mut seen=self.seen.lock().unwrap();if seen.contains_key(&r.task_id){return Err("该任务已经提交；请查看原记录或明确新建重试".into());}
         if seen.len()>=2048{return Err("本次运行的教育任务已达上限，请保存后重启；不会自动重发".into());}
@@ -80,7 +85,7 @@ impl Tasks {
     pub fn cached(&self,r:&Request)->Result<Option<ReviewResult>>{if r.generation<*self.floors.lock().unwrap().get(&r.session_id).unwrap_or(&0){return Err("教育任务已过期".into());}let seen=self.seen.lock().unwrap();match seen.get(&r.task_id){Some((hash,result)) if hash==&identity(r)=>Ok(result.clone()),Some(_)=>Err("任务 ID 与原输入不匹配".into()),None=>Ok(None)}}
     pub fn complete(&self,r:&Request,result:ReviewResult){if let Some(entry)=self.seen.lock().unwrap().get_mut(&r.task_id){entry.1=Some(result);}}
     pub fn cancel(&self,session:&str,generation:u64){let active=self.active.lock().unwrap();let mut floors=self.floors.lock().unwrap();let floor=floors.entry(session.into()).or_default();*floor=(*floor).max(generation);for j in active.values(){if j.session==session&&j.generation<generation{j.cancel.cancel();}}}
-    pub fn cancel_all(&self){for j in self.active.lock().unwrap().values(){j.cancel.cancel();}}
+    pub fn cancel_all(&self){let active=self.active.lock().unwrap();self.epoch.fetch_add(1,std::sync::atomic::Ordering::SeqCst);for j in active.values(){j.cancel.cancel();}}
     pub fn idle(&self)->bool{self.active.lock().unwrap().is_empty()}
 }
 impl Drop for Lease {fn drop(&mut self){self.owner.active.lock().unwrap().remove(&self.lane);}}
@@ -198,6 +203,7 @@ mod tests {
         let mut third=b.clone();third.task_id="task-3".into();assert!(tasks.begin(&third).is_err());
         tasks.cancel("study-1",3);assert!(a.cancel.is_cancelled()&&b_lease.cancel.is_cancelled());assert!(!tasks.idle());drop(a);drop(b_lease);assert!(tasks.idle());assert!(tasks.begin(&third).is_err(),"late IPC must respect cancellation before launch");
         third.generation=3;let last=tasks.begin(&third).unwrap();drop(last);assert!(tasks.begin(&third).is_err(),"same task cannot bill twice");
+        let epoch=tasks.scope();tasks.cancel_all();third.task_id="late-configuration-read".into();assert!(tasks.begin_scoped(&third,epoch).is_err(),"cancel before provider lookup completes must block admission");
     }
     #[tokio::test]
     async fn separate_store_reopens_keeps_legacy_and_retains_every_revision(){

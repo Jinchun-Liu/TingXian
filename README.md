@@ -23,6 +23,15 @@ An experimental conversation assistant for interviews, learning, meetings and ge
 
 在高级工作区的「资料与设置」选择自己的资料夹或重点文件，以独立的背景模型整理原文、综述、岗位和术语。核对后应用，也可导出整理 Skill，在 Codex 或 Claude Code 中处理再导回。文字上下文调试预算为 256K，可查看整库估算及接口返回的实际用量。
 
+## 教育开发分支：复盘与练习
+
+`feat/interview-learning-20261107` 新增 [EDU-M0/M1](docs/education-validation-2026-11-07.md)，尚未作为稳定功能发布。
+从左侧「复盘与练习」、单题「复盘」或历史会话「复盘这份会话」进入；可以手动输入题目和本人回答，
+无需摄像头、采集或生成模型即可保存。配置自己的文字模型后，预览选定回答、资料和评分标尺，再明确发送。
+初答、修订、重答和旧反馈分别保留；退出保存失败会阻止退出。导出需核对预览中的个人内容。
+两个首批内容包均为合成草稿；真实模型质量、目标机安装 GUI 与学习效果尚待分别验收。
+[PRD v2.2](docs/PRD-v2.2-interview-learning.md) · [策略来源与 MIT 许可](education/NOTICE.md)。
+
 ## 场景与默认行为
 
 | 场景 | 开始采集后的默认行为 | AI 用途 |

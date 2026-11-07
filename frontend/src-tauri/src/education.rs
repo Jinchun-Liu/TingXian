@@ -33,6 +33,7 @@ pub async fn education_preview<R:tauri::Runtime>(window:WebviewWindow<R>,intervi
 #[tauri::command]
 pub async fn education_generate<R:tauri::Runtime>(window:WebviewWindow<R>,state:State<'_,EducationState>,interview:State<'_,crate::interview::InterviewState>,request:Request)->Result<ReviewResult,String>{
     owner(&window)?;crate::interview_exit::ensure_not_exiting(window.app_handle())?;
+    let epoch=state.tasks.scope();
     if !request.confirmed{return Err("需明确确认本次发送范围".into());}core::messages(&request)?;
     if request.lane=="background"&&interview.education_assist_active(){return Err("实时辅助活跃，后台评估已暂停；可稍后明确继续".into());}
     if let Some(result)=state.tasks.cached(&request)?{return Ok(result);}
@@ -42,7 +43,7 @@ pub async fn education_generate<R:tauri::Runtime>(window:WebviewWindow<R>,state:
     if request.profile_stamp!=interview_core::digest(serde_json::to_string(profile).unwrap().as_bytes()){return Err("模型配置已变化，请重新预览本次发送范围".into());}
     let key=interview.provider_key(profile).await;
     crate::interview_exit::ensure_not_exiting(window.app_handle())?;
-    let lease=state.tasks.begin(&request)?;
+    let lease=state.tasks.begin_scoped(&request,epoch)?;
     let work=core::evaluate(&request,profile,&key,lease.cancel.clone());tokio::pin!(work);
     let mut ticker=tokio::time::interval(std::time::Duration::from_millis(100));
     let result=loop{tokio::select!{result=&mut work=>break result,_=ticker.tick()=>{if crate::interview_exit::ensure_not_exiting(window.app_handle()).is_err()||(request.lane=="background"&&interview.education_assist_active()){lease.cancel.cancel();}}}}?;
@@ -56,6 +57,20 @@ pub(crate) async fn quiesce<R:tauri::Runtime>(app:&tauri::AppHandle<R>)->Result<
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[tokio::test]
+    async fn global_assist_cancel_and_clear_drain_education_network_holders(){
+        let app=tauri::test::mock_builder().manage(EducationState::default()).manage(crate::interview::InterviewState::default())
+            .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        for clear in [false,true]{
+            let request:Request=serde_json::from_value(json!({"task_id":if clear{"clear"}else{"cancel"},"session_id":"synthetic","generation":1,"lane":"interactive","input_json":"{}","input_hash":"synthetic","profile_id":"answer-1","context_limit":32768,"confirmed":true})).unwrap();
+            let state=app.state::<EducationState>();let epoch=state.tasks.scope();let lease=state.tasks.begin(&request).unwrap();
+            let network=app.state::<crate::interview::InterviewState>().network.clone().read_owned().await;
+            let drain=tokio::spawn(async move{lease.cancel.cancelled().await;drop(network);drop(lease);});
+            let cancel=async{if clear{crate::interview::session_clear(app.handle().clone(),app.state()).await}else{crate::interview::answer_cancel(app.handle().clone(),app.state()).await}};
+            tokio::time::timeout(std::time::Duration::from_secs(3),cancel).await.expect("education blocked assist cancellation").unwrap();
+            drain.await.unwrap();assert!(state.tasks.idle());assert!(state.tasks.scope()>epoch);
+        }
+    }
     #[test]
     fn education_ipc_rejects_display_and_quit_cancels_without_restart(){
         let app=tauri::test::mock_builder().manage(EducationState::default()).manage(crate::interview::InterviewState::default()).manage(crate::interview_exit::ExitState::default())
