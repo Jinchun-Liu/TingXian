@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "scope": "New fictional current-screen assets for the frozen six-case context trial; never a real screen capture. No answer oracle or old utterance is drawn.",
+  "cases": [
+    {"id":"D03","width":1400,"height":1000,"blocks":[
+      {"text":"订单查询 · 待评审实现","size":36},
+      {"code":true,"text":"SELECT order_id, tenant_id, amount\nFROM orders\nWHERE tenant_id = :tenant_id\n  AND amount = :amount;","size":30},
+      {"text":"调用结果：HTTP 504\n客户端提示：请求超时，业务结果待确认。","size":30},
+      {"text":"请结合之前说过的约束，给出测试边界和核对步骤。","size":28}
+    ]},
+    {"id":"H03","width":1400,"height":1000,"blocks":[
+      {"text":"资源删除 · 待评审实现","size":36},
+      {"code":true,"text":"DELETE FROM resources\nWHERE resource_id = :resource_id;\n\nresponse.status = 202\nresponse.body = {\"value\": null}","size":30},
+      {"text":"客户端对所有非成功状态统一执行自动重试。","size":30},
+      {"text":"请结合之前说过的契约条件，指出不能漏掉的验证。","size":28}
+    ]}
+  ]
+}

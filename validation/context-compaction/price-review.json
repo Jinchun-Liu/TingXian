@@ -1,0 +1,13 @@
+{
+  "checked_on": "2026-11-08",
+  "model": "deepseek-flash",
+  "endpoint": "https://api.deepseek.com/chat/completions",
+  "currency": "CNY",
+  "basis": "peak_cache_miss",
+  "input_micro_cny_per_token": 2,
+  "output_micro_cny_per_token": 8,
+  "image_upper_tokens": 1024,
+  "pricing_url": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+  "vision_url": "https://api-docs.deepseek.com/guides/vision/",
+  "note": "Official pages reviewed on this date; conservative peak rates. Not a bill, account probe, or authorization. Refresh before any paid run. App baseline remains 262144 despite vendor's larger advertised window."
+}
