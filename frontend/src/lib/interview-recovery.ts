@@ -41,7 +41,7 @@ export class RecoveryWriter {
       await this.initialize();if(this.paused||generation!==this.generation)return;
       const draft=parseRecoverySnapshot(await this.read()),signature=JSON.stringify(draft);
       if(this.paused||generation!==this.generation)return;
-      const meaningful=draft.snapshot.history.length||draft.snapshot.transcripts.length||draft.composer.question||draft.composer.confirmed_answer;
+      const meaningful=draft.snapshot.cloud_asr_usage?.tasks.length||draft.snapshot.history.length||draft.snapshot.transcripts.length||draft.composer.question||draft.composer.confirmed_answer;
       if(signature===this.signature || (!meaningful&&!this.signature))return;
       await this.invoke('interview_recovery_write',{id:this.id,epoch:this.epoch,revision:++this.revision,draft});
       if(generation!==this.generation)return;

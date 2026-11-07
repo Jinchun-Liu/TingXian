@@ -24,7 +24,7 @@
 
 PCM 帧及其内存 admission lease 在网络发送完成前不可释放计数。发送上限、连接/发送/结束超时明确报错，断流不静默改来源、不补传、不自动改本地。用户停止后可在设置里切回本地 Whisper。
 
-`interview-cloud-asr-usage.task_billed_seconds` 是供应商任务累计值，可能缺失；不要按每次句子事件求和。未来费用台账需要增加供应商 task 标识和去重，不拿该字段代替实际发言时长。
+`interview-cloud-asr-usage.task_billed_seconds` 是供应商任务累计值，可能缺失；不要按每次句子事件求和。现已增加供应商 task 标识和原生去重记录，随会话保存/恢复；见[用量契约与限制](cloud-asr-usage.md)。不拿该字段代替实际发言时长或完整账单。
 
 ## 当前证据边界
 

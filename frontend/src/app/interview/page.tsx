@@ -35,6 +35,8 @@ import { FactCard, legacyFactCard } from '@/lib/interview-facts';
 import { DocumentMetadata, DocumentRecord, sourceStatusLabel } from '@/lib/interview-documents';
 import { Source, Turn, SessionSnapshot, SessionPage, SavedSession, parseSessionSnapshot, recoverSessionSnapshot } from '@/lib/interview-session';
 import {InterviewUsage,usageLabel} from '@/lib/interview-usage';
+import {useCloudUsage} from '@/lib/use-cloud-usage';
+import {CloudUsageView} from '@/components/interview/CloudUsageView';
 import { Input } from '@/components/ui/input';
 import {MeetingControls, CallNotice, useMeetingMode} from '@/components/interview/MeetingMode';
 import {addressedOnly} from '@/lib/meeting-mode';
@@ -121,6 +123,7 @@ export default function InterviewPage() {
   const [timing, setTiming] = useState('');
   const [usage, setUsage] = useState<string>('未知');
   const usageLedger=useRef(new InterviewUsage());
+  const asrUsage=useCloudUsage();
   const [,setUsageVersion]=useState(0);
   const [report, setReport] = useState('');
   const [importJob, setImportJob] = useState<ImportView | null>(null);
@@ -441,7 +444,7 @@ export default function InterviewPage() {
     await saveSessionSnapshot();
     current.current = { question: '', answer: '' }; setPhase('会话已结束 · 已保存到本机，可恢复'); await refresh();
   });
-  const sessionSnapshot = async (allowEmpty=false): Promise<SessionSnapshot> => {const memoryBoundary=await memory.current.boundary();return parseSessionSnapshot({version:memoryBoundary?2:1,memory:memoryBoundary,history:historyRef.current,transcripts,spoken_dialogue:spoken.current,current:current.current,calls:usageLedger.current.acceptedCalls(),usage,usage_ledger:usageLedger.current.snapshot()},allowEmpty);};
+  const sessionSnapshot = async (allowEmpty=false): Promise<SessionSnapshot> => {const memoryBoundary=await memory.current.boundary();return parseSessionSnapshot({version:memoryBoundary?2:1,memory:memoryBoundary,history:historyRef.current,transcripts,spoken_dialogue:spoken.current,current:current.current,calls:usageLedger.current.acceptedCalls(),usage,usage_ledger:usageLedger.current.snapshot(),cloud_asr_usage:await asrUsage.snapshot()},allowEmpty);};
   const draftRecovery = useInterviewRecovery(async()=>({version:1,snapshot:await sessionSnapshot(true),composer:{question,confirmed_answer:confirmedAnswer}}));
   const saveSessionSnapshot = async () => {
     const saved = await invoke<SavedSession>('interview_session_save',{snapshot:await sessionSnapshot(),confirmed:true});
@@ -461,7 +464,7 @@ export default function InterviewPage() {
   },[]);
   const restoreSession = (id:number|string) => run(async()=>{
     if (sessionOperation.current || recording.isRecording || inFlight.current) throw Error('请先结束当前采集和回答，再恢复保存记录');
-    if ((historyRef.current.length || question || confirmedAnswer) && !allowReplaceSession) throw Error('请先保存当前内容，再明确允许替换当前显示');
+    if ((historyRef.current.length || asrUsage.hasRecords || question || confirmedAnswer) && !allowReplaceSession) throw Error('请先保存当前内容，再明确允许替换当前显示');
     const previousHistory=historyRef.current;
     sessionOperation.current=true;acceptTranscripts.current=false;
     try {
@@ -477,6 +480,7 @@ export default function InterviewPage() {
       historyRef.current=saved.history;setHistory(saved.history);setTranscripts(saved.transcripts);spoken.current=saved.spoken_dialogue;
       setFeedGeneration(v=>v+1);
       current.current=saved.current;setCalls(saved.calls);setUsage(saved.usage);setLimit(Math.max(DEFAULT_REQUEST_LIMIT,saved.calls));
+      asrUsage.restore(saved.cloud_asr_usage);
       usageLedger.current=new InterviewUsage(saved.usage_ledger??undefined,saved.calls);setUsageVersion(v=>v+1);
       setQuestion(draft?.composer.question||'');setAnswer('');setSources([]);setConflicts([]);setConfirmedAnswer(draft?.composer.confirmed_answer||'');setEditingSelfId(null);setTiming('');
       selfEditBase.current=null;
@@ -485,7 +489,7 @@ export default function InterviewPage() {
     } finally {sessionOperation.current=false;}
   });
   const exportSession = () => run(async () => {
-    const snapshot = { exported_at: new Date().toISOString(), latency_notes: '各阶段为稳定转写到达界面（手动为提交时刻）起的毫秒数；发声结束为VAD估计，非人工标注。native到界面使用系统时钟桥接，其余界面阶段使用单调时钟；无效桥接或强制停止时缺失，不补零。request_sent为界面收到原生发送事件的时刻；首句为建议回答中首个句末标点到达，不等于人工语义验收。', mode: 'AI 建议不等于本人实际回答', spoken_dialogue: spoken.current, transcripts, history, current: current.current, calls:usageLedger.current.acceptedCalls(), usage, usage_ledger:usageLedger.current.snapshot() };
+    const snapshot = { exported_at: new Date().toISOString(), latency_notes: '各阶段为稳定转写到达界面（手动为提交时刻）起的毫秒数；发声结束为VAD估计，非人工标注。native到界面使用系统时钟桥接，其余界面阶段使用单调时钟；无效桥接或强制停止时缺失，不补零。request_sent为界面收到原生发送事件的时刻；首句为建议回答中首个句末标点到达，不等于人工语义验收。', mode: 'AI 建议不等于本人实际回答', spoken_dialogue: spoken.current, transcripts, history, current: current.current, calls:usageLedger.current.acceptedCalls(), usage, usage_ledger:usageLedger.current.snapshot(),cloud_asr_usage:await asrUsage.snapshot() };
     const result = await invoke<{content:string;credentials_redacted:boolean}>('interview_session_export',{snapshot});
     const url = URL.createObjectURL(new Blob([result.content], { type: 'application/json' }));
     try {const a = document.createElement('a'); a.href = url; a.download = 'interview-session.json'; a.click();}
@@ -520,7 +524,7 @@ export default function InterviewPage() {
       await memory.current.flush();
       const recovery = await indexedDBService.snapshotInterviewHistory();
       const report = await invoke<{archive_path:string; recording_folders:number; database_meetings:number; saved_sessions?:number}>('interview_history_clear', {
-        snapshot: { current_session: { composer:{question,confirmed_answer:confirmedAnswer}, history: historyRef.current, transcripts, spoken_dialogue: spoken.current, current: current.current, calls:usageLedger.current.acceptedCalls(), usage, usage_ledger:usageLedger.current.snapshot() }, recovery }
+        snapshot: { current_session: { composer:{question,confirmed_answer:confirmedAnswer}, history: historyRef.current, transcripts, spoken_dialogue: spoken.current, current: current.current, calls:usageLedger.current.acceptedCalls(), usage, usage_ledger:usageLedger.current.snapshot(),cloud_asr_usage:await asrUsage.snapshot() }, recovery }
       });
       archivePath = report.archive_path;
       await indexedDBService.removeArchivedInterviewHistory(recovery);
@@ -532,6 +536,7 @@ export default function InterviewPage() {
       setHistory([]); setTranscripts([]); setQuestion(''); setAnswer(''); setSources([]); setConflicts([]);
       setConfirmedAnswer(''); setEditingSelfId(null); setQueued(0); setCalls(0); setLimit(DEFAULT_REQUEST_LIMIT);
       selfEditBase.current=null;
+      asrUsage.reset();
       usageLedger.current=new InterviewUsage();setUsageVersion(v=>v+1);
       setTiming(''); setUsage('未知'); setGenerating(false); setFrozen(false); setLevel(0); setMicLevel(0);
       setFeedGeneration(v=>v+1);
@@ -604,7 +609,7 @@ export default function InterviewPage() {
           microphoneChanging.current = true;
           microphoneVersion.current++;
           try {
-            applyMicrophoneState(await invoke<MicrophoneState>('interview_audio_start', { recordMicrophone,cloudAsrAllowed:asrCloudAllowed }));
+            applyMicrophoneState(await invoke<MicrophoneState>('interview_audio_start', { recordMicrophone,cloudAsrAllowed:asrCloudAllowed,usageScope:status.cloud_asr_mode==='aliyun'?asrUsage.begin():null }));
             setPhase(listeningPhase(live.current.automatic,status.cloud_asr_mode==='aliyun',addressedOnly(meeting.current.current.mode)));
           } catch (e) { setAutomatic(false); live.current.automatic = false; audioHealth.current.close(); syncHealth(); throw e; }
           finally { microphoneChanging.current = false; }
@@ -665,7 +670,7 @@ export default function InterviewPage() {
       <p className="text-xs text-slate-500">使用 small 模型时，长发言在说完后再做一次本地整段复核，并更新字幕后回答。复核最多覆盖连续 3 分钟；更长发言保留分段转写。原始片段可在右侧展开查看。</p>
       </div></details>
     </section>
-    <footer className="space-y-3 border-t pt-3 text-xs text-slate-500"><details className="desk-fold"><summary>会话操作</summary><div className="grid gap-2">{limit-calls <= REQUEST_LIMIT_WARNING && <Button variant="outline" size="sm" disabled={busy} onClick={() => setLimit(l => l + 20)}>继续 20 次</Button>}<Button variant="outline" size="sm" disabled={busy || !history.length} onClick={()=>run(saveSessionSnapshot)}>保存当前会话到本机</Button><Button variant="outline" size="sm" disabled={busy} onClick={()=>listSessions()}>查看已保存会话</Button><Button variant="outline" size="sm" onClick={exportSession}>导出本次记录</Button><Button variant="outline" disabled={busy} onClick={()=>sendCommand('clear')}><Trash2 className="h-4 w-4 mr-1" />清空历史，重新开始</Button><Button variant="outline" size="sm" disabled={busy || !history.length} onClick={end}>结束会话并保留历史</Button></div></details></footer>
+    <footer className="space-y-3 border-t pt-3 text-xs text-slate-500"><details className="desk-fold"><summary>会话操作</summary><div className="grid gap-2">{limit-calls <= REQUEST_LIMIT_WARNING && <Button variant="outline" size="sm" disabled={busy} onClick={() => setLimit(l => l + 20)}>继续 20 次</Button>}<Button variant="outline" size="sm" disabled={busy || (!history.length&&!asrUsage.hasRecords)} onClick={()=>run(saveSessionSnapshot)}>保存当前会话到本机</Button><Button variant="outline" size="sm" disabled={busy} onClick={()=>listSessions()}>查看已保存会话</Button><Button variant="outline" size="sm" onClick={exportSession}>导出本次记录</Button><Button variant="outline" disabled={busy} onClick={()=>sendCommand('clear')}><Trash2 className="h-4 w-4 mr-1" />清空历史，重新开始</Button><Button variant="outline" size="sm" disabled={busy || (!history.length&&!asrUsage.hasRecords)} onClick={end}>结束会话并保留历史</Button></div></details></footer>
       <details className="text-xs text-slate-500 desk-fold"><summary className="cursor-pointer">连接与用量详情</summary><div className="mt-3 space-y-3">
     <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-slate-500">
       <span>DeepSeek · {status?.model || 'deepseek-flash'} · thinking 关闭 · {status?.key_configured ? 'Key 已配置' : 'Key 未配置'}</span>
@@ -673,12 +678,13 @@ export default function InterviewPage() {
       <span>{timing || '等待本次请求耗时'}</span><span>最近用量 {usage}</span>
       <MemoryStatusLine controller={memory.current} onError={error}/>
       <span title="仅累计服务实际返回的 total_tokens；重试、取消或中断没有 usage 的部分保留未知，不能当作账单。连接自检单独计量。">{usageLabel(usageLedger.current.snapshot())}</span>
+      <CloudUsageView value={asrUsage.value} error={asrUsage.error}/>
     </div>
     <ConnectionCheck disabled={operationBusy||recording.isRecording||generating||!!status?.session_active} hasKey={!!status?.key_configured} revision={connectionRevision} onCheckingChange={setConnectionChecking} />
       </div></details>
     {draftRecovery.drafts.length>0 && <Button variant="outline" size="sm" onClick={()=>void listSessions()}>恢复草稿（{draftRecovery.drafts.length}）</Button>}
     {draftRecovery.error && <div role="alert" className="text-xs text-amber-800"><p>恢复草稿未保存：{draftRecovery.error}</p><Button size="sm" variant="outline" onClick={()=>void draftRecovery.writer.retry().catch(error)}>重试保存草稿</Button></div>}
-    <ResidueNotice blocked={busy || recording.isRecording || generating || history.length>0 || !!question || !!confirmedAnswer || !!status?.session_active} revision={residueRevision} onClear={clearResidue} />
+    <ResidueNotice blocked={busy || recording.isRecording || generating || history.length>0 || asrUsage.hasRecords || !!question || !!confirmedAnswer || !!status?.session_active} revision={residueRevision} onClear={clearResidue} />
       <nav aria-label="工作台导航" className="tx-basic-nav"><Button className="w-full" variant="outline" aria-expanded={settings} onClick={() => {setAudioPanel(false);setSavedSessions(null);setSettings(!settings);}}><Settings2 className="mr-2 h-4 w-4" />资料与设置</Button>{!recording.isRecording && !generating && !busy && <Link href="/interview-workspace" className="underline">高级对话工作区</Link>}<button type="button" onClick={()=>sendCommand('history')}>会议记录</button><button type="button" onClick={()=>sendCommand('audio')}>音频设置</button></nav>
     </aside>
     <div data-panel={settings||audioPanel||savedSessions!==null} aria-label="识别与对话区" className="flex h-[calc(100dvh-2rem)] min-w-0 flex-col gap-3 md:h-auto md:min-h-0">
@@ -726,7 +732,7 @@ export default function InterviewPage() {
       <MemorySettings locked={busy || !!status?.session_active || recording.isRecording || generating} onSaved={async()=>{memory.current.settingsChanged();await refresh();}} onBusyChange={setBusy}/>
       <div className="flex gap-2"><Input type="password" aria-label="临时 API Key" autoComplete="off" value={key} onChange={e => setKey(e.target.value)} placeholder="替换本进程 API Key（不回显、不写入前端存储）" /><Button disabled={busy || status?.session_active} onClick={() => run(async () => { await invoke('interview_config', { key: key || null }); setKey(''); setConnectionRevision(r=>r+1); await refresh(); })}>保存配置</Button><button type="button" onClick={()=>sendCommand('audio')}>音频设置</button></div>
     </section>}
-    {savedSessions !== null && <section className="shrink-0 max-h-[35vh] overflow-y-auto border rounded-lg p-4 text-sm space-y-2"><header className="tx-section-head"><h2>会议记录</h2><Button variant="ghost" size="sm" onClick={()=>setSavedSessions(null)}>返回对话</Button></header>{(history.length>0 || question || confirmedAnswer) && <label className="block"><input type="checkbox" disabled={busy || recording.isRecording || generating} checked={allowReplaceSession} onChange={e=>setAllowReplaceSession(e.target.checked)} /> 我已保存需要的内容，允许替换当前显示（未保存内容会丢失）</label>}{!savedSessions.length && <p>暂无已保存会话</p>}{savedSessions.map(s=><div key={s.id} className="tx-history-row"><span>{new Date(s.saved_at).toLocaleString('zh-CN')} · {s.turns} 条发言 · {s.calls} 次调用</span><Button size="sm" variant="outline" disabled={busy || recording.isRecording || generating || (!!(history.length || question || confirmedAnswer) && !allowReplaceSession)} onClick={()=>restoreSession(s.id)}>恢复这份会话</Button><SavedSessionPreview id={s.id}/></div>)}{savedBefore!==null && <Button variant="outline" disabled={busy} onClick={()=>listSessions(true)}>更早的保存记录</Button>}<RecoveryDrafts drafts={draftRecovery.drafts} disabled={busy || recording.isRecording || generating || (!!(history.length || question || confirmedAnswer) && !allowReplaceSession)} onRestore={id=>void restoreSession(id)}/><PreviousMeetings initialId={initialMeetingId}/></section>}
+    {savedSessions !== null && <section className="shrink-0 max-h-[35vh] overflow-y-auto border rounded-lg p-4 text-sm space-y-2"><header className="tx-section-head"><h2>会议记录</h2><Button variant="ghost" size="sm" onClick={()=>setSavedSessions(null)}>返回对话</Button></header>{(history.length>0 || asrUsage.hasRecords || question || confirmedAnswer) && <label className="block"><input type="checkbox" disabled={busy || recording.isRecording || generating} checked={allowReplaceSession} onChange={e=>setAllowReplaceSession(e.target.checked)} /> 我已保存需要的内容，允许替换当前显示（未保存内容会丢失）</label>}{!savedSessions.length && <p>暂无已保存会话</p>}{savedSessions.map(s=><div key={s.id} className="tx-history-row"><span>{new Date(s.saved_at).toLocaleString('zh-CN')} · {s.turns} 条发言 · {s.calls} 次调用</span><Button size="sm" variant="outline" disabled={busy || recording.isRecording || generating || (!!(history.length || asrUsage.hasRecords || question || confirmedAnswer) && !allowReplaceSession)} onClick={()=>restoreSession(s.id)}>恢复这份会话</Button><SavedSessionPreview id={s.id}/></div>)}{savedBefore!==null && <Button variant="outline" disabled={busy} onClick={()=>listSessions(true)}>更早的保存记录</Button>}<RecoveryDrafts drafts={draftRecovery.drafts} disabled={busy || recording.isRecording || generating || (!!(history.length || asrUsage.hasRecords || question || confirmedAnswer) && !allowReplaceSession)} onRestore={id=>void restoreSession(id)}/><PreviousMeetings initialId={initialMeetingId}/></section>}
     <section aria-label="转写与对话" className="flex min-h-0 flex-1 flex-col rounded-xl border bg-white overflow-hidden">
       <div className="shrink-0 border-b px-4 py-3"><h2 className="font-semibold">对话记录</h2><p className="text-xs text-slate-500">持续转写到结束 · {history.length} 条记录 · 待处理 {queued} 段</p></div>
       <ConversationFeed key={feedGeneration} latest={latestAnswer && {id:latestAnswer.id, text:latestAnswer.suggestion}}

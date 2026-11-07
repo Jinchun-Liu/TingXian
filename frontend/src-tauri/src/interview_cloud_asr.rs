@@ -8,9 +8,9 @@ use tokio::sync::{Mutex,mpsc,RwLock,OwnedRwLockReadGuard};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Default)]
-pub struct Credentials(Mutex<Option<(String,String)>>);
+pub struct Credentials {key:Mutex<Option<(String,String)>>,pub usage:Arc<crate::interview_cloud_usage::UsageStore>}
 impl Credentials {
-    async fn key(&self,config:&CloudAsrConfig)->String{self.0.lock().await.as_ref().filter(|(workspace,_)|workspace==&config.workspace_id).map(|(_,key)|key.clone()).unwrap_or_default()}
+    async fn key(&self,config:&CloudAsrConfig)->String{self.key.lock().await.as_ref().filter(|(workspace,_)|workspace==&config.workspace_id).map(|(_,key)|key.clone()).unwrap_or_default()}
 }
 fn owner<R:Runtime>(window:&WebviewWindow<R>)->Result<(),String>{if window.label()=="main"{Ok(())}else{Err("请在主窗口配置云转写".into())}}
 #[tauri::command]
@@ -25,7 +25,7 @@ pub async fn interview_cloud_asr_save<R:Runtime>(window:WebviewWindow<R>,app:App
     if state.session.load(Ordering::SeqCst)||crate::audio::recording_commands::is_recording().await{return Err("请先结束会话再切换转写服务".into());}
     if key.as_ref().is_some_and(|k|k.len()>4096||k.chars().any(char::is_control)){return Err("云转写 API Key 格式无效".into());}
     state.index(&app).await?.set_cloud_asr_config(&config).await?;
-    if let Some(key)=key{*state.cloud_asr.0.lock().await=Some((config.workspace_id,key.trim().into()));}
+    if let Some(key)=key{*state.cloud_asr.key.lock().await=Some((config.workspace_id,key.trim().into()));}
     Ok(())
 }
 struct SourceContext {index:interview_core::Index,network:Arc<RwLock<()>>}
@@ -36,19 +36,21 @@ impl SourceContext {
         Ok((guard,preferences))
     }
 }
-pub struct CloudStart {config:CloudAsrConfig,key:String,context:SourceContext,initial:[Option<PreparedTask>;2]}
+struct MeteredTask {task:PreparedTask,meter:crate::interview_cloud_usage::TaskMeter}
+pub struct CloudStart {config:CloudAsrConfig,key:String,context:SourceContext,initial:[Option<MeteredTask>;2],usage:Arc<crate::interview_cloud_usage::UsageStore>,scope:String}
 impl CloudStart {
-    pub async fn prepare<R:Runtime>(app:&AppHandle<R>,state:&InterviewState,allowed:bool,microphone:bool)->Result<Option<Self>,String>{
+    pub async fn prepare<R:Runtime>(app:&AppHandle<R>,state:&InterviewState,allowed:bool,microphone:bool,scope:Option<String>)->Result<Option<Self>,String>{
         let index=state.index(app).await?;let config=index.cloud_asr_config().await?;
         if config.mode==AsrMode::Local{return Ok(None);}
         if !allowed{return Err("请勾选允许将本次声音发送至百炼，或在音频设置切回本地转写".into());}
-        let mut prepared=Self{key:state.cloud_asr.key(&config).await,config,context:SourceContext{index:index.clone(),network:state.source_network()},initial:[None,None]};
+        let mut prepared=Self{key:state.cloud_asr.key(&config).await,config,context:SourceContext{index:index.clone(),network:state.source_network()},initial:[None,None],usage:state.cloud_asr.usage.clone(),scope:scope.unwrap_or_else(||uuid::Uuid::new_v4().to_string())};
+        if !crate::interview_cloud_usage::valid_id(&prepared.scope){return Err("云转写用量会话无效".into());}
         let cancel=CancellationToken::new();
-        prepared.initial[0]=Some(prepared.connect(&cancel).await?);
-        if microphone{prepared.initial[1]=Some(prepared.connect(&cancel).await?);}
+        prepared.initial[0]=Some(prepared.connect(&cancel,"System").await?);
+        if microphone{prepared.initial[1]=Some(prepared.connect(&cancel,"Microphone").await?);}
         Ok(Some(prepared))
     }
-    async fn connect(&self,cancel:&CancellationToken)->Result<PreparedTask,String>{
+    async fn connect(&self,cancel:&CancellationToken,source:&str)->Result<MeteredTask,String>{
         // A failed startup can be retried once. Audio is admitted only after ready.
         let mut error=String::new();
         for _ in 0..2 {
@@ -56,7 +58,11 @@ impl CloudStart {
                 // Every new handshake, including retries, resolves current
                 // terms under the same boundary used by source withdrawal.
                 let (_guard,prefs)=self.context.acquire(cancel).await?;
-                PreparedTask::connect(&self.config,&self.key,uuid::Uuid::new_v4().to_string(),48000,&prefs.transcription_language,&prefs.terminology,cancel).await
+                let meter=self.usage.begin(&self.scope,source)?;
+                match PreparedTask::connect(&self.config,&self.key,meter.id.clone(),48000,&prefs.transcription_language,&prefs.terminology,cancel).await {
+                    Ok(task)=>{meter.running();Ok(MeteredTask{task,meter})},
+                    Err(e)=>{meter.finish(if cancel.is_cancelled(){"cancelled"}else{"failed"});Err(e)},
+                }
             };
             match result {
                 Ok(task)=>return Ok(task),Err(e)=>error=e,
@@ -99,7 +105,7 @@ pub fn start<R:Runtime>(app:AppHandle<R>,mut input:AsrReceiver,state:Arc<Recordi
                     if channels[i].as_ref().is_some_and(|c|c.epoch!=epoch||c.microphone_epoch!=mic_epoch){channels[i].take().unwrap().cancel.cancel();}
                     if channels[i].is_none(){
                         let (sender,receiver)=mpsc::channel(128);let child=cancel.child_token();
-                        let config=CloudStart{config:start.config.clone(),key:start.key.clone(),context:SourceContext{index:start.context.index.clone(),network:start.context.network.clone()},initial:[None,None]};
+                        let config=CloudStart{config:start.config.clone(),key:start.key.clone(),context:SourceContext{index:start.context.index.clone(),network:start.context.network.clone()},initial:[None,None],usage:start.usage.clone(),scope:start.scope.clone()};
                         let prepared=start.initial[i].take();let application=app.clone();let capture=state.clone();let token=child.clone();let gate=chunk.microphone_gate.clone();
                         let offset=(chunk.timestamp-chunk.data.len() as f64/48000.0).max(0.0);
                         tasks.spawn(async move{run_channel(application,capture,config,prepared,receiver,token,gate,i==0,epoch,offset).await});
@@ -132,10 +138,13 @@ fn fail<R:Runtime>(app:&AppHandle<R>,state:&RecordingState,error:&str){
     let _=app.emit("transcription-error",json!({"native_session_id":state.health.session_id,"error":error,"userMessage":format!("{error}。已保留文字，请停止后重试或切换本地转写。"),"actionable":false,"phase":"active"}));
 }
 struct ChannelOutput<R:Runtime>{
-    app:AppHandle<R>,state:Arc<RecordingState>,cancel:CancellationToken,gate:Option<Arc<MicrophoneGate>>,source:&'static str,epoch:u64,offset:f64,ids:HashMap<u64,u64>,unfinished:HashMap<u64,u64>,
+    app:AppHandle<R>,state:Arc<RecordingState>,cancel:CancellationToken,gate:Option<Arc<MicrophoneGate>>,source:&'static str,epoch:u64,offset:f64,ids:HashMap<u64,u64>,unfinished:HashMap<u64,u64>,meter:Option<crate::interview_cloud_usage::TaskMeter>,
 }
 impl<R:Runtime> ChannelOutput<R>{
     fn event(&mut self,event:AsrEvent){
+        // Usage remains attributable even when a muted/old transcript is rejected.
+        if let AsrEvent::Sentence{final_result:true,billed_seconds,..}=&event {if let Some(meter)=&self.meter{meter.observe(*billed_seconds);}}
+
         if self.cancel.is_cancelled()||self.epoch!=self.state.cloud_epoch()||!crate::audio::microphone_gate::allowed(&self.gate){return;}
         if let AsrEvent::Sentence{id,text,final_result,begin_ms,end_ms,billed_seconds}=event{
             let utterance=*self.ids.entry(id).or_insert_with(||NEXT_UTTERANCE.fetch_add(1,Ordering::Relaxed));self.unfinished.insert(id,utterance);
@@ -150,7 +159,7 @@ impl<R:Runtime> ChannelOutput<R>{
                 // not a measured zero-millisecond response.
                 let latency=self.state.get_recording_duration().filter(|now|now.is_finite()&&*now>=end).map(|now|(now-end)*1000.0);
                 let _=self.app.emit("interview-utterance-end",json!({"source":self.source,"native_session_id":self.state.health.session_id,"utterance_id":utterance,"success":true,"timing":{"stable_text_unix_ms":chrono::Utc::now().timestamp_millis(),"audio_end_basis":"provider_estimate","audio_end_to_stable_ms":latency}}));
-                let _=self.app.emit("interview-cloud-asr-usage",json!({"source":self.source,"native_session_id":self.state.health.session_id,"task_billed_seconds":billed_seconds}));
+                let _=self.app.emit("interview-cloud-asr-usage",json!({"source":self.source,"native_session_id":self.state.health.session_id,"task_id":self.meter.as_ref().map(|m|m.id.as_str()),"task_billed_seconds":billed_seconds}));
             }
         }
     }
@@ -159,13 +168,15 @@ impl<R:Runtime> ChannelOutput<R>{
         self.unfinished.clear();
     }
 }
-async fn run_channel<R:Runtime>(app:AppHandle<R>,state:Arc<RecordingState>,config:CloudStart,prepared:Option<PreparedTask>,input:mpsc::Receiver<Frame>,cancel:CancellationToken,gate:Option<Arc<MicrophoneGate>>,system:bool,epoch:u64,offset:f64)->Result<(),String>{
-    let mut output=ChannelOutput{app,state:state.clone(),cancel:cancel.clone(),gate:gate.clone(),source:if system{"System"}else{"Microphone"},epoch,offset,ids:HashMap::new(),unfinished:HashMap::new()};
+async fn run_channel<R:Runtime>(app:AppHandle<R>,state:Arc<RecordingState>,config:CloudStart,prepared:Option<MeteredTask>,input:mpsc::Receiver<Frame>,cancel:CancellationToken,gate:Option<Arc<MicrophoneGate>>,system:bool,epoch:u64,offset:f64)->Result<(),String>{
+    let mut output=ChannelOutput{app,state:state.clone(),cancel:cancel.clone(),gate:gate.clone(),source:if system{"System"}else{"Microphone"},epoch,offset,ids:HashMap::new(),unfinished:HashMap::new(),meter:None};
     let result=async{
-        let task=match prepared{Some(task)=>task,None=>config.connect(&cancel).await?};
-        task.stream(input,cancel.clone(),|event|output.event(event)).await
+        let prepared=match prepared{Some(task)=>task,None=>config.connect(&cancel,output.source).await?};
+        output.meter=Some(prepared.meter);
+        prepared.task.stream(input,cancel.clone(),|event|output.event(event)).await
     }.await;
     output.finish();
+    if let Some(meter)=&output.meter{meter.finish(if cancel.is_cancelled()||epoch!=state.cloud_epoch()||!crate::audio::microphone_gate::allowed(&gate){"cancelled"}else if result.is_ok(){"finished"}else{"failed"});}
     if cancel.is_cancelled()||epoch!=state.cloud_epoch()||!crate::audio::microphone_gate::allowed(&gate){Ok(())}else{result}
 }
 #[cfg(test)]
@@ -203,12 +214,22 @@ mod tests{
         assert_eq!(observed.lock().unwrap()[0]["native_session_id"],state.health.session_id);
     }
     #[test]
+    fn muted_or_old_transcripts_do_not_erase_observed_usage(){
+        let app=tauri::test::mock_builder().build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let state=RecordingState::new();state.start_recording().unwrap();state.enable_cloud_streaming();let gate=state.microphone_gate();
+        let store=Arc::new(crate::interview_cloud_usage::UsageStore::default());let scope=uuid::Uuid::new_v4().to_string();let meter=store.begin(&scope,"Microphone").unwrap();meter.running();
+        let mut output=ChannelOutput{app:app.handle().clone(),state:state.clone(),cancel:CancellationToken::new(),gate:Some(gate.clone()),source:"Microphone",epoch:state.cloud_epoch(),offset:0.0,ids:HashMap::new(),unfinished:HashMap::new(),meter:Some(meter)};
+        gate.revoke();output.event(AsrEvent::Sentence{id:1,text:"discarded synthetic transcript".into(),final_result:true,begin_ms:0,end_ms:Some(800),billed_seconds:Some(7.0)});
+        assert!(output.ids.is_empty());assert_eq!(store.snapshot(&scope).unwrap().tasks[0].reported_seconds,Some(7.0));drop(output);
+        assert_eq!(store.snapshot(&scope).unwrap().tasks[0].state,"cancelled");
+    }
+    #[test]
     fn cloud_sources_partials_mute_pause_and_completion_stay_isolated(){
         let app=tauri::test::mock_builder().build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
         let observed=Arc::new(std::sync::Mutex::new(Vec::<(String,Value)>::new()));
         for name in ["transcript-update","interview-utterance-end"]{let events=observed.clone();app.listen(name,move|e|events.lock().unwrap().push((name.into(),serde_json::from_str(e.payload()).unwrap())));}
         let state=RecordingState::new();state.start_recording().unwrap();state.enable_cloud_streaming();
-        let make=|source,gate|ChannelOutput{app:app.handle().clone(),state:state.clone(),cancel:CancellationToken::new(),gate,source,epoch:state.cloud_epoch(),offset:0.0,ids:HashMap::new(),unfinished:HashMap::new()};
+        let make=|source,gate|ChannelOutput{app:app.handle().clone(),state:state.clone(),cancel:CancellationToken::new(),gate,source,epoch:state.cloud_epoch(),offset:0.0,ids:HashMap::new(),unfinished:HashMap::new(),meter:None};
         let mut remote=make("System",None);let gate=state.microphone_gate();let mut own=make("Microphone",Some(gate.clone()));
         let event=|final_result|AsrEvent::Sentence{id:1,text:"synthetic speech".into(),final_result,begin_ms:0,end_ms:if final_result{Some(800)}else{None},billed_seconds:None};
         remote.event(event(false));own.event(event(false));

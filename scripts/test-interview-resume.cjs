@@ -5,7 +5,8 @@ const req=require('node:module').createRequire(path.resolve(__dirname,'../fronte
 const React=req('react'),{create,act}=req('react-test-renderer'),ts=req('typescript');
 const text=n=>typeof n==='string'?n:(n?.children||[]).map(text).join('');
 async function exercise(page){
-  let tree,recording=false,paused=false,holdResume=false,releaseResume,failResume=false,failPause=false;
+  let tree,recording=false,paused=false,holdResume=false,releaseResume,failResume=false,failPause=false,usageScope,failUsage=false;
+  const cloudUsage={version:1,tasks:[{task_id:'12345678-1234-1234-1234-000000000001',source:'System',state:'finished',reported_seconds:12,inconsistent:false},{task_id:'12345678-1234-1234-1234-000000000002',source:'System',state:'cancelled',reported_seconds:null,inconsistent:false}]};
   const calls=[],listeners=new Map(),timers=[],cache={};
   let health={session_id:37,recording:true,active:true,paused:false,system_started:true,microphone_enabled:false,active_for_ms:10000,elapsed_ms:1,system_frame_age_ms:0,microphone_frame_age_ms:null,system_signal_age_ms:null,asr_pending:0,asr_no_progress_ms:null,fault:null};
   const native=()=>({recording,enabled:false,epoch:1,health:recording?health:null});
@@ -15,7 +16,9 @@ async function exercise(page){
     if(name==='interview_status')return {root:'',suggested_root:'',aliases:'',facts:'',documents:[],index_documents:0,index_chunks:0,index_version:'0',key_configured:page==='interview',workspace_ready:true,answer_capacity:2,cloud_asr_mode:'aliyun',session_active:false,preferences:{scenario:'interview'}};
     if(name==='profile_import_status')return null;
     if(name==='interview_window_mode_get')return false;
-    if(name==='interview_audio_start'){recording=true;return native();}
+    if(name==='interview_audio_start'){assert.match(args.usageScope,/^[0-9a-f-]{36}$/);usageScope=args.usageScope;recording=true;return native();}
+    if(name==='interview_cloud_asr_usage'){assert.equal(args.scope,usageScope);if(failUsage)throw Error('synthetic usage unavailable');return structuredClone(cloudUsage);}
+    if(name==='interview_session_save')return {id:1,saved_at:'2026-11-08T00:00:00Z',turns:args.snapshot.history.length,calls:args.snapshot.calls};
     if(name==='interview_audio_level')return {system:0,microphone:0,microphone_state:native()};
     if(name==='answer_cancel')return;
     if(name==='pause_recording'){if(failPause)throw Error('synthetic pause error');paused=true;return;}
@@ -85,7 +88,12 @@ async function exercise(page){
   await act(async()=>timers.find(t=>t.delay===500).callback());
   await click('确认声音恢复，继续转写');assert.equal(automatic(),false);assert.match(phase(),/百炼实时转写/);
   assert.equal(calls.filter(c=>/answer_start|connection_test/.test(c.name)).length,0);
-  await click('停止采集');await act(async()=>tree.unmount());
-  console.log(`PASS ${page}: pause/resume state, manual off, current consent, native failure, local recovery, no model calls`);
+  await click('停止采集');
+  await act(async()=>{timers.find(t=>t.delay===1000).callback();await new Promise(r=>setImmediate(r));});
+  await click('保存当前会话到本机');const saved=calls.filter(c=>c.name==='interview_session_save').at(-1).args.snapshot;
+  assert.equal(saved.history.length,0);assert.equal(saved.calls,0);assert.deepEqual(saved.cloud_asr_usage,cloudUsage);
+  const before=calls.filter(c=>c.name==='interview_session_save').length;failUsage=true;await click('保存当前会话到本机');assert.equal(calls.filter(c=>c.name==='interview_session_save').length,before,'usage sync failure was silently saved as complete');
+  failUsage=false;await act(async()=>tree.unmount());
+  console.log(`PASS ${page}: pause/resume state, manual off, consent, cloud-only usage save/sync failure, local recovery, no model calls`);
 }
 (async()=>{await exercise('interview');await exercise('interview-workspace');})().catch(e=>{console.error(e);process.exitCode=1;});

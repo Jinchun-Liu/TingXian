@@ -4,10 +4,11 @@ import type {SourceConflict} from './interview-conflicts';
 import type {LatencyRecord} from './interview-latency';
 import type {TranscriptInput} from './interview-scheduler';
 import {parseUsageSnapshot,UsageSnapshot} from '@/lib/interview-usage';
+import {CloudUsageSnapshot,parseCloudUsage} from '@/lib/interview-cloud-usage';
 import {memoryBoundaryValid,MemoryBoundary} from '@/lib/interview-memory';
 export type Source = { source_id: string; path: string; location: string; text: string; kind: string; allow_external: boolean; hash?: string; root?: string; user_assertion?: import('./interview-documents').UserAssertion | null; metadata?: DocumentMetadata };
 export type Turn = { passive?:boolean; meeting_mode?:string; scenario?:ConversationScenario; restored_from?: string; role: 'remote' | 'self' | 'manual'; sequence_id?: number; utterance_id?: number | null; microphone_epoch?: number | null; capture_session?: number; id: string; question: string; confirmed_answer: string | null; suggestion: string; status: 'listening' | 'queued' | 'generating' | 'done' | 'error' | 'cancelled' | 'recorded'; sources: Source[]; conflicts?: SourceConflict[]; fact_version?: number; time: string; timing: string; latency?: LatencyRecord };
-export type SessionSnapshot={version:1|2;memory?:MemoryBoundary|null;history:Turn[];transcripts:TranscriptInput[];spoken_dialogue:TranscriptInput[];current:{question:string;answer:string};calls:number;usage:string;usage_ledger?:UsageSnapshot|null};
+export type SessionSnapshot={version:1|2;memory?:MemoryBoundary|null;history:Turn[];transcripts:TranscriptInput[];spoken_dialogue:TranscriptInput[];current:{question:string;answer:string};calls:number;usage:string;usage_ledger?:UsageSnapshot|null;cloud_asr_usage?:CloudUsageSnapshot|null};
 export type SavedSession={id:number;saved_at:string;turns:number;calls:number};
 export type SessionPage={sessions:SavedSession[];next_before:number|null};
 const object=(v:any)=>v!==null && typeof v==='object' && !Array.isArray(v);
@@ -35,7 +36,7 @@ function transcriptValid(v:any):boolean {
  * partial recovery that could silently mix or drop dialogue. */
 export function parseSessionSnapshot(raw:unknown,allowEmpty=false):SessionSnapshot {
   const v:any=raw;
-  if(!object(v) || ![1,2].includes(v.version) || (v.version===1&&v.memory!=null) || (v.version===2&&v.memory==null) || (v.memory!=null&&!memoryBoundaryValid(v.memory)) || !Array.isArray(v.history) || (!allowEmpty && !v.history.length) || v.history.length>10000
+  if(!object(v) || ![1,2].includes(v.version) || (v.version===1&&v.memory!=null) || (v.version===2&&v.memory==null) || (v.memory!=null&&!memoryBoundaryValid(v.memory)) || !Array.isArray(v.history) || (!allowEmpty && !v.history.length && !(v.cloud_asr_usage?.tasks?.length>0)) || v.history.length>10000
     || !strings(v.current,['question','answer']) || !Number.isSafeInteger(v.calls) || v.calls<0 || typeof v.usage!=='string'
     || ![v.transcripts,v.spoken_dialogue].every(a=>Array.isArray(a) && a.length<=120 && a.every(transcriptValid)))throw Error('保存的会话格式无效，当前记录保留');
   const ids=new Set<string>();
@@ -46,11 +47,13 @@ export function parseSessionSnapshot(raw:unknown,allowEmpty=false):SessionSnapsh
       || !['sequence_id','utterance_id','microphone_epoch','capture_session','fact_version'].every(k=>t[k]==null || number(t[k]))) throw Error('保存的发言或来源格式无效，当前记录保留');
     ids.add(t.id);
   }
+  if(v.cloud_asr_usage!=null)parseCloudUsage(v.cloud_asr_usage);
   if(v.usage_ledger!=null)parseUsageSnapshot(v.usage_ledger,v.calls);
   return JSON.parse(JSON.stringify(v));
 }
 export function recoverSessionSnapshot(raw:unknown,prefix:string,allowEmpty=false):SessionSnapshot {
   const s=parseSessionSnapshot(raw,allowEmpty);
+  if(s.cloud_asr_usage)s.cloud_asr_usage.tasks=s.cloud_asr_usage.tasks.map(t=>({...t,state:['connecting','running'].includes(t.state)?'interrupted':t.state}));
   s.transcripts=s.transcripts.map(t=>t.is_partial?{...t,interrupted:true}:t);
   s.history=s.history.map(t=>({...t,restored_from:prefix,id:`restored-${prefix}-${t.id}`,status:t.status==='generating'?'cancelled':['queued','listening'].includes(t.status)?'recorded':t.status}));
   if(s.usage_ledger)s.usage_ledger.requests=s.usage_ledger.requests.map(r=>({...r,question_id:`restored-${prefix}-${r.question_id}`,state:r.state==='pending'?'cancelled':r.state}));

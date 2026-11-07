@@ -14,6 +14,8 @@ pub struct Snapshot {
     #[serde(default,skip_serializing_if="Option::is_none")]
     pub usage_ledger:Option<Value>,
     #[serde(default,skip_serializing_if="Option::is_none")]
+    pub cloud_asr_usage:Option<crate::interview_cloud_usage::Snapshot>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
     pub memory:Option<interview_core::memory_checkpoint::Boundary>,
 }
 #[derive(Debug,Serialize,Deserialize)]
@@ -29,8 +31,9 @@ fn validate(snapshot:&Snapshot)->Result<(),String> {
     validate_snapshot(snapshot,false)
 }
 pub(crate) fn validate_snapshot(snapshot:&Snapshot,allow_empty:bool)->Result<(),String> {
-    if ![1,2].contains(&snapshot.version) || (snapshot.version==1&&snapshot.memory.is_some()) || (snapshot.version==2&&snapshot.memory.is_none()) || (!allow_empty && snapshot.history.is_empty()) || snapshot.history.len()>10000 || snapshot.transcripts.len()>120 || snapshot.spoken_dialogue.len()>120 {return Err("会话版本或记录数量无效；未保存或替换当前记录".into());}
+    if ![1,2].contains(&snapshot.version) || (snapshot.version==1&&snapshot.memory.is_some()) || (snapshot.version==2&&snapshot.memory.is_none()) || (!allow_empty && snapshot.history.is_empty() && snapshot.cloud_asr_usage.as_ref().is_none_or(|s|s.tasks.is_empty())) || snapshot.history.len()>10000 || snapshot.transcripts.len()>120 || snapshot.spoken_dialogue.len()>120 {return Err("会话版本或记录数量无效；未保存或替换当前记录".into());}
     if let Some(memory)=&snapshot.memory{memory.validate()?;}
+    if let Some(usage)=&snapshot.cloud_asr_usage{usage.validate()?;}
     let mut ids=std::collections::HashSet::new();
     for t in &snapshot.history {
         if !["remote","self","manual"].contains(&t["role"].as_str().unwrap_or("")) || !["listening","queued","generating","done","error","cancelled","recorded"].contains(&t["status"].as_str().unwrap_or(""))
@@ -144,6 +147,15 @@ mod tests {
         result
     }
     async fn pool()->SqlitePool {SqlitePool::connect("sqlite::memory:").await.unwrap()}
+    #[tokio::test]
+    async fn cloud_only_usage_is_saved_and_legacy_snapshots_stay_readable(){
+        let db=pool().await;let mut s=snapshot();s.history.clear();s.transcripts.clear();s.spoken_dialogue.clear();s.calls=0;s.current=Current{question:String::new(),answer:String::new()};
+        assert!(save(&db,s.clone(),true).await.is_err());
+        s.cloud_asr_usage=Some(crate::interview_cloud_usage::Snapshot{version:1,history_missing:None,tasks:vec![crate::interview_cloud_usage::TaskUsage{task_id:uuid::Uuid::new_v4().to_string(),source:"System".into(),state:"cancelled".into(),reported_seconds:None,inconsistent:false}]});
+        let record=save(&db,s.clone(),true).await.unwrap();let loaded=load(&db,record.id).await.unwrap();assert_eq!(loaded.cloud_asr_usage,s.cloud_asr_usage);assert_eq!(record.turns,0);assert_eq!(record.calls,0);
+        let old=save(&db,snapshot(),true).await.unwrap();assert!(load(&db,old.id).await.unwrap().cloud_asr_usage.is_none());
+        let mut bad=s;bad.cloud_asr_usage.as_mut().unwrap().tasks[0].reported_seconds=Some(-1.0);assert!(save(&db,bad,true).await.is_err());
+    }
     #[tokio::test]
     async fn observed_usage_round_trips_and_legacy_stays_unknown() {
         let db=pool().await;

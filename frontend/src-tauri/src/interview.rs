@@ -961,12 +961,12 @@ pub async fn interview_history_clear(app:tauri::AppHandle,state:State<'_,Intervi
 }
 
 #[tauri::command]
-pub async fn interview_audio_start(app:tauri::AppHandle,state:State<'_,InterviewState>,record_microphone:bool,cloud_asr_allowed:Option<bool>)->Result<crate::audio::recording_commands::MicrophoneStatus,String> {
+pub async fn interview_audio_start(app:tauri::AppHandle,state:State<'_,InterviewState>,record_microphone:bool,cloud_asr_allowed:Option<bool>,usage_scope:Option<String>)->Result<crate::audio::recording_commands::MicrophoneStatus,String> {
     crate::interview_exit::ensure_not_exiting(&app)?;
     let _guard=state.lifecycle.lock().await;
     crate::interview_exit::ensure_not_exiting(&app)?;
     if crate::audio::recording_commands::is_recording().await{return Err("采集已经开始".into());}
-    let cloud=crate::interview_cloud_asr::CloudStart::prepare(&app,&state,cloud_asr_allowed.unwrap_or(false),record_microphone).await?;
+    let cloud=crate::interview_cloud_asr::CloudStart::prepare(&app,&state,cloud_asr_allowed.unwrap_or(false),record_microphone,usage_scope).await?;
     let preferences=state.index(&app).await?.preferences().await?;
     if cloud.is_none(){
         let model=crate::tingxian_audio::selected_model(&app).await?;
