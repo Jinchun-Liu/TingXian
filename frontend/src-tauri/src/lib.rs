@@ -478,6 +478,7 @@ mod interview_screenshot;
 mod interview_windows;
 pub mod interview_sessions;
 pub mod interview_recovery;
+pub mod interview_memory;
 pub mod interview_connection;
 pub mod interview_index;
 pub mod tingxian_runtime;
@@ -682,6 +683,17 @@ pub fn run() {
             interview_recovery::interview_recovery_list,
             interview_recovery::interview_recovery_write,
             interview_recovery::interview_recovery_load,
+            interview_memory::interview_memory_config_get,
+            interview_memory::interview_memory_test,
+            interview_memory::interview_memory_config_save,
+            interview_memory::interview_memory_open,
+            interview_memory::interview_memory_append,
+            interview_memory::interview_memory_checkpoint,
+            interview_memory::interview_memory_status,
+            interview_memory::interview_memory_restore,
+            interview_memory::interview_memory_boundary,
+            interview_memory::interview_memory_raw_get,
+            interview_memory::interview_memory_tick,
             interview::tingxian_session_preview,
             interview::interview_history_clear,
             interview::interview_residue_status,

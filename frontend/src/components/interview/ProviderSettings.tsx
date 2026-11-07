@@ -6,6 +6,7 @@ import {Button} from '@/components/ui/button';
 import type {RequestConfig} from './RequestSettings';
 import {BudgetFields,defaultBudget,budgetValid} from './RequestSettings';
 import {CapabilityFields,capabilitiesError,matchingCapabilities} from '@/components/interview/ModelCapabilities';
+import {MemorySettings} from './MemorySettings';
 type Profile={id:string;name:string;enabled:boolean;endpoint:string;protocol:'deepseek'|'openai'|'qwen';request:RequestConfig};
 type Config={answers:Profile[];vision:Profile;background:Profile};
 type View={config:Config;key_configured:Record<string,boolean>;capacity:number};
@@ -54,6 +55,7 @@ export function ProviderSettings({locked,onSaved,onBusyChange,openVision=false,o
       setKeys({});await load();await onSaved();setMessage('接口配置已保存，未发送模型请求。');
     })}>保存多接口配置</Button>
     {locked&&<p className="text-xs text-slate-500">请结束会话后修改接口。</p>}
+    <MemorySettings locked={disabled} onSaved={onSaved} onBusyChange={onBusyChange}/>
     {message&&<p role="status" className="text-sm break-words">{message}</p>}
   </section>;
 }

@@ -2,7 +2,7 @@ import {useEffect,useRef,useState,useSyncExternalStore} from 'react';
 import {invoke,isTauri} from '@tauri-apps/api/core';
 import {interviewExit} from '@/lib/interview-exit';
 import {RecoverySnapshot,RecoveryWriter} from '@/lib/interview-recovery';
-export function useInterviewRecovery(read:()=>RecoverySnapshot){
+export function useInterviewRecovery(read:()=>RecoverySnapshot|Promise<RecoverySnapshot>){
   const latest=useRef(read);latest.current=read;
   const [writer]=useState(()=>new RecoveryWriter(invoke,()=>latest.current(),()=>crypto.randomUUID()));
   const view=useSyncExternalStore(writer.subscribe,writer.getSnapshot,writer.getServerSnapshot);

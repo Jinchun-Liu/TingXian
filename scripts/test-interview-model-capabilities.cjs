@@ -5,7 +5,7 @@ const React=req('react'),{act,create}=req('react-test-renderer'),ts=req('typescr
 const request={model:'synthetic',connect_timeout_secs:5,first_answer_warning_secs:8,total_timeout_secs:20};
 const profile=id=>({id,name:id,enabled:id==='answer-1',endpoint:'https://synthetic.invalid/chat/completions',protocol:'openai',request:{...request}});
 let stored={answers:[1,2,3].map(i=>profile(`answer-${i}`)),vision:profile('vision'),background:profile('background')};const calls=[];
-const invoke=async(cmd,args)=>{calls.push({cmd,args});if(cmd==='interview_providers_get')return {config:JSON.parse(JSON.stringify(stored)),capacity:0,key_configured:{}};
+const invoke=async(cmd,args)=>{calls.push({cmd,args});if(cmd.startsWith('interview_memory_'))return require('./test-support/memory-disabled.cjs')(cmd);if(cmd==='interview_providers_get')return {config:JSON.parse(JSON.stringify(stored)),capacity:0,key_configured:{}};
  if(cmd==='interview_providers_save'){stored=JSON.parse(JSON.stringify(args.config));return;}
  if(cmd==='interview_provider_test')return {success:true,message:'固定文字连接成功，不能验证图片或窗口',elapsed_ms:10};
  throw Error('Unexpected command '+cmd);
@@ -38,6 +38,6 @@ const text=n=>typeof n==='string'?n:(n?.children||[]).map(text).join('');
  await click('清除能力记录');await click('保存多接口配置');assert.equal(stored.answers[0].request.capabilities,undefined);
  assert(capabilitiesError({...original,model:'old'},'different',{context_tokens:262144,max_output_tokens:8192},original.endpoint));
  locked=true;await act(async()=>render());assert(tree.root.findAllByType('input').every(i=>i.props.disabled));assert(tree.root.findAllByType('select').every(i=>i.props.disabled));
- assert(calls.every(c=>['interview_providers_get','interview_providers_save','interview_provider_test'].includes(c.cmd)));await act(async()=>tree.unmount());
+ assert(calls.every(c=>['interview_providers_get','interview_providers_save','interview_provider_test','interview_memory_config_get'].includes(c.cmd)));await act(async()=>tree.unmount());
  console.log('PASS model capabilities: legacy unknown, required manual source/date, slot isolation, changed identity/limits invalidate review, safety edits preserve, text probe never certifies, clear and session locks');
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -13,7 +13,7 @@ const RECENT:usize=12;
 
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="snake_case")]
-pub enum EventKind {RemoteSpeech,SelfSpeech,ConfirmedSelf,NormalizedQuestion,Advice,Screenshot,RequestTerminal}
+pub enum EventKind {RemoteSpeech,SelfSpeech,ConfirmedSelf,NormalizedQuestion,Advice,Screenshot,RequestQuestion,RequestTerminal}
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="snake_case")]
 pub enum Origin {SystemAudio,Microphone,UserText,Model,Screen,Runtime}
@@ -48,7 +48,7 @@ impl Event {
             (EventKind::RemoteSpeech,Origin::SystemAudio)|(EventKind::SelfSpeech,Origin::Microphone)|
             (EventKind::ConfirmedSelf,Origin::UserText)|(EventKind::NormalizedQuestion,Origin::Model)|
             (EventKind::Advice,Origin::Model)|(EventKind::Screenshot,Origin::Screen)|
-            (EventKind::RequestTerminal,Origin::Runtime));
+            (EventKind::RequestQuestion,Origin::Runtime)|(EventKind::RequestTerminal,Origin::Runtime));
         if !source_ok {return Err("事件来源不能升级为本人发言".into());}
         if matches!(self.kind,EventKind::RemoteSpeech|EventKind::SelfSpeech) && (self.capture_session.as_deref().is_none_or(|v|!identifier(v))||self.utterance_id.as_deref().is_none_or(|v|!identifier(v))) {
             return Err("转写事件缺少采集/发言标识".into());
@@ -56,6 +56,7 @@ impl Event {
         if matches!(self.kind,EventKind::Advice|EventKind::RequestTerminal) && (self.question.is_none() || (self.closed && self.terminal.is_none())) {
             return Err("答题事件缺少问题版本或完整终态".into());
         }
+        if self.kind==EventKind::RequestQuestion && self.question.is_none(){return Err("请求问题缺少固定版本".into());}
         if self.question.as_ref().is_some_and(|q|!identifier(&q.question_id)||q.revision==0) {return Err("问题版本无效".into());}
         if self.kind==EventKind::Screenshot && self.asset_sha256.as_deref().is_none_or(|v|!hash(v)) {return Err("截图事件缺少资产校验".into());}
         if self.source_dependencies.len()>64 || self.source_dependencies.iter().any(|(id,v)|!identifier(id)||!hash(v)) {return Err("事件来源依赖无效".into());}
@@ -63,7 +64,7 @@ impl Event {
         Ok(())
     }
     pub fn reference(&self)->Result<EventRef> {Ok(EventRef{id:self.id.clone(),sequence:self.sequence,revision:self.revision,sha256:digest(&encoded(self)?)})}
-    fn mandatory(&self)->bool {matches!(self.kind,EventKind::RemoteSpeech|EventKind::SelfSpeech|EventKind::ConfirmedSelf|EventKind::Screenshot)}
+    fn mandatory(&self)->bool {matches!(self.kind,EventKind::RemoteSpeech|EventKind::SelfSpeech|EventKind::ConfirmedSelf|EventKind::Screenshot|EventKind::RequestQuestion)}
 }
 
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
@@ -127,19 +128,72 @@ impl Ledger {
         Ok(Self{session_id:session_id.into(),epoch,context_version:0,dependencies,journal:vec![],latest:BTreeMap::new(),ids:BTreeMap::new(),chunks:vec![],journal_bytes:0,missing_older_history})
     }
     pub fn version(&self)->u64 {self.context_version}
+    pub fn session_id(&self)->&str {&self.session_id}
+    pub fn epoch(&self)->u64 {self.epoch}
+    pub fn dependencies(&self)->&Dependencies {&self.dependencies}
+    pub fn missing_older_history(&self)->bool {self.missing_older_history}
     pub fn journal(&self)->&[JournalRecord] {&self.journal}
     pub fn chunks(&self)->&[MemoryChunk] {&self.chunks}
+    pub fn event(&self,id:&str)->Option<&Event> {self.ids.get(id).and_then(|n|self.latest.get(n))}
+    pub fn next_sequence(&self)->u64 {self.latest.last_key_value().map_or(1,|(n,_)|n+1)}
+    fn recent_cutoff(&self)->u64 {self.latest.values().rev().filter(|e|matches!(e.kind,EventKind::RemoteSpeech|EventKind::SelfSpeech|EventKind::ConfirmedSelf)).take(RECENT).last().map_or(0,|e|e.sequence.saturating_sub(1))}
+    /// Fork an exact saved prefix; later events in the original session never
+    /// enter the restored branch. Re-hash all original references, not quotes.
+    pub fn fork(&self,id:&str,epoch:u64)->Result<Self> {
+        let mut journal=self.journal.clone();
+        for r in &mut journal {r.event.session_id=id.into();r.event.epoch=epoch;}
+        let originals:BTreeMap<_,_>=journal.iter().map(|r|((r.event.id.clone(),r.event.revision),&r.event)).collect();
+        let mut chunks=self.chunks.clone();
+        for c in &mut chunks {
+            c.snapshot.session_id=id.into();c.snapshot.epoch=epoch;
+            for e in &mut c.snapshot.events {*e=(*originals.get(&(e.id.clone(),e.revision)).ok_or("恢复分支缺少原文")?).clone();}
+            for r in c.candidate.items.iter_mut().flat_map(|i|i.refs.iter_mut()).chain(c.candidate.omitted.iter_mut().map(|o|&mut o.reference)) {
+                *r=originals.get(&(r.id.clone(),r.revision)).ok_or("恢复分支缺少引用")?.reference()?;
+            }
+            c.candidate.snapshot_id=c.snapshot.id()?;c.id=digest(&encoded(&c.candidate)?);
+        }
+        Self::restore(id,epoch,self.dependencies.clone(),self.missing_older_history,&journal,&chunks,self.context_version)
+    }
+    /// Restore only against the independently checked original revision log.
+    /// A checksum/JSON parse alone cannot make a derived memory authoritative.
+    pub fn restore(session_id:&str,epoch:u64,dependencies:Dependencies,missing_older_history:bool,journal:&[JournalRecord],chunks:&[MemoryChunk],context_version:u64)->Result<Self> {
+        if chunks.len()>512||context_version>1_000_000 {return Err("记忆恢复版本超出上限".into());}
+        let mut ledger=Self::new(session_id,epoch,dependencies,missing_older_history)?;
+        for (i,record) in journal.iter().enumerate() {
+            if record.record_sequence!=i as u64+1 {return Err("记忆原文修订记录存在空洞".into());}
+            let replay=ledger.append(record.event.clone())?;
+            if replay!=*record {return Err("记忆原文修订重放不一致".into());}
+        }
+        let mut previous_version=0;let mut covered=0;
+        let originals:BTreeMap<_,_>=journal.iter().map(|r|((r.event.id.as_str(),r.event.revision),&r.event)).collect();
+        for chunk in chunks {
+            let s=&chunk.snapshot;
+            if chunk.id!=digest(&encoded(&chunk.candidate)?)||chunk.context_version<=previous_version||chunk.context_version>context_version||s.base_context_version.checked_add(1)!=Some(chunk.context_version)||chunk.validation_status!="extractive_quotes_verified_not_semantic_paraphrase"||s.schema_version!=1||s.session_id!=session_id||s.epoch!=epoch||s.events.is_empty()||s.events.len()>64||s.from_sequence==0||s.cutoff_sequence!=s.from_sequence+s.events.len() as u64-1||encoded(s)?.len()>MAX_SNAPSHOT_BYTES {return Err("记忆版本或覆盖范围无效".into());}
+            validate_candidate(s,&chunk.candidate)?;
+            for (i,event) in s.events.iter().enumerate() {
+                if !event.closed||event.sequence!=s.from_sequence+i as u64||originals.get(&(event.id.as_str(),event.revision))!=Some(&event) {return Err("记忆缺少对应原文，不能恢复".into());}
+                if chunk.valid&&ledger.latest.get(&event.sequence)!=Some(event) {return Err("记忆引用已修订，不能恢复为当前版本".into());}
+            }
+            if chunk.valid {
+                let tail=ledger.recent_cutoff();
+                if s.dependencies!=ledger.dependencies||s.from_sequence!=covered+1||s.cutoff_sequence>tail {return Err("记忆来源依赖过期或覆盖存在空洞".into());}
+                covered=s.cutoff_sequence;
+            }
+            previous_version=chunk.context_version;
+        }
+        ledger.context_version=context_version;ledger.chunks=chunks.to_vec();Ok(ledger)
+    }
     /// Lossless logical view before relevance selection. Never sent wholesale.
     pub fn replay_view(&self)->ReplayView {
         let chunks:Vec<_>=self.chunks.iter().filter(|c|c.valid).cloned().collect();
         let end=chunks.iter().map(|c|c.snapshot.cutoff_sequence).max().unwrap_or(0);
         ReplayView{context_version:self.context_version,chunks,uncovered:self.latest.range(end+1..).map(|(_,e)|e.clone()).collect(),missing_older_history:self.missing_older_history}
     }
-    pub fn append(&mut self,event:Event)->Result<JournalRecord> {
+    pub fn plan_append(&self,event:&Event)->Result<JournalRecord> {
         event.validate()?;
         if event.session_id!=self.session_id||event.epoch!=self.epoch {return Err("旧会话事件已拦截".into());}
         if let Some(old)=self.ids.get(&event.id).and_then(|n|self.latest.get(n)) {
-            if event==*old {return self.journal.iter().rev().find(|r|r.event==event).cloned().ok_or("重复事件缺少原记录".into());}
+            if event==old {return self.journal.iter().rev().find(|r|r.event==*event).cloned().ok_or("重复事件缺少原记录".into());}
             if event.sequence!=old.sequence||event.revision!=old.revision+1||event.replaces_revision!=Some(old.revision)||event.kind!=old.kind||event.origin!=old.origin||event.capture_session!=old.capture_session||event.utterance_id!=old.utterance_id||event.question!=old.question {
                 return Err("事件修订或来源关系无效".into());
             }
@@ -148,6 +202,12 @@ impl Ledger {
         }
         let record=JournalRecord{record_sequence:self.journal.len() as u64+1,event:event.clone()};let bytes=encoded(&record)?.len();
         if self.journal.len()>=MAX_RECORDS||self.journal_bytes.saturating_add(bytes)>MAX_JOURNAL_BYTES {return Err("会话事件达到本地保留上限；未写入，请导出并新建会话".into());}
+        Ok(record)
+    }
+    pub fn append(&mut self,event:Event)->Result<JournalRecord> {
+        let record=self.plan_append(&event)?;
+        if record.record_sequence<=self.journal.len() as u64 {return Ok(record);}
+        let bytes=encoded(&record)?.len();
         if self.chunks.iter().any(|c|c.valid && c.snapshot.events.iter().any(|e|e.id==event.id)) {self.invalidate();}
         self.ids.insert(event.id.clone(),event.sequence);self.latest.insert(event.sequence,event);
         self.journal.push(record.clone());self.journal_bytes+=bytes;Ok(record)
@@ -165,7 +225,7 @@ impl Ledger {
     pub fn snapshot(&self,closed_through:u64,min_events:usize)->Result<Snapshot> {
         if min_events==0||min_events>64 {return Err("压缩最小批次无效".into());}
         let start=self.chunks.iter().filter(|c|c.valid).map(|c|c.snapshot.cutoff_sequence).max().unwrap_or(0)+1;
-        let tail=self.latest.last_key_value().map_or(0,|(n,_)|*n).saturating_sub(RECENT as u64);
+        let tail=self.recent_cutoff();
         let end=closed_through.min(tail).min(start.saturating_add(63));
         if start>end {return Err("没有可压缩的已结束旧话题".into());}
         let mut snapshot=Snapshot{schema_version:1,session_id:self.session_id.clone(),epoch:self.epoch,base_context_version:self.context_version,dependencies:self.dependencies.clone(),from_sequence:start,cutoff_sequence:end,events:vec![]};
@@ -174,7 +234,7 @@ impl Ledger {
             snapshot.events.push(e.clone());snapshot.cutoff_sequence=e.sequence;
             if encoded(&snapshot)?.len()>MAX_SNAPSHOT_BYTES {snapshot.events.pop();snapshot.cutoff_sequence=e.sequence-1;break;}
         }
-        if snapshot.events.len()<min_events {return Err("已结束旧发言不足最小批次，未请求压缩".into());}
+        if snapshot.events.iter().filter(|e|matches!(e.kind,EventKind::RemoteSpeech|EventKind::SelfSpeech|EventKind::ConfirmedSelf)).count()<min_events {return Err("已结束旧发言不足最小批次，未请求压缩".into());}
         snapshot.cutoff_sequence=snapshot.events.last().unwrap().sequence;Ok(snapshot)
     }
     fn current_snapshot(&self,snapshot:&Snapshot)->Result<()> {
@@ -182,7 +242,7 @@ impl Ledger {
             return Err("压缩快照的会话、上下文或依赖已过期".into());
         }
         let from=self.chunks.iter().filter(|c|c.valid).map(|c|c.snapshot.cutoff_sequence).max().unwrap_or(0)+1;
-        let tail=self.latest.last_key_value().map_or(0,|(n,_)|*n).saturating_sub(RECENT as u64);
+        let tail=self.recent_cutoff();
         if snapshot.from_sequence!=from||snapshot.events.is_empty()||snapshot.events.len()>64||snapshot.cutoff_sequence>tail||snapshot.cutoff_sequence!=from+snapshot.events.len() as u64-1||encoded(snapshot)?.len()>MAX_SNAPSHOT_BYTES {return Err("压缩覆盖范围无效或存在空洞".into());}
         for (i,e) in snapshot.events.iter().enumerate() {
             if e.sequence!=from+i as u64||!e.closed||self.latest.get(&e.sequence)!=Some(e) {return Err("压缩原文已修订或未结束".into());}
@@ -205,20 +265,22 @@ impl Ledger {
     pub fn workset_with_sources(&self,terms:&[String],valid_sources:&BTreeMap<String,String>)->Workset {
         let mut out=Workset{context_version:self.context_version,missing_older_history:self.missing_older_history,memory:vec![],retrieved_events:vec![],recent_events:vec![]};
         let permitted=|e:&Event|e.source_dependencies.iter().all(|(id,version)|valid_sources.get(id)==Some(version));
-        let recent_start=self.latest.last_key_value().map_or(0,|(n,_)|*n).saturating_sub(RECENT as u64-1);
         let mut seen=BTreeSet::new();
-        for (_,e) in self.latest.range(recent_start..) {if permitted(e) {seen.insert(e.id.clone());out.recent_events.push(e.clone());}}
+        let recent:Vec<_>=self.latest.values().rev().filter(|e|matches!(e.kind,EventKind::RemoteSpeech|EventKind::SelfSpeech|EventKind::ConfirmedSelf)&&permitted(e)).take(RECENT).collect();
+        for e in recent.into_iter().rev() {seen.insert(e.id.clone());out.recent_events.push(e.clone());}
         let relevant=|text:&str|{let text=text.to_lowercase();terms.iter().take(32).filter(|s|s.chars().count()>=2).any(|s|text.contains(&s.to_lowercase()))};
-        let mut used=0;
+        let mut used:usize=0;
         for item in self.chunks.iter().filter(|c|c.valid).rev().flat_map(|c|c.candidate.items.iter()) {
             if out.memory.len()>=4 {break;}
-            if item.refs.iter().any(|r|seen.contains(&r.id)||self.latest.get(&r.sequence).is_none_or(|e|!permitted(e)))||!relevant(&item.quote)||used+item.quote.len()>8000 {continue;}
-            used+=item.quote.len();for r in &item.refs {seen.insert(r.id.clone());}out.memory.push(item.clone());
+            let bytes=encoded(item).map_or(usize::MAX,|v|v.len());
+            if item.refs.iter().any(|r|seen.contains(&r.id)||self.latest.get(&r.sequence).is_none_or(|e|!permitted(e)))||!relevant(&item.quote)||used.saturating_add(bytes)>8000 {continue;}
+            used+=bytes;for r in &item.refs {seen.insert(r.id.clone());}out.memory.push(item.clone());
         }
         for e in self.latest.values().rev() {
             if out.retrieved_events.len()>=5 {break;}
-            if !permitted(e)||!e.closed||!e.mandatory()||seen.contains(&e.id)||!relevant(&e.text)||used+e.text.len()>8000 {continue;}
-            used+=e.text.len();seen.insert(e.id.clone());out.retrieved_events.push(e.clone());
+            let bytes=encoded(e).map_or(usize::MAX,|v|v.len());
+            if !permitted(e)||!e.closed||!e.mandatory()||seen.contains(&e.id)||!relevant(&e.text)||used.saturating_add(bytes)>8000 {continue;}
+            used+=bytes;seen.insert(e.id.clone());out.retrieved_events.push(e.clone());
         }
         out.retrieved_events.sort_by_key(|e|e.sequence);out
     }

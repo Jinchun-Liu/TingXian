@@ -29,6 +29,7 @@ const healthy=()=>({session_id:++nativeSession,recording:true,active:true,paused
 let native = { recording: false, enabled: false, epoch: 0 }, failClear = false, failIndexClear = false, indexDocuments = 2;
 const invoke = async (name, args) => {
   calls.push({ name, args });
+    if(name.startsWith('interview_memory_'))return require('./test-support/memory-disabled.cjs')(name);
   if(name.startsWith('interview_recovery_'))return recoveryNative(name,args);
   if(name==='interview_aliases_state')return {aliases:'kept aliases',blocked_lines:[]};
   if(name==='interview_preferences_save'){scene=args.preferences.scenario;return {...args.preferences};}

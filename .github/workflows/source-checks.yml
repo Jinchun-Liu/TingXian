@@ -28,6 +28,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
         working-directory: frontend
       - run: node scripts/test-background-ui.cjs
+      - run: node scripts/test-session-memory.cjs
+      - run: node scripts/test-memory-settings.cjs
       - run: python3 -m pip install -r interview/requirements.txt
       - run: python3 scripts/test-background-harness.py
       - run: python3 scripts/test-background-process-recovery.py

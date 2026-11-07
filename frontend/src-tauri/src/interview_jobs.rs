@@ -17,6 +17,7 @@ impl AnswerJobs {
     }
     pub fn cancel_all(&self){for job in self.jobs.lock().unwrap_or_else(|e|e.into_inner()).values(){job.cancel.cancel();}}
     pub fn is_empty(&self)->bool{self.jobs.lock().unwrap_or_else(|e|e.into_inner()).is_empty()}
+    pub fn len(&self)->usize{self.jobs.lock().unwrap_or_else(|e|e.into_inner()).len()}
 }
 impl Drop for AnswerLease {
     fn drop(&mut self){let mut jobs=self.owner.jobs.lock().unwrap_or_else(|e|e.into_inner());if jobs.get(&self.id).is_some_and(|j|j.revision==self.revision){jobs.remove(&self.id);}}

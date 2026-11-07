@@ -15,6 +15,7 @@ const preview={root:'/synthetic',path:'facts.json',file_hash:'hash-v1',fields:[
 ]};
 const invoke=async(name,args)=>{
  calls.push({name,args});
+    if(name.startsWith('interview_memory_'))return require('./test-support/memory-disabled.cjs')(name);
   if(name.startsWith('interview_recovery_'))return recoveryNative(name,args);
  if(name==='interview_status')return {root,suggested_root:'',aliases:'',facts:'',key_configured:true,index_version:'1',session_active:false};
  if(name==='profile_import_status')return null;

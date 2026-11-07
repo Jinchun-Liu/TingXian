@@ -17,7 +17,7 @@ export class RecoveryWriter {
   private running:Promise<void>|null=null;private initializing:Promise<void>|null=null;
   private paused=false;private fault=false;private generation=0;
   private view=INITIAL;private listeners=new Set<()=>void>();
-  constructor(private invoke:Invoke,private read:()=>RecoverySnapshot,private uuid:()=>string){this.id=uuid();}
+  constructor(private invoke:Invoke,private read:()=>RecoverySnapshot|Promise<RecoverySnapshot>,private uuid:()=>string){this.id=uuid();}
   subscribe=(fn:()=>void)=>{this.listeners.add(fn);return()=>{this.listeners.delete(fn);};};
   getSnapshot=()=>this.view;getServerSnapshot=()=>INITIAL;
   private update(next:Partial<RecoveryView>){this.view={...this.view,...next};this.listeners.forEach(fn=>fn());}
@@ -39,7 +39,8 @@ export class RecoveryWriter {
     const generation=this.generation;
     const work=(async()=>{
       await this.initialize();if(this.paused||generation!==this.generation)return;
-      const draft=parseRecoverySnapshot(this.read()),signature=JSON.stringify(draft);
+      const draft=parseRecoverySnapshot(await this.read()),signature=JSON.stringify(draft);
+      if(this.paused||generation!==this.generation)return;
       const meaningful=draft.snapshot.history.length||draft.snapshot.transcripts.length||draft.composer.question||draft.composer.confirmed_answer;
       if(signature===this.signature || (!meaningful&&!this.signature))return;
       await this.invoke('interview_recovery_write',{id:this.id,epoch:this.epoch,revision:++this.revision,draft});

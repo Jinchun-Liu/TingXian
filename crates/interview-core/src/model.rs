@@ -33,6 +33,7 @@ pub struct SpokenTurn { pub source: String, pub text: String }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag="type", rename_all="snake_case")]
 pub enum StreamEvent {
+    BudgetMeasured { measurement:crate::request_budget::RequestMeasurement },
     RequestSent { attempt: u8 },
     Delta { text: String },
     Warning { message: String },
@@ -153,14 +154,16 @@ where F:FnMut(StreamEvent)+Send {
     let budget_basis=if config.capabilities.is_some(){crate::request_budget::WindowBasis::UserReviewed}else{crate::request_budget::WindowBasis::ConfiguredUnknown};
     // Check the actual wire envelope after protocol adaptation. This also
     // covers callers supplying messages outside the normal short-history path.
-    crate::request_budget::fit(&mut payload,&config.budget,budget_basis.clone(),None)?;
     let notify=std::sync::Mutex::new(notify);
     let emit=|event|{(notify.lock().unwrap())(event);};
+    emit(StreamEvent::BudgetMeasured{measurement:crate::request_budget::measure(&payload,&config.budget,budget_basis.clone(),None)?});
+    crate::request_budget::fit(&mut payload,&config.budget,budget_basis.clone(),None)?;
     if image_budget_unknown{emit(StreamEvent::Warning{message:"图片 token 用量由供应商决定，当前仅核对文字、输出和余量预算；图片窗口是否适配尚未确认。".into()});}
     let useful=std::sync::atomic::AtomicBool::new(false);
     let start=Instant::now();let mut first=None;let mut warned=false;
     let work=async {
         for attempt in 0..2 {
+            if attempt>0{emit(StreamEvent::BudgetMeasured{measurement:crate::request_budget::measure(&payload,&config.budget,budget_basis.clone(),None)?});}
             crate::request_budget::admit(&crate::request_budget::measure(&payload,&config.budget,budget_basis.clone(),None)?)?;
             emit(StreamEvent::RequestSent { attempt: attempt + 1 });
             let response=client.post(endpoint).bearer_auth(key).json(&payload).send().await;
@@ -171,6 +174,25 @@ where F:FnMut(StreamEvent)+Send {
             };
             let status=response.status();
             if !status.is_success() {
+                if matches!(status.as_u16(),400|413|422) {
+                    // Read only a bounded error envelope. Never show provider
+                    // echoes of prompts/credentials or replay partial answers.
+                    let mut body=Vec::new();let mut stream=response.bytes_stream();
+                    while let Some(chunk)=stream.next().await {let Ok(chunk)=chunk else{break};if body.len()+chunk.len()>16*1024{body.clear();break;}body.extend_from_slice(&chunk);}
+                    if let Ok(error)=serde_json::from_slice::<Value>(&body) {
+                        if error["usage"].is_object(){emit(StreamEvent::Usage{attempt:attempt+1,usage:error["usage"].clone()});}
+                        let code=error["error"]["code"].as_str().unwrap_or_default().to_ascii_lowercase();
+                        let message=error["error"]["message"].as_str().unwrap_or_default().to_ascii_lowercase();
+                        let length_error=matches!(code.as_str(),"context_length_exceeded"|"context_window_exceeded"|"input_token_limit_exceeded")||["maximum context length","context length exceeded","context window exceeded","input token length"].iter().any(|s|message.contains(s));
+                        if length_error {
+                            let mut removed=false;
+                            if attempt==0 {for _ in 0..1024 {if !crate::request_budget::prune_optional(&mut payload["messages"]){break;}removed=true;}}
+                            if removed {crate::request_budget::fit(&mut payload,&config.budget,budget_basis.clone(),None)?;emit(StreamEvent::Warning{message:"服务拒绝上下文长度，已缩减可选历史并重试一次；当前问题、必要事实及截图保留。".into()});continue;}
+                            return Err("服务拒绝上下文长度；已停止重试，请减少输入或调整模型窗口。当前问题与截图未被截断。".into());
+                        }
+                    }
+                    return Err(format!("模型服务返回 HTTP {}；请检查模型参数或上下文能力",status.as_u16()));
+                }
                 if attempt==0 && (status.as_u16()==429 || status.is_server_error()) {
                     tokio::time::sleep(Duration::from_millis(600)).await;continue;
                 }

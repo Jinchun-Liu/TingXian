@@ -4,9 +4,10 @@ import type {SourceConflict} from './interview-conflicts';
 import type {LatencyRecord} from './interview-latency';
 import type {TranscriptInput} from './interview-scheduler';
 import {parseUsageSnapshot,UsageSnapshot} from '@/lib/interview-usage';
+import {memoryBoundaryValid,MemoryBoundary} from '@/lib/interview-memory';
 export type Source = { source_id: string; path: string; location: string; text: string; kind: string; allow_external: boolean; hash?: string; root?: string; user_assertion?: import('./interview-documents').UserAssertion | null; metadata?: DocumentMetadata };
 export type Turn = { passive?:boolean; meeting_mode?:string; scenario?:ConversationScenario; restored_from?: string; role: 'remote' | 'self' | 'manual'; sequence_id?: number; utterance_id?: number | null; microphone_epoch?: number | null; capture_session?: number; id: string; question: string; confirmed_answer: string | null; suggestion: string; status: 'listening' | 'queued' | 'generating' | 'done' | 'error' | 'cancelled' | 'recorded'; sources: Source[]; conflicts?: SourceConflict[]; fact_version?: number; time: string; timing: string; latency?: LatencyRecord };
-export type SessionSnapshot={version:1;history:Turn[];transcripts:TranscriptInput[];spoken_dialogue:TranscriptInput[];current:{question:string;answer:string};calls:number;usage:string;usage_ledger?:UsageSnapshot|null};
+export type SessionSnapshot={version:1|2;memory?:MemoryBoundary|null;history:Turn[];transcripts:TranscriptInput[];spoken_dialogue:TranscriptInput[];current:{question:string;answer:string};calls:number;usage:string;usage_ledger?:UsageSnapshot|null};
 export type SavedSession={id:number;saved_at:string;turns:number;calls:number};
 export type SessionPage={sessions:SavedSession[];next_before:number|null};
 const object=(v:any)=>v!==null && typeof v==='object' && !Array.isArray(v);
@@ -34,7 +35,7 @@ function transcriptValid(v:any):boolean {
  * partial recovery that could silently mix or drop dialogue. */
 export function parseSessionSnapshot(raw:unknown,allowEmpty=false):SessionSnapshot {
   const v:any=raw;
-  if(!object(v) || v.version!==1 || !Array.isArray(v.history) || (!allowEmpty && !v.history.length) || v.history.length>10000
+  if(!object(v) || ![1,2].includes(v.version) || (v.version===1&&v.memory!=null) || (v.version===2&&v.memory==null) || (v.memory!=null&&!memoryBoundaryValid(v.memory)) || !Array.isArray(v.history) || (!allowEmpty && !v.history.length) || v.history.length>10000
     || !strings(v.current,['question','answer']) || !Number.isSafeInteger(v.calls) || v.calls<0 || typeof v.usage!=='string'
     || ![v.transcripts,v.spoken_dialogue].every(a=>Array.isArray(a) && a.length<=120 && a.every(transcriptValid)))throw Error('保存的会话格式无效，当前记录保留');
   const ids=new Set<string>();

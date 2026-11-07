@@ -7,7 +7,7 @@ fn ledger()->Ledger {
     for n in 1..=40 {l.append(Event{id:format!("event-{n}"),session_id:"synthetic".into(),epoch:1,sequence:n,revision:1,kind:EventKind::RemoteSpeech,origin:Origin::SystemAudio,capture_session:Some("capture-1".into()),utterance_id:Some(format!("utterance-{n}")),replaces_revision:None,text:format!("第{n}题：null 不能当 0；HTTP 504 后状态未知；仅做过模拟，未处理过生产事故。"),closed:true,terminal:None,question:None,source_dependencies:BTreeMap::new(),asset_sha256:None}).unwrap();}l
 }
 fn candidate(s:&Snapshot)->Candidate {Candidate{schema_version:1,snapshot_id:s.id().unwrap(),finish_reason:"stop".into(),items:s.events.iter().map(|e|MemoryItem{kind:e.kind.clone(),origin:e.origin.clone(),refs:vec![e.reference().unwrap()],quote:e.text.clone()}).collect(),omitted:vec![]}}
-fn success(s:&Snapshot)->Outcome {Outcome{candidate:Some(candidate(s)),usage:Some(Usage{input_tokens:20,output_tokens:10,reasoning_tokens:Some(2),cache_hit_tokens:Some(5),cache_miss_tokens:Some(15)}),error:None,cancelled:false}}
+fn success(s:&Snapshot)->Outcome {Outcome{candidate:Some(candidate(s)),usage:Some(Usage{input_tokens:20,output_tokens:10,reasoning_tokens:Some(2),cache_hit_tokens:Some(5),cache_miss_tokens:Some(15)}),error:None,cancelled:false,transport_started:true}}
 #[test]fn disabled_consent_foreground_singleflight_cooldown_and_quota_are_independent(){
     let mut l=ledger();let mut s=Scheduler::default();let mut c=Config::default();
     assert!(!c.enabled);assert!(s.begin(&l,&c,true,false,28,100_000).unwrap().is_none());c.enabled=true;
@@ -21,7 +21,7 @@ fn success(s:&Snapshot)->Outcome {Outcome{candidate:Some(candidate(s)),usage:Som
 #[test]fn failure_unknown_usage_dedup_restart_and_configuration_changes_do_not_promote(){
     let mut l=ledger();let c=Config{enabled:true,..Default::default()};let mut s=Scheduler::default();let a=s.begin(&l,&c,true,false,28,100_000).unwrap().unwrap();s.mark_sent(&a.id).unwrap();
     let restored=Scheduler::restore(s.attempts().to_vec()).unwrap();assert_eq!(restored.attempts()[0].status,Status::Interrupted);assert_eq!(restored.charged_units(),a.reserved_units);assert!(!restored.active());
-    s.finish(&a.id,&mut l,&c,Outcome{candidate:None,usage:None,error:Some("429".into()),cancelled:false}).unwrap();assert_eq!(s.attempts()[0].status,Status::Failed);assert!(s.attempts()[0].usage.is_none());assert_eq!(s.charged_units(),a.reserved_units);assert!(s.begin(&l,&c,true,false,28,500_000).unwrap().is_none());assert_eq!(l.version(),0);
+    s.finish(&a.id,&mut l,&c,Outcome{candidate:None,usage:None,error:Some("429".into()),cancelled:false,transport_started:true}).unwrap();assert_eq!(s.attempts()[0].status,Status::Failed);assert!(s.attempts()[0].usage.is_none());assert_eq!(s.charged_units(),a.reserved_units);assert!(s.begin(&l,&c,true,false,28,500_000).unwrap().is_none());assert_eq!(l.version(),0);
     let mut s=Scheduler::default();let a=s.begin(&l,&c,true,false,28,100_000).unwrap().unwrap();s.mark_sent(&a.id).unwrap();let mut changed=c.clone();changed.profile.request.model="other-model".into();s.finish(&a.id,&mut l,&changed,success(&a.snapshot)).unwrap();assert_eq!(s.attempts()[0].status,Status::Stale);assert_eq!(l.version(),0);
 }
 #[test]fn malformed_candidate_or_low_gain_keeps_originals_and_old_memory(){
@@ -36,6 +36,36 @@ fn success(s:&Snapshot)->Outcome {Outcome{candidate:Some(candidate(s)),usage:Som
     let u=Usage::parse(&json!({"prompt_tokens":100,"completion_tokens":30,"completion_tokens_details":{"reasoning_tokens":20},"prompt_cache_hit_tokens":80,"prompt_cache_miss_tokens":20})).unwrap();assert_eq!(u.total(),130);
     let l=ledger();let snap=l.snapshot(28,16).unwrap();let (p,m)=prepare(&snap,&Config::default().profile).unwrap();assert_eq!(p["thinking"]["type"],"disabled");assert_eq!(p["max_tokens"],8192);assert_eq!(m.output_tokens,8192);assert!(!p.to_string().contains("implementation_prompt"));
 }
+#[tokio::test]async fn cancellation_before_transport_has_no_charge_and_no_connection(){
+    let mut l=ledger();let c=Config{enabled:true,..Default::default()};let mut scheduler=Scheduler::default();let a=scheduler.begin(&l,&c,true,false,28,100_000).unwrap().unwrap();scheduler.mark_sent(&a.id).unwrap();
+    let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let mut p=c.profile.clone();p.endpoint=format!("http://{}/v1/chat/completions",listener.local_addr().unwrap());
+    let cancel=tokio_util::sync::CancellationToken::new();cancel.cancel();let out=run(&p,"synthetic-only",&a.snapshot,cancel).await;
+    assert!(out.cancelled);assert!(!out.transport_started);scheduler.finish(&a.id,&mut l,&c,out).unwrap();assert_eq!(scheduler.charged_units(),0);assert!(!scheduler.attempts()[0].request_sent);
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(50),listener.accept()).await.is_err());
+}
+
+#[test]
+fn pressure_does_not_bypass_minimum_new_speech_or_retry_each_sentence() {
+    let c=Config{enabled:true,..Default::default()};let mut l=ledger();let mut s=Scheduler::default();
+    let a=s.begin_for(&l,&c,true,false,28,100_000,Trigger::Capacity).unwrap().unwrap();
+    assert_eq!(a.trigger,Trigger::Capacity);s.mark_sent(&a.id).unwrap();
+    s.finish(&a.id,&mut l,&c,Outcome{candidate:None,usage:None,error:Some("429".into()),cancelled:false,transport_started:true}).unwrap();
+    for n in 41..=48 {
+        let mut e=l.event("event-40").unwrap().clone();e.id=format!("event-{n}");e.sequence=n;e.utterance_id=Some(format!("utterance-{n}"));l.append(e).unwrap();
+        if n<48 {assert!(s.begin_for(&l,&c,true,false,n-12,500_000,Trigger::Capacity).unwrap().is_none());}
+    }
+    let next=s.begin_for(&l,&c,true,false,36,500_000,Trigger::Capacity).unwrap().unwrap();
+    assert_eq!(next.snapshot.cutoff_sequence,36);assert_ne!(a.id,next.id);
+
+    // Many generated/status events cannot manufacture the required eight old
+    // actual utterances. Recent twelve actual utterances remain protected.
+    let original=ledger();let mut short=Ledger::new("synthetic",1,original.dependencies().clone(),false).unwrap();
+    for n in 1..=19 {short.append(original.event(&format!("event-{n}")).unwrap().clone()).unwrap();}
+    for n in 20..=70 {
+        let mut e=original.event("event-20").unwrap().clone();e.id=format!("status-{n}");e.sequence=n;e.kind=EventKind::RequestTerminal;e.origin=Origin::Runtime;e.capture_session=None;e.utterance_id=None;e.text="cancelled".into();e.terminal=Some(Terminal::Cancelled);e.question=Some(QuestionVersion{question_id:format!("question-{n}"),revision:1,context_version:0});short.append(e).unwrap();
+    }
+    assert!(Scheduler::default().begin_for(&short,&c,true,false,70,100_000,Trigger::Capacity).unwrap().is_none());
+}
 
 async fn serve(status:u16,value:Value,delay_ms:u64)->(String,tokio::task::JoinHandle<Value>) {
     let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let url=format!("http://{}/chat/completions",listener.local_addr().unwrap());
@@ -49,5 +79,6 @@ async fn serve(status:u16,value:Value,delay_ms:u64)->(String,tokio::task::JoinHa
         let out=run(&p,"synthetic-credential",&snapshot,tokio_util::sync::CancellationToken::new()).await;let sent=task.await.unwrap();assert!(!sent.to_string().contains("synthetic-credential"));assert_eq!(out.usage.unwrap().total(),40);assert_eq!(out.candidate.is_some(),reason=="stop");
     }
     for status in [429,500] {let(url,task)=serve(status,json!({}),0).await;let mut p=Config::default().profile;p.endpoint=url;let out=run(&p,"synthetic-credential",&snapshot,tokio_util::sync::CancellationToken::new()).await;task.await.unwrap();assert!(out.error.unwrap().contains(&status.to_string()));assert!(out.usage.is_none());}
+    let(url,task)=serve(429,json!({"usage":{"prompt_tokens":25,"completion_tokens":0}}),0).await;let mut p=Config::default().profile;p.endpoint=url;let out=run(&p,"synthetic-credential",&snapshot,tokio_util::sync::CancellationToken::new()).await;task.await.unwrap();assert!(out.error.unwrap().contains("429"));assert_eq!(out.usage.unwrap().total(),25,"error responses retain provider-reported usage without retrying");
     let(url,task)=serve(200,json!({}),1000).await;let mut p=Config::default().profile;p.endpoint=url;let cancel=tokio_util::sync::CancellationToken::new();let trigger=cancel.clone();tokio::spawn(async move{tokio::time::sleep(std::time::Duration::from_millis(100)).await;trigger.cancel();});let out=run(&p,"synthetic-credential",&snapshot,cancel).await;assert!(out.cancelled);assert!(out.candidate.is_none());assert!(out.usage.is_none());task.abort();
 }

@@ -11,6 +11,7 @@ async function exercise(page){
   const native=()=>({recording,enabled:false,epoch:1,health:recording?health:null});
   const invoke=async(name,args)=>{
     calls.push({name,args});
+    if(name.startsWith('interview_memory_'))return require('./test-support/memory-disabled.cjs')(name);
     if(name==='interview_status')return {root:'',suggested_root:'',aliases:'',facts:'',documents:[],index_documents:0,index_chunks:0,index_version:'0',key_configured:page==='interview',workspace_ready:true,answer_capacity:2,cloud_asr_mode:'aliyun',session_active:false,preferences:{scenario:'interview'}};
     if(name==='profile_import_status')return null;
     if(name==='interview_window_mode_get')return false;

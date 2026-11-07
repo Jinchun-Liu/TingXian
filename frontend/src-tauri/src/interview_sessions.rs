@@ -13,6 +13,8 @@ pub struct Snapshot {
     pub current:Current,pub calls:u32,pub usage:String,
     #[serde(default,skip_serializing_if="Option::is_none")]
     pub usage_ledger:Option<Value>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub memory:Option<interview_core::memory_checkpoint::Boundary>,
 }
 #[derive(Debug,Serialize,Deserialize)]
 pub struct SavedSession {pub id:i64,pub saved_at:String,pub turns:i64,pub calls:i64}
@@ -27,7 +29,8 @@ fn validate(snapshot:&Snapshot)->Result<(),String> {
     validate_snapshot(snapshot,false)
 }
 pub(crate) fn validate_snapshot(snapshot:&Snapshot,allow_empty:bool)->Result<(),String> {
-    if snapshot.version!=1 || (!allow_empty && snapshot.history.is_empty()) || snapshot.history.len()>10000 || snapshot.transcripts.len()>120 || snapshot.spoken_dialogue.len()>120 {return Err("会话版本或记录数量无效；未保存或替换当前记录".into());}
+    if ![1,2].contains(&snapshot.version) || (snapshot.version==1&&snapshot.memory.is_some()) || (snapshot.version==2&&snapshot.memory.is_none()) || (!allow_empty && snapshot.history.is_empty()) || snapshot.history.len()>10000 || snapshot.transcripts.len()>120 || snapshot.spoken_dialogue.len()>120 {return Err("会话版本或记录数量无效；未保存或替换当前记录".into());}
+    if let Some(memory)=&snapshot.memory{memory.validate()?;}
     let mut ids=std::collections::HashSet::new();
     for t in &snapshot.history {
         if !["remote","self","manual"].contains(&t["role"].as_str().unwrap_or("")) || !["listening","queued","generating","done","error","cancelled","recorded"].contains(&t["status"].as_str().unwrap_or(""))
@@ -82,6 +85,7 @@ pub async fn save(pool:&SqlitePool,snapshot:Snapshot,confirmed:bool)->Result<Sav
 pub async fn save_with_key(pool:&SqlitePool,snapshot:Snapshot,confirmed:bool,key:&str)->Result<SavedSession,String> {
     if !confirmed {return Err("请明确选择保存本次会话".into());}
     validate(&snapshot)?;
+    if let Some(memory)=&snapshot.memory{interview_core::memory_checkpoint::load_boundary(pool,memory).await?;}
     let mut data=serde_json::to_value(&snapshot).map_err(|e|e.to_string())?;
     scrub(&mut data,0)?;
     interview_core::redact_json_credentials(&mut data,Some(key))?;

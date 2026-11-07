@@ -4,7 +4,7 @@ use crate::{session_memory::{Dependencies,JournalRecord,Ledger},Result};
 use serde::{Deserialize,Serialize};
 use sqlx::{Row,SqliteConnection,SqlitePool};
 
-pub const TABLES:&[&str]=&["tingxian_memory_events","tingxian_memory_latest","tingxian_memory_sessions"];
+pub const TABLES:&[&str]=&["tingxian_memory_checkpoints","tingxian_memory_events","tingxian_memory_latest","tingxian_memory_sessions"];
 const SESSION_BYTES:i64=32*1024*1024;
 const TOTAL_BYTES:i64=128*1024*1024;
 const SCHEMA:&str="CREATE TABLE IF NOT EXISTS tingxian_memory_sessions(id TEXT PRIMARY KEY,epoch INTEGER NOT NULL,dependencies TEXT NOT NULL,missing_older INTEGER NOT NULL,last_record INTEGER NOT NULL,last_event INTEGER NOT NULL,bytes INTEGER NOT NULL);
@@ -16,7 +16,7 @@ pub struct Session {pub id:String,pub epoch:u64,pub dependencies:Dependencies,pu
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
 pub struct Ack {pub record_sequence:u64,pub sha256:String}
 
-pub async fn init(pool:&SqlitePool)->Result<()> {crate::recovery::init(pool).await?;sqlx::raw_sql(SCHEMA).execute(pool).await.map_err(|e|e.to_string())?;Ok(())}
+pub async fn init(pool:&SqlitePool)->Result<()> {crate::recovery::init(pool).await?;sqlx::raw_sql(SCHEMA).execute(pool).await.map_err(|e|e.to_string())?;crate::memory_checkpoint::init(pool).await?;Ok(())}
 fn session(row:sqlx::sqlite::SqliteRow)->Result<Session>{
     let s=Session{id:row.try_get("id").map_err(|e|e.to_string())?,epoch:row.get::<i64,_>("epoch") as u64,dependencies:serde_json::from_str(row.get("dependencies")).map_err(|_|"会话依赖记录无效")?,missing_older_history:row.get::<i64,_>("missing_older")!=0,last_record:row.get::<i64,_>("last_record") as u64,last_event:row.get::<i64,_>("last_event") as u64,bytes:row.get::<i64,_>("bytes") as u64};
     if s.epoch>9_007_199_254_740_991||s.last_record>20_000||s.last_event>s.last_record||s.bytes>SESSION_BYTES as u64 {return Err("会话原文目录损坏或越界".into());}

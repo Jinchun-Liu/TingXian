@@ -22,7 +22,7 @@ async fn serve(replies:Vec<Reply>)->Server {
             while input.len()<end+len {let n=socket.read(&mut buf).await.unwrap();assert!(n>0);input.extend_from_slice(&buf[..n]);}
             captured.lock().unwrap().push((serde_json::from_slice(&input[end..end+len]).unwrap(),header));
             tokio::time::sleep(Duration::from_millis(reply.header_delay)).await;
-            if reply.status!=200 {let _=socket.write_all(format!("HTTP/1.1 {} Synthetic\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",reply.status).as_bytes()).await;continue;}
+            if reply.status!=200 {let body=reply.parts.iter().map(|(_,s)|s.as_str()).collect::<String>();let _=socket.write_all(format!("HTTP/1.1 {} Synthetic\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",reply.status,body.len()).as_bytes()).await;continue;}
             if socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n").await.is_err(){continue;}
             for (delay,part) in reply.parts {
                 tokio::time::sleep(Duration::from_millis(delay)).await;
@@ -43,6 +43,25 @@ async fn run(server:&Server,cancel:CancellationToken)->(Result<()>,Vec<StreamEve
 fn attempts(events:&[StreamEvent])->usize {events.iter().filter(|e|matches!(e,StreamEvent::RequestSent{..})).count()}
 fn warnings(events:&[StreamEvent])->usize {events.iter().filter(|e|matches!(e,StreamEvent::Warning{..})).count()}
 fn completed(events:&[StreamEvent])->bool {events.iter().any(|e|matches!(e,StreamEvent::Done{..}))}
+
+#[tokio::test]
+async fn provider_context_rejection_retries_only_optional_history_once_without_duplicate_answer(){
+    let rejected=||Reply{status:400,header_delay:0,parts:vec![(0,json!({"error":{"code":"context_length_exceeded","message":"synthetic"},"usage":{"prompt_tokens":20,"completion_tokens":0,"total_tokens":20}}).to_string())]};
+    let context=json!({"current_question":"租户 A 的 null 不等于 0；金额 23 元。HTTP 504 后状态未知，先确认再重试。","fact_card":"我未处理过生产事故","conflicts":["来源A与B不同"],"evidence":["旧证据"],"session_memory":["旧引用"],"retrieved_dialogue":["旧原文"],"recent_turns":["旧问答"],"recent_spoken_dialogue":["旧发言","最新发言1","最新发言2"]});
+    let image=json!({"type":"image_url","image_url":{"url":"data:image/png;base64,synthetic-fixture"}});
+    let messages=json!([{"role":"system","content":"固定规则"},{"role":"user","content":[{"type":"text","text":context.to_string()},image.clone()]}]);
+    for twice in [false,true] {
+        let second=if twice {rejected()}else{ok(vec![(0,delta("建议回答：先查业务状态，再验证幂等键与租户隔离。")),(0,done())])};
+        let server=serve(vec![rejected(),second]).await;let mut events=vec![];
+        let result=run_stream(reqwest::Client::builder().no_proxy().build().unwrap(),&server.url,"fixture-credential",messages.clone(),CancellationToken::new(),&config(),|e|events.push(e)).await;
+        assert_eq!(result.is_err(),twice);assert_eq!(attempts(&events),2);assert_eq!(completed(&events),!twice);
+        let requests=server.requests.lock().unwrap();assert_eq!(requests.len(),2);let retried=&requests[1].0;assert_eq!(retried["messages"][0],messages[0]);assert_eq!(retried["messages"][1]["content"][1],image);
+        let after:Value=serde_json::from_str(retried["messages"][1]["content"][0]["text"].as_str().unwrap()).unwrap();
+        for f in ["current_question","fact_card","conflicts"] {assert_eq!(after[f],context[f]);}
+        assert_eq!(after["recent_spoken_dialogue"],json!(["最新发言1","最新发言2"]));assert_eq!(after["session_memory"],json!([]));assert_eq!(events.iter().filter(|e|matches!(e,StreamEvent::Delta{..})).count(),usize::from(!twice));
+        assert!(events.iter().any(|e|matches!(e,StreamEvent::Usage{attempt:1,usage} if usage["total_tokens"]==20)));
+    }
+}
 
 #[tokio::test]
 async fn abnormal_finish_never_becomes_success_and_final_usage_survives(){
