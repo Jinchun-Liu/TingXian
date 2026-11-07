@@ -46,10 +46,32 @@ async function click(name){assert.ok(button(name),name);await act(async()=>{butt
   const oldGeneration=records.get(first.id).generation;await act(async()=>{tree.update(React.createElement(EducationPanel,{...props,scopeEpoch:'1'}));await settle();});await click('保存草稿');assert.ok(records.get(first.id).generation>oldGeneration);
   const seed={key:'old-session',sourceRef:'saved:synthetic',turnId:'q-old',history:[{id:'q-old',role:'remote',question:'原会话问题',suggestion:'AI 编造经历不可作为初答',confirmed_answer:null,sources:[]}]};
   await act(async()=>{tree.update(React.createElement(EducationPanel,{...props,seed}));await settle();});assert.equal(field('我的练习回答').props.value,'');assert.match(text(tree.toJSON()),/缺少本人作答/);assert.equal(button('保存初答').props.disabled,true);
+  // Selecting an old attempt must bind actions to that question, not the draft
+  // and source currently left over from another question in the same review.
+  const multiSeed={key:'two-question-review',sourceRef:'saved:synthetic-two',turnId:'q-a',history:[
+    {id:'q-a',role:'remote',question:'合成题 A：事务提交后超时如何核验？',sources:[]},
+    {id:'self-a',role:'self',question:'先核验租户与幂等键对应的写入结果。',sources:[]},
+    {id:'q-b',role:'remote',question:'合成题 B：如何区分 null、0 和缺失字段？',sources:[]},
+    {id:'self-b',role:'self',question:'分别核验 Schema 与业务语义。',sources:[]},
+  ]};
+  await act(async()=>{tree.update(React.createElement(EducationPanel,{...props,seed:multiSeed}));await settle();});
+  await change('选取本人回答','self-a');await change('帮助程度','worked_example');await click('保存初答');
+  await change('复盘题目','q-b');await change('选取本人回答','self-b');await click('保存新的作答');
+  const multi=[...records.values()].find(s=>s.source_session_ref===multiSeed.sourceRef),originalB=structuredClone(multi.attempts[1]);
+  async function selectAttempt(index){await act(async()=>{tree.root.findAllByType('button').filter(b=>text(b)==='查看这次反馈')[index].props.onClick();await settle();});}
+  await selectAttempt(0);await click('再试一次');
+  assert.equal(field('复盘题目文字').props.value,multiSeed.history[0].question,'re-answer must target the selected historical question');
+  assert.equal(field('复盘题目').props.value,'q-a','source selection must follow the chosen question');
+  await change('我的练习回答','重新作答 A：超时不等于事务失败。');await click('保存新的作答');
+  let saved=records.get(multi.id);assert.equal(saved.attempts.length,3);assert.equal(saved.attempts[2].question_id,'q-a');assert.equal(saved.attempts[2].revisions[0].source_ref,null,'new typed answer must not claim an old utterance');assert.equal(saved.attempts[2].assistance_level,'worked_example');assert.deepEqual(saved.attempts[1],originalB);
+  await selectAttempt(1);await click('修订这次回答');await change('我的练习回答','修订 B：保留 null、0、缺失字段的区别。');await click('保存修订');
+  saved=records.get(multi.id);assert.equal(saved.draft.question_ref,'q-b');assert.equal(saved.draft.source_ref,'self-b');assert.equal(saved.attempts[1].revisions[1].source_ref,'self-b','correction keeps the selected original source');assert.deepEqual(saved.attempts[1].revisions[0],originalB.revisions[0]);
+  await click('新练习');await change('打开练习记录',multi.id);await selectAttempt(0);await click('再试一次');
+  assert.equal(field('复盘题目文字').props.value,multiSeed.history[0].question);await click('保存草稿');assert.equal(records.get(multi.id).draft.question_ref,'q-a');
   assert.ok(!calls.includes('education_generate'));assert.ok(!calls.some(n=>/audio|camera|answer_start/.test(n)));
   await click('返回对话');assert.equal(closed,1);await act(async()=>{tree.unmount();await settle();});assert.equal(guards.size,0);
   const {SavedSessionPreview}=load(path.resolve(__dirname,'../frontend/src/components/interview/SavedSessionPreview.tsx'));let reviewed=null,release;
   await act(async()=>{tree=create(React.createElement(SavedSessionPreview,{id:1,onReview:s=>reviewed=s}));});await click('复盘这份会话');assert.deepEqual(reviewed,oldSnapshot);assert.ok(!calls.includes('interview_session_load'),'review must not restore over live assistance');
   reviewed=null;sessionGate=new Promise(r=>release=r);await act(async()=>{button('复盘这份会话').props.onClick();await settle();});await act(async()=>{tree.unmount();release(oldSnapshot);await settle();});assert.equal(reviewed,null,'late read after navigating away must not reopen education');
-  console.log('PASS: actual education panel initial/re-answer/revision, no-model state, export preview, saved recovery, source draft, font, disk failure, mode generation, old AI-only session and quit protection; synthetic native bridge only');
+  console.log('PASS: actual education panel initial/re-answer/revision, historical question/source binding before and after restore, no-model state, export preview, saved recovery, source draft, font, disk failure, mode generation, old AI-only session and quit protection; synthetic native bridge only');
 })().catch(e=>{console.error(e);process.exitCode=1;});
