@@ -107,6 +107,7 @@ impl Index {
                 VALUES(0,NULL,COALESCE((SELECT value FROM settings WHERE key='facts'),''),'旧版事实卡；来源仍以原正文为准，未重新确认','[]','迁移基线，不代表新增用户确认',NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
             INSERT OR IGNORE INTO settings VALUES('version','0');").execute(&pool).await.map_err(|e| e.to_string())?;
         sqlx::raw_sql(crate::assertions::SCHEMA).execute(&pool).await.map_err(|e|e.to_string())?;
+        sqlx::raw_sql(crate::source_policy::EXCLUSION_INDEX_SQL).execute(&pool).await.map_err(|e|e.to_string())?;
         Ok(Self { pool, jieba: Arc::new(Jieba::new()), gate: Arc::new(Mutex::new(())) })
     }
     pub async fn setting(&self, key: &str) -> Result<String> {

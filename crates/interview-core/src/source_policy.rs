@@ -5,7 +5,16 @@ use serde::Deserialize;
 use serde_json::json;
 use sqlx::Row;
 
-pub const EXCLUDED_SQL: &str = "EXISTS (SELECT 1 FROM background_library x WHERE x.key GLOB 'excluded/*' AND json_extract(x.value,'$.excluded')=1 AND json_extract(x.value,'$.root')=CASE WHEN d.path GLOB '.背景/*' THEN '背景资料库' ELSE COALESCE((SELECT value FROM settings WHERE key='root'),'') END AND json_extract(x.value,'$.path')=d.path)";
+// Background source IDs survive filename changes. Also read legacy path-keyed
+// permissions, without extending exclusions to unrelated same-text documents.
+// SQLite substr counts Unicode characters: '.背景/' + 64 hex digits + '/' = 69.
+macro_rules! identity_sql {
+    ($path:literal) => {concat!("CASE WHEN ",$path," GLOB '.背景/*' AND length(",$path,")>69 AND substr(",$path,",69,1)='/' AND substr(",$path,",5,64) NOT GLOB '*[^0-9a-f]*' THEN substr(",$path,",1,69) ELSE ",$path," END")};
+}
+// One normalized identity expression is shared by lookup and its derived
+// index. Legacy rows are indexed as-is; no permission or source is rewritten.
+pub const EXCLUSION_INDEX_SQL:&str=concat!("CREATE INDEX IF NOT EXISTS background_exclusion_identity ON background_library(json_extract(value,'$.root'),",identity_sql!("json_extract(value,'$.path')"),",json_extract(value,'$.excluded')) WHERE key GLOB 'excluded/*'");
+pub const EXCLUDED_SQL: &str = concat!("EXISTS (SELECT 1 FROM background_library x WHERE x.key GLOB 'excluded/*' AND json_extract(x.value,'$.excluded')=1 AND json_extract(x.value,'$.root')=CASE WHEN d.path GLOB '.背景/*' THEN '背景资料库' ELSE COALESCE((SELECT value FROM settings WHERE key='root'),'') END AND ",identity_sql!("json_extract(x.value,'$.path')"),"=",identity_sql!("d.path"),")");
 // Unknown dates remain eligible. Reviewed content that changed, is expired,
 // not yet effective, or has invalid date bounds needs explicit re-review.
 pub const CURRENT_SQL: &str = "NOT EXISTS(SELECT 1 FROM document_metadata m WHERE m.path=d.path AND m.root=CASE WHEN d.path GLOB '.背景/*' THEN '背景资料库' ELSE COALESCE((SELECT value FROM settings WHERE key='root'),'') END AND (m.reviewed_hash!=d.hash OR (m.valid_from IS NOT NULL AND (date(m.valid_from) IS NULL OR date(m.valid_from)!=m.valid_from OR m.valid_from>date('now','localtime'))) OR (m.valid_until IS NOT NULL AND (date(m.valid_until) IS NULL OR date(m.valid_until)!=m.valid_until OR m.valid_until<date('now','localtime'))) OR m.valid_from>m.valid_until))";
@@ -22,6 +31,12 @@ pub struct SourceExclusion {
     pub expected_root: String,
     pub expected_hash: String,
     pub excluded: bool,
+}
+
+fn background_identity(path:&str)->Option<String> {
+    let (id,name)=path.strip_prefix(crate::background::PREFIX)?.split_once('/')?;
+    (id.len()==64 && id.bytes().all(|b|b.is_ascii_hexdigit()&&!b.is_ascii_uppercase()) && !name.is_empty())
+        .then(||format!("{}{id}/",crate::background::PREFIX))
 }
 
 impl Index {
@@ -52,9 +67,18 @@ impl Index {
         if hash.as_deref() != Some(&update.expected_hash) || root != update.expected_root {
             return Err("来源已变化，请刷新后重新选择；未改变检索范围".into());
         }
-        let key = format!("excluded/{}", digest(&serde_json::to_vec(&(root, &update.path)).unwrap()));
+        let identity=background_identity(&update.path);
+        let now=chrono::Utc::now().to_rfc3339();
+        if let Some(prefix)=&identity {
+            // An explicit current-source action supersedes every legacy name
+            // for this ID. Keep the records; the whole change shares the CAS
+            // transaction and therefore rolls back together on write failure.
+            sqlx::query("UPDATE background_library SET value=json_set(value,'$.excluded',json(?),'$.updated_at',?) WHERE key GLOB 'excluded/*' AND json_extract(value,'$.root')='背景资料库' AND substr(json_extract(value,'$.path'),1,69)=?")
+                .bind(if update.excluded{"true"}else{"false"}).bind(&now).bind(prefix).execute(&mut *tx).await.map_err(|e|e.to_string())?;
+        }
+        let key = format!("excluded/{}", digest(&serde_json::to_vec(&(root, identity.as_deref().unwrap_or(&update.path))).unwrap()));
         let value = json!({"root":root,"path":update.path,"hash_at_change":update.expected_hash,
-            "excluded":update.excluded,"updated_at":chrono::Utc::now().to_rfc3339()});
+            "excluded":update.excluded,"updated_at":now});
         sqlx::query("INSERT OR REPLACE INTO background_library(key,value) VALUES(?,?)")
             .bind(key).bind(value.to_string()).execute(&mut *tx).await.map_err(|e| e.to_string())?;
         sqlx::query("UPDATE settings SET value=CAST(value AS INTEGER)+1 WHERE key='version'")

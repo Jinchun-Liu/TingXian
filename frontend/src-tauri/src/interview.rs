@@ -906,15 +906,16 @@ mod source_withdrawal_tests {
         let update=||interview_core::source_policy::SourceExclusion{path:"synthetic.txt".into(),expected_root:String::new(),expected_hash:"synthetic-hash".into(),excluded:true};
         assert!(profile_source_exclude(display,app.handle().clone(),app.state(),update()).await.is_err());
         let state=app.state::<InterviewState>();state.session.store(true,Ordering::SeqCst);
-        let lease=state.active.reserve("synthetic-q",1,&["answer-1".into()]).unwrap();
+        let leases:Vec<_>=(1..=3).map(|n|state.active.reserve(&format!("synthetic-q-{n}"),1,&[format!("answer-{n}")]).unwrap()).collect();
         let network=state.network.clone().read_owned().await;
         let withdrawal=profile_source_exclude(main,app.handle().clone(),app.state(),update());
         let releasing=async {
-            tokio::time::timeout(std::time::Duration::from_secs(3),lease.cancel.cancelled()).await.unwrap();
+            for lease in &leases {tokio::time::timeout(std::time::Duration::from_secs(3),lease.cancel.cancelled()).await.unwrap();}
+            assert_eq!(state.active.len(),3,"all lanes stay owned until old workers exit");
             assert!(state.lifecycle.try_lock().is_err(),"new starts stay behind withdrawal");
             let count:i64=sqlx::query_scalar("SELECT count(*) FROM background_library WHERE key GLOB 'excluded/*'").fetch_one(&state.index.get().unwrap().pool).await.unwrap();
             assert_eq!(count,0,"do not acknowledge while old network worker still runs");
-            drop(lease);drop(network);
+            drop(leases);drop(network);
         };
         let (result,())=tokio::join!(withdrawal,releasing);result.unwrap();
         assert!(state.index.get().unwrap().documents().await.unwrap()[0].excluded);

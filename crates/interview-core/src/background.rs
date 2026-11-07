@@ -140,6 +140,20 @@ impl Index {
             if let Some(raw)=sqlx::query_scalar::<_,String>("SELECT value FROM background_library WHERE key=?").bind(&doc.id).fetch_optional(&mut *tx).await.map_err(|e|e.to_string())?{
                 let previous:Doc=serde_json::from_str(&raw).map_err(|_|"先前来源资料无效，未应用")?;
                 crate::background_versions::archive(&mut tx,&previous,version,false).await?;
+                if previous.name!=doc.name {
+                    // A filename is presentation, not a new source permission.
+                    // Carry the current review (including expiry) to its new
+                    // path, preserving the reviewed hash so changed extraction
+                    // still requires review. Old rows remain historical.
+                    let old_path=format!("{PREFIX}{}/{}",doc.id,previous.name);
+                    let new_path=format!("{PREFIX}{}/{}",doc.id,doc.name);
+                    let prefix=format!("{PREFIX}{}/",doc.id);
+                    // Older builds could leave the review at an earlier name.
+                    // Preserve its date restrictions, but an orphaned review
+                    // cannot certify a later rename back to that filename.
+                    sqlx::query("INSERT OR REPLACE INTO document_metadata(path,root,reviewed_hash,confirmed,confirmed_at,valid_from,valid_until,updated_at) SELECT ?,root,CASE WHEN path=? THEN reviewed_hash ELSE '' END,CASE WHEN path=? THEN confirmed ELSE 0 END,CASE WHEN path=? THEN confirmed_at ELSE NULL END,valid_from,valid_until,updated_at FROM document_metadata WHERE root='背景资料库' AND substr(path,1,length(?))=? ORDER BY (path=?) DESC,updated_at DESC,path LIMIT 1")
+                        .bind(new_path).bind(&old_path).bind(&old_path).bind(&old_path).bind(&prefix).bind(&prefix).bind(&old_path).execute(&mut *tx).await.map_err(|e|e.to_string())?;
+                }
             }
             let next_version=version.parse::<u64>().map_err(|_|"资料版本无效")?.checked_add(1).ok_or("资料版本超限")?.to_string();
             crate::background_versions::archive(&mut tx,doc,&next_version,true).await?;
