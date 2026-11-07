@@ -1,0 +1,86 @@
+'use client';
+import {useEffect,useRef,useState} from 'react';
+import {invoke,isTauri} from '@tauri-apps/api/core';
+import {Button} from '@/components/ui/button';
+import {Turn} from '@/lib/interview-session';
+import {EducationController} from '@/lib/education-controller';
+import {answerChoices,Assistance,packs,sha,sourceEvidence} from '@/lib/education';
+import {interviewExit} from '@/lib/interview-exit';
+export type ReviewSeed={key:string;history:Turn[];sourceRef:string|null;turnId?:string};
+type Row={id:string;revision:number;question:string;status:string};
+const helpNames:Record<Assistance,string>={unknown:'帮助程度不明',independent:'未看提示或解答',prompted:'看过提示或反馈',worked_example:'已看参考答案'};
+const sourceNames:Record<string,string>={actual_self_speech:'本人实际发言',typed_self_response:'本人文字作答',synthetic_fixture:'合成测试',external_source:'外部资料',reference_solution:'参考答案',ai_draft:'AI 草稿'};
+
+export function EducationPanel({seed,visible,assistActive,scopeEpoch='',onClose,onConfigure}:{seed:ReviewSeed|null;visible:boolean;assistActive:boolean;scopeEpoch?:string;onClose:()=>void;onConfigure:()=>void}){
+  const owner=useRef<EducationController>();if(!owner.current)owner.current=new EducationController({invoke});const c=owner.current;
+  const [,redraw]=useState(0),[rows,setRows]=useState<Row[]>([]),[seedHistory,setSeedHistory]=useState<Turn[]>([]),[questionId,setQuestionId]=useState('');
+  const [activeAttempt,setActiveAttempt]=useState<string|null>(null),[reviseId,setReviseId]=useState<string>(),[message,setMessage]=useState(''),[busy,setBusy]=useState(false),[lane,setLane]=useState<'interactive'|'background'>('interactive');
+  const [models,setModels]=useState<{id:string;name:string;model:string;ready:boolean}[]>([]),[exportPreview,setExportPreview]=useState<{payload:string;id:string}|null>(null);
+  const seedKey=useRef<string|null>(null),seedQueue=useRef(Promise.resolve()),latestSeed=useRef(seed),epoch=useRef(scopeEpoch);latestSeed.current=seed;c.assistActive=assistActive;
+  const refreshRows=async()=>setRows(await invoke<Row[]>('education_list'));
+  const action=async(fn:()=>Promise<unknown>)=>{setMessage('');setBusy(true);try{await fn();}catch(e){setMessage(String(e));}finally{setBusy(false);redraw(n=>n+1);}};
+  useEffect(()=>{
+    const off=c.subscribe(()=>redraw(n=>n+1));const protect=interviewExit.protect(()=>c.protect());
+    const before=(e:BeforeUnloadEvent)=>{if(c.dirty||c.saving){e.preventDefault();e.returnValue='';}};window.addEventListener('beforeunload',before);
+    return()=>{off();protect();window.removeEventListener('beforeunload',before);c.dispose();};
+  },[c]);
+  useEffect(()=>{if(!visible||!isTauri())return;let live=true;
+    void refreshRows().catch(e=>{if(live)setMessage(String(e));});
+    void invoke<any>('interview_providers_get').then(v=>{if(live)setModels([...v.config.answers,v.config.background].filter((p:any)=>p.enabled).map((p:any)=>({id:p.id,name:p.name,model:p.request.model,ready:!!v.key_configured[p.id]||p.endpoint.startsWith('http://')})));}).catch(e=>{if(live)setMessage(String(e));});
+    return()=>{live=false;};
+  },[visible]);
+  useEffect(()=>{if(epoch.current===scopeEpoch)return;epoch.current=scopeEpoch;void c.cancel().catch(e=>setMessage(String(e)));},[scopeEpoch,c]);
+  useEffect(()=>{if(!seed||seedKey.current===seed.key)return;seedKey.current=seed.key;
+    seedQueue.current=seedQueue.current.catch(()=>{}).then(async()=>{if(latestSeed.current?.key!==seed.key)return;await action(async()=>{await c.fresh();if(latestSeed.current?.key!==seed.key)return;setSeedHistory(seed.history);setQuestionId(seed.turnId??'');setActiveAttempt(null);setReviseId(undefined);
+      c.study.source_session_ref=seed.sourceRef??(seed.history.length?'live:'+seed.key:null);
+      const turn=seed.history.find(t=>t.id===seed.turnId);c.edit({question:turn?.question??'',question_ref:turn?.id??null,text:'',input_source:'typed_self_response',assistance_level:'unknown',source_ref:turn?.id??null});
+      await c.persist();});});
+  },[seed,c]);
+  const s=c.study,pack=packs.find(p=>p.id===s.pack_id)!,attempt=s.attempts.find(a=>a.id===activeAttempt)??s.attempts.at(-1),latest=attempt?.revisions.at(-1);
+  const feedback=s.feedback.filter(f=>f.attempt_id===attempt?.id).at(-1),choices=answerChoices(seedHistory),turn=seedHistory.find(t=>t.id===questionId);
+  const activeTasks=s.tasks.filter(t=>['queued','running'].includes(t.state));
+  return <section className="desk-panel education-panel" aria-label="会话复盘" hidden={!visible}>
+    <header className="desk-panel-heading"><h2>复盘与练习</h2><div className="education-actions"><span role="status">{c.saving?'正在保存…':c.dirty?'待保存':s.store_revision?'已保存':'尚未保存'}</span><Button variant="outline" size="sm" onClick={()=>void action(async()=>{await c.protect();onClose();})}>返回对话</Button></div></header>
+    <div className="education-content" style={{fontSize:s.preferences.font_size}}>
+      {(message||c.error)&&<p role="alert">{c.error||message} <Button variant="outline" size="sm" onClick={()=>void action(()=>c.persist())}>重试保存</Button></p>}
+      <div className="education-toolbar">
+        <label>内容包<select value={s.pack_id} disabled={busy} onChange={e=>void action(async()=>{await c.fresh(e.target.value);setActiveAttempt(null);setReviseId(undefined);setSeedHistory([]);})}>{packs.map(p=><option key={p.id} value={p.id}>{p.title} · 合成草稿</option>)}</select></label>
+        <label>练习记录<select aria-label="打开练习记录" value="" disabled={busy} onChange={e=>{const id=e.target.value;if(id)void action(async()=>{await c.load(id);setActiveAttempt(null);setReviseId(undefined);setSeedHistory([]);});}}><option value="">选择已保存记录</option>{rows.map(r=><option key={r.id} value={r.id}>{r.status==='archived'?'已归档 · ':''}{r.question.slice(0,50)||'未完成的文字练习'}</option>)}</select></label>
+        <Button variant="outline" size="sm" disabled={busy} onClick={()=>void action(async()=>{await c.fresh();setActiveAttempt(null);setReviseId(undefined);setSeedHistory([]);})}>新练习</Button>
+      </div>
+      {seedHistory.length>0&&<div className="education-source-selection"><label>会话中的题目<select aria-label="复盘题目" value={questionId} onChange={e=>{const id=e.target.value,t=seedHistory.find(t=>t.id===id);setQuestionId(id);c.edit({question:t?.question??'',question_ref:t?.id??null,text:'',source_ref:id||null,assistance_level:'unknown'});setActiveAttempt(null);setReviseId(undefined);}}><option value="">选择题目</option>{seedHistory.filter(t=>t.role!=='self').map(t=><option key={t.id} value={t.id}>{t.question.slice(0,100)}</option>)}</select></label>
+        <label>本人回答<select aria-label="选取本人回答" value="" onChange={e=>{const a=choices.find(a=>a.id===e.target.value);if(a)c.edit({text:a.text,input_source:a.provenance,source_ref:a.id,assistance_level:'unknown'});}}><option value="">{choices.length?'选择实际发言或已确认回答':'缺少本人作答，可在下方开始新练习'}</option>{choices.map(a=><option key={a.id} value={a.id}>{sourceNames[a.provenance]} · {a.text.slice(0,90)}</option>)}</select></label>
+        {turn?.suggestion&&<details><summary>AI 草稿 · 不能作为本人初答</summary><p className="education-prose">{turn.suggestion}</p></details>}
+      </div>}
+      {!seedHistory.length&&<label>合成题目<select aria-label="选择练习题" value="" onChange={e=>{const q=pack.questions.find(q=>q.id===e.target.value);if(q){c.updateScope(s=>{s.goal=q.goal;});c.edit({question:q.text,question_ref:q.id,text:'',source_ref:null,input_source:'typed_self_response',assistance_level:'unknown'});setActiveAttempt(null);setReviseId(undefined);}}}><option value="">选择一题或手动输入</option>{pack.questions.map(q=><option key={q.id} value={q.id}>{q.text.slice(0,95)}</option>)}</select></label>}
+      <label>题目<textarea aria-label="复盘题目文字" rows={3} value={s.draft.question} onChange={e=>c.edit({question:e.target.value,question_ref:null})}/></label>
+      <label>本次目标<input aria-label="复盘目标" value={s.goal} onChange={e=>c.updateScope(s=>{s.goal=e.target.value;})}/></label>
+      <label>我的回答<textarea aria-label="我的练习回答" rows={6} placeholder="先写自己的尝试；不需要 API 或摄像头。" value={s.draft.text} onChange={e=>c.edit({text:e.target.value,input_source:'typed_self_response'})}/></label>
+      <div className="education-toolbar"><span>{sourceNames[s.draft.input_source]}</span><label>作答时获得的帮助<select aria-label="帮助程度" value={s.draft.assistance_level} onChange={e=>c.edit({assistance_level:e.target.value as Assistance})}>{Object.entries(helpNames).map(([v,label])=><option key={v} value={v}>{label}</option>)}</select></label>
+        <Button disabled={busy||!s.draft.text.trim()||!s.draft.question.trim()} onClick={()=>void action(async()=>{await c.commit(reviseId);setActiveAttempt(reviseId??c.study.attempts.at(-1)!.id);setReviseId(undefined);await refreshRows();})}>{reviseId?'保存修订':s.attempts.length?'保存新的作答':'保存初答'}</Button>
+        <Button variant="outline" disabled={busy} onClick={()=>void action(async()=>{await c.persist();await refreshRows();})}>保存草稿</Button>
+      </div>
+      <details><summary>本次资料与模型</summary><div className="education-details">
+        {(turn?.sources??[]).map(source=><label className="education-check" key={source.source_id}><input type="checkbox" disabled={busy||!source.allow_external} checked={s.evidence.some(e=>e.id===source.source_id)} onChange={e=>{const checked=e.target.checked,generation=s.generation,id=s.id;void action(async()=>{const evidence=await sourceEvidence(source);if(c.study.id!==id||c.study.generation!==generation)throw Error('资料选择已变化，请重新选择');c.updateScope(s=>{s.evidence=s.evidence.filter(e=>e.id!==source.source_id);if(checked)s.evidence.push(evidence);});});}}/>{source.location} · {source.kind==='practice'?'参考答案':'外部资料'}{!source.allow_external?' · 未获外发许可':''}</label>)}
+        {s.evidence.map(e=><details key={e.id}><summary>{sourceNames[e.provenance]} · {e.location}</summary><p className="education-prose">{e.text}</p><Button variant="outline" size="sm" onClick={()=>c.updateScope(s=>{s.evidence=s.evidence.filter(x=>x.id!==e.id);})}>移出本次范围</Button></details>)}
+        <label>选定资料文字<textarea aria-label="选定资料文字" rows={3} value={s.draft.source_draft??''} onChange={e=>c.edit({source_draft:e.target.value})}/></label><Button size="sm" variant="outline" disabled={busy||!s.draft.source_draft?.trim()} onClick={()=>void action(async()=>{const text=s.draft.source_draft!,generation=s.generation,id=s.id,hash=await sha(text);if(c.study.id!==id||c.study.generation!==generation)throw Error('资料输入已变化，请重新添加');c.updateScope(s=>{s.evidence.push({id:'source-'+crypto.randomUUID(),text,hash,provenance:'external_source',location:'手动选定片段',allow_external:true});s.draft.source_draft='';});})}>加入待预览资料</Button>
+        <label>生成模型<select aria-label="复盘模型" value={s.preferences.profile_id} onChange={e=>c.configure({profile_id:e.target.value})}>{models.length?models.map(m=><option key={m.id} value={m.id}>{m.name} · {m.model}{m.ready?'':' · 未配置 Key'}</option>):<option value="answer-1">尚未配置生成模型</option>}</select></label>
+        <label>模型上下文上限<input aria-label="模型上下文上限" type="number" min={8192} max={262144} value={s.preferences.context_limit} onChange={e=>c.configure({context_limit:Number(e.target.value)})}/></label><p>请按所选模型的实际窗口填写，上限 262144；计入规则、评分标尺、所选文字和输出预留。用量缺失显示未知。</p>
+        <Button variant="outline" size="sm" onClick={()=>void action(async()=>{await c.protect();onConfigure();})}>模型接口设置</Button>
+      </div></details>
+      {attempt&&<section aria-label="作答与反馈" className="education-review">
+        <div className="education-toolbar"><h3>第 {s.attempts.indexOf(attempt)+1} 次作答</h3><span>修订 {latest?.revision} · {helpNames[latest!.assistance_level]}</span><Button variant="outline" size="sm" disabled={busy} onClick={()=>{c.edit({question:attempt.question,text:latest!.text,input_source:latest!.input_source,assistance_level:latest!.assistance_level});setReviseId(attempt.id);setActiveAttempt(attempt.id);}}>修订这次回答</Button></div>
+        <label>反馈方式<select aria-label="反馈方式" value={lane} onChange={e=>setLane(e.target.value as typeof lane)}><option value="interactive">交互反馈</option><option value="background">后台评估（实时辅助时暂停）</option></select></label>
+        <div className="education-actions"><Button disabled={busy||c.preparing||!models.some(m=>m.id===s.preferences.profile_id&&m.ready)} onClick={()=>void action(()=>c.prepare(attempt.id,lane))}>预览本次反馈范围</Button><Button variant="outline" onClick={()=>{c.edit({text:'',input_source:'typed_self_response',assistance_level:s.feedback.length?'prompted':'unknown'});setActiveAttempt(null);setReviseId(undefined);}}>再试一次</Button></div>
+        {!models.some(m=>m.id===s.preferences.profile_id&&m.ready)&&<p>尚未配置生成模型，可继续手动练习和保存。Whisper small 不提供教学反馈。</p>}
+        {c.preview&&<section aria-label="发送前预览" className="education-consent"><h3>本次发送</h3><p>{c.preview.model} · {c.preview.endpoint}</p><p>估算上界 {c.preview.budget} / {c.preview.context_limit}，含输出预留 {c.preview.output_reserve}。{c.preview.estimate}</p><details open><summary>题目、本人回答与 {s.evidence.filter(e=>e.allow_external).length} 份选定资料</summary><pre>{JSON.stringify(JSON.parse(c.preview.request.input_json),null,2)}</pre></details><details><summary>评分标尺 {pack.rubric_version}</summary>{pack.criteria.map(x=><p key={x.id}>{x.title}：{x.anchors.map((a,i)=>`${i} ${a}`).join('；')}</p>)}</details><div className="education-actions"><Button onClick={()=>void action(()=>c.send())}>确认发送并生成反馈</Button><Button variant="outline" onClick={()=>void action(()=>c.cancel())}>取消发送</Button></div></section>}
+        {activeTasks.length>0&&<div role="status">{activeTasks.map(t=><p key={t.task_id}>{t.lane==='background'?'后台评估':'交互反馈'} · {t.state==='queued'?'等待发送':'生成中'}</p>)}<Button variant="outline" onClick={()=>void action(()=>c.cancel())}>取消评估</Button></div>}
+        {feedback&&<div className="education-feedback"><p role="status">{feedback.status==='stale'?'旧反馈 · 输入或资料已修订，评分过期':'AI 辅导意见 · 可核对与修订'}{!feedback.independent_assessment?' · 不计为独立能力评价':''}</p><h3>已展示</h3><p>{feedback.demonstrated}</p><h3>优先改进</h3><p>{feedback.priority_improvement}</p><p><strong>下一步：</strong>{feedback.next_action}</p><details><summary>维度与证据</summary>{feedback.criteria.map(c=><div key={c.criterion_id}><h4>{pack.criteria.find(x=>x.id===c.criterion_id)?.title??c.criterion_id} · {c.score==='evidence_insufficient'?'证据不足':c.score}</h4><p>{c.judgment}</p>{c.evidence_refs.map((r,i)=><blockquote key={i}>“{r.quote}”<small>本人作答修订 {feedback.answer_revision} · 字符 {r.start+1}–{r.end}</small></blockquote>)}{c.source_refs.map((r,i)=><blockquote key={i}>“{r.quote}”<small>外部资料 {r.id}</small></blockquote>)}<p>{c.next_action}</p></div>)}</details></div>}
+      </section>}
+      {s.tasks.length>0&&<details><summary>任务与用量</summary>{s.tasks.map(t=><div key={t.task_id}><p>{t.state} · {t.request_attempts} 次发送尝试 · 用量 {t.usage===null?'未知':t.usage} · {t.error}</p>{t.raw_output&&t.state!=='completed'&&<details><summary>未采纳的返回</summary><pre>{t.raw_output}</pre></details>}</div>)}</details>}
+      {s.attempts.length>0&&<details><summary>初答与历史修订</summary>{s.attempts.map((a,i)=><section key={a.id}><h4>第 {i+1} 次 · {helpNames[a.assistance_level]}</h4>{a.revisions.map(r=><div key={r.revision}><p>修订 {r.revision} · {sourceNames[r.input_source]} · {helpNames[r.assistance_level]} · 帮助记录 {r.help_events.length} 条{r.answer_exposed?' · 已看参考答案':''}</p><p className="education-prose">{r.text}</p></div>)}<p>帮助记录 {a.help_events.length} 条{a.answer_exposed?' · 已看参考答案':''}</p><Button variant="outline" size="sm" onClick={()=>setActiveAttempt(a.id)}>查看这次反馈</Button></section>)}</details>}
+      <div className="education-toolbar"><label>字号<select aria-label="复盘字号" value={s.preferences.font_size} onChange={e=>c.configure({font_size:Number(e.target.value) as 16|20|24})}><option value={16}>小</option><option value={20}>中</option><option value={24}>大</option></select></label><Button variant="outline" size="sm" disabled={busy} onClick={()=>void action(async()=>{await c.persist();setExportPreview({payload:JSON.stringify({...c.study,consent_snapshot:null},null,2),id:c.study.id});})}>导出当前复盘</Button><Button variant="outline" size="sm" onClick={()=>void action(async()=>{await c.archive();setActiveAttempt(null);setReviseId(undefined);setSeedHistory([]);await refreshRows();})}>归档并清空当前显示</Button></div>
+      {exportPreview&&<section className="education-consent" aria-label="导出预览"><h3>导出当前复盘</h3><p>仅包含这份练习的题目、作答修订、已选资料、反馈与任务记录。请核对其中的个人内容后保存。</p><details><summary>查看完整导出内容</summary><pre>{exportPreview.payload}</pre></details><div className="education-actions"><Button onClick={()=>{const url=URL.createObjectURL(new Blob([exportPreview.payload],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='听弦-复盘-'+exportPreview.id+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);setExportPreview(null);}}>确认导出这份复盘</Button><Button variant="outline" onClick={()=>setExportPreview(null)}>取消导出</Button></div></section>}
+    </div>
+  </section>;
+}

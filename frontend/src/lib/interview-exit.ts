@@ -16,6 +16,9 @@ export class InterviewExit {
   private listeners=new Set<()=>void>();
   private latestRequest=0;
   private originalSuspended=false;
+  private protections=new Set<()=>Promise<void>>();
+  protect=(save:()=>Promise<void>)=>{this.protections.add(save);return()=>{this.protections.delete(save);};};
+  async protectNavigation():Promise<void>{for(const save of this.protections)await save();}
   constructor(private bridge:Bridge){}
   getSnapshot=()=>this.view;
   getServerSnapshot=()=>IDLE;
@@ -42,6 +45,7 @@ export class InterviewExit {
     this.bridge.cache.suspendRecordingWrites();
     let archivePath:string|null=null;
     try {
+      await this.protectNavigation();
       await this.bridge.invoke('interview_exit_prepare',{requestId:id});
       if(this.view.requestId!==id)return;
       const recovery:InterviewRecoverySnapshot=await this.bridge.cache.snapshotInterviewHistory();

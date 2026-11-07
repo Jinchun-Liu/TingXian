@@ -10,9 +10,10 @@ type Props = {
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   onEdit?: (id: string) => void;
+  onReview?: (id: string) => void;
 };
 
-export function AnswerConversation({history, preferences, selectedId, onSelect, onEdit}: Props) {
+export function AnswerConversation({history, preferences, selectedId, onSelect, onEdit, onReview}: Props) {
   const [search, setSearch] = useState('');
   const turns = useMemo(() => visibleTurns(history, preferences.showSelf).filter(t=>!preferences.focus || !t.passive), [history, preferences.showSelf, preferences.focus]);
   const rows = useMemo(() => turns.map((turn, index) => {
@@ -66,6 +67,7 @@ export function AnswerConversation({history, preferences, selectedId, onSelect, 
         <footer className="answer-meta">
           <span>{String(index+1).padStart(2,'0')} / {String(rows.length).padStart(2,'0')}</span>
           {preferences.focus && selectedId===turn.id && <span>已固定</span>}
+          {onReview && turn.role!=='self' && <button type="button" onClick={()=>onReview(turn.id)}>复盘</button>}
           {onEdit && ['done','error','cancelled','recorded'].includes(turn.status) && <button type="button" onClick={()=>onEdit(turn.id)}>{turn.role==='self'?'纠正我的发言':'编辑后重问'}</button>}
         </footer>
       </article>)}

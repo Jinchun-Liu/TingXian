@@ -11,3 +11,8 @@ TingXian is MIT licensed and retains the Meetily notices. Third-party components
 - Microsoft Edge WebView2 is redistributed by the installer under Microsoft's runtime terms. It is not part of TingXian's MIT license.
 
 The base installer contains a CPU Whisper build. It does not distribute CUDA, a local LLM, voice clones or avatar weights.
+# 教育提示与内容包
+
+EDU-M1 选择性改编 OpenMAIC 与 ai-teaching-skills 的 MIT 教学行为，具体固定提交、
+原始路径和修改说明见 `education/NOTICE.md`。Windows 包包含
+`licenses/education/NOTICE.md` 及两份完整 MIT 许可；未捆绑外部 Skill 运行环境。

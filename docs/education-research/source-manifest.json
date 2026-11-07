@@ -1,0 +1,285 @@
+{
+  "checked_on": "2026-11-07",
+  "scope": "Public reference text only; no third-party projects or skills installed or executed.",
+  "repository_count": 8,
+  "reference_file_count": 30,
+  "skill_file_count": 11,
+  "acquisition": {
+    "successful_method": "PowerShell Invoke-WebRequest with normal HTTPS validation",
+    "previous_failed_attempt": "acquisition-python-failed.json",
+    "previous_failure_status": "Recovered by successful fixed-commit downloads; original errors preserved.",
+    "directory_listings_included_in_file_count": false
+  },
+  "files": [
+    {
+      "repository": "amosblomqvist/learnharness",
+      "commit": "713377f366771e3e4730e6acd1bc290e0ebc6d6e",
+      "upstream_path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/amosblomqvist/learnharness/713377f366771e3e4730e6acd1bc290e0ebc6d6e/LICENSE",
+      "local_path": "sources/amosblomqvist__learnharness/LICENSE",
+      "bytes": 34523,
+      "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0"
+    },
+    {
+      "repository": "amosblomqvist/learnharness",
+      "commit": "713377f366771e3e4730e6acd1bc290e0ebc6d6e",
+      "upstream_path": "README.md",
+      "url": "https://raw.githubusercontent.com/amosblomqvist/learnharness/713377f366771e3e4730e6acd1bc290e0ebc6d6e/README.md",
+      "local_path": "sources/amosblomqvist__learnharness/README.md",
+      "bytes": 5974,
+      "sha256": "4e72f383c0742b10e992a9a591ff0dd8d700f23849ae7c512d3de8c31b4d397b"
+    },
+    {
+      "repository": "amosblomqvist/learnharness",
+      "commit": "713377f366771e3e4730e6acd1bc290e0ebc6d6e",
+      "upstream_path": "skills/learnharness/SKILL.md",
+      "url": "https://raw.githubusercontent.com/amosblomqvist/learnharness/713377f366771e3e4730e6acd1bc290e0ebc6d6e/skills/learnharness/SKILL.md",
+      "local_path": "sources/amosblomqvist__learnharness/skills/learnharness/SKILL.md",
+      "bytes": 8637,
+      "sha256": "0f29a1a5bd9c6f629d76ec442c78799b9d95a83a0322c3a84e71c2c442df09bb"
+    },
+    {
+      "repository": "bstellato/ai-teaching-skills",
+      "commit": "6d3f85726e7b0fedacc8a078e174161293777044",
+      "upstream_path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/bstellato/ai-teaching-skills/6d3f85726e7b0fedacc8a078e174161293777044/LICENSE",
+      "local_path": "sources/bstellato__ai-teaching-skills/LICENSE",
+      "bytes": 1076,
+      "sha256": "b6f81aea546a126222fcc866caf8bb11c28938a0faacafe523987fce2c9cb88b"
+    },
+    {
+      "repository": "bstellato/ai-teaching-skills",
+      "commit": "6d3f85726e7b0fedacc8a078e174161293777044",
+      "upstream_path": "README.md",
+      "url": "https://raw.githubusercontent.com/bstellato/ai-teaching-skills/6d3f85726e7b0fedacc8a078e174161293777044/README.md",
+      "local_path": "sources/bstellato__ai-teaching-skills/README.md",
+      "bytes": 9274,
+      "sha256": "d46d74833f221ff246db82a8674f7494a5b700774b0e5b714905a4bc98f5aec0"
+    },
+    {
+      "repository": "bstellato/ai-teaching-skills",
+      "commit": "6d3f85726e7b0fedacc8a078e174161293777044",
+      "upstream_path": "ai-novice/SKILL.md",
+      "url": "https://raw.githubusercontent.com/bstellato/ai-teaching-skills/6d3f85726e7b0fedacc8a078e174161293777044/ai-novice/SKILL.md",
+      "local_path": "sources/bstellato__ai-teaching-skills/ai-novice/SKILL.md",
+      "bytes": 2555,
+      "sha256": "42781b68fc3a411378d5273608753905dc650719a4c74a263dec77549a873694"
+    },
+    {
+      "repository": "bstellato/ai-teaching-skills",
+      "commit": "6d3f85726e7b0fedacc8a078e174161293777044",
+      "upstream_path": "ai-socratic-tutor/SKILL.md",
+      "url": "https://raw.githubusercontent.com/bstellato/ai-teaching-skills/6d3f85726e7b0fedacc8a078e174161293777044/ai-socratic-tutor/SKILL.md",
+      "local_path": "sources/bstellato__ai-teaching-skills/ai-socratic-tutor/SKILL.md",
+      "bytes": 4020,
+      "sha256": "90e62cff194687baea2392304a84a62bd835b4627d19393806b3053ecbb29d07"
+    },
+    {
+      "repository": "bstellato/ai-teaching-skills",
+      "commit": "6d3f85726e7b0fedacc8a078e174161293777044",
+      "upstream_path": "ai-solution-study/SKILL.md",
+      "url": "https://raw.githubusercontent.com/bstellato/ai-teaching-skills/6d3f85726e7b0fedacc8a078e174161293777044/ai-solution-study/SKILL.md",
+      "local_path": "sources/bstellato__ai-teaching-skills/ai-solution-study/SKILL.md",
+      "bytes": 3571,
+      "sha256": "2dc7258d9753fcec07e3b95bb99b53be275cc39d1f9f015973d0667e69c010e7"
+    },
+    {
+      "repository": "HKUDS/DeepTutor",
+      "commit": "60fb3bdfddb30b7740c7ce3bd9b28d908f2af6db",
+      "upstream_path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/HKUDS/DeepTutor/60fb3bdfddb30b7740c7ce3bd9b28d908f2af6db/LICENSE",
+      "local_path": "sources/HKUDS__DeepTutor/LICENSE",
+      "bytes": 11408,
+      "sha256": "cd2f54e1e5066644023203dcbd956776a9f4ef6eb8b6225afe1ffa2d380fede4"
+    },
+    {
+      "repository": "HKUDS/DeepTutor",
+      "commit": "60fb3bdfddb30b7740c7ce3bd9b28d908f2af6db",
+      "upstream_path": "README.md",
+      "url": "https://raw.githubusercontent.com/HKUDS/DeepTutor/60fb3bdfddb30b7740c7ce3bd9b28d908f2af6db/README.md",
+      "local_path": "sources/HKUDS__DeepTutor/README.md",
+      "bytes": 91942,
+      "sha256": "d8f70a59cd54c13abf7444c5f744ab182fee167b4dc42caff8867acb153856b5"
+    },
+    {
+      "repository": "HKUDS/DeepTutor",
+      "commit": "60fb3bdfddb30b7740c7ce3bd9b28d908f2af6db",
+      "upstream_path": "SKILL.md",
+      "url": "https://raw.githubusercontent.com/HKUDS/DeepTutor/60fb3bdfddb30b7740c7ce3bd9b28d908f2af6db/SKILL.md",
+      "local_path": "sources/HKUDS__DeepTutor/SKILL.md",
+      "bytes": 12802,
+      "sha256": "1eca34a7674b2b4cdc8039575281d5b85d457c3f1d8257bc4b42825d116336ec"
+    },
+    {
+      "repository": "HKUDS/DeepTutor",
+      "commit": "60fb3bdfddb30b7740c7ce3bd9b28d908f2af6db",
+      "upstream_path": "THIRD_PARTY_NOTICES.md",
+      "url": "https://raw.githubusercontent.com/HKUDS/DeepTutor/60fb3bdfddb30b7740c7ce3bd9b28d908f2af6db/THIRD_PARTY_NOTICES.md",
+      "local_path": "sources/HKUDS__DeepTutor/THIRD_PARTY_NOTICES.md",
+      "bytes": 5165,
+      "sha256": "d59dc01b43d1916db9418bc1ebcc213a4859047dc07e2766c4234391f9db033c"
+    },
+    {
+      "repository": "InferHaven/agent-skills",
+      "commit": "8eba05dc8550b2320dac137bceec6dae8572d0b4",
+      "upstream_path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/InferHaven/agent-skills/8eba05dc8550b2320dac137bceec6dae8572d0b4/LICENSE",
+      "local_path": "sources/InferHaven__agent-skills/LICENSE",
+      "bytes": 11345,
+      "sha256": "a35c5e40c876a8ce670347818b41272d48d084d5157cf349af12f238666202c9"
+    },
+    {
+      "repository": "InferHaven/agent-skills",
+      "commit": "8eba05dc8550b2320dac137bceec6dae8572d0b4",
+      "upstream_path": "NOTICE",
+      "url": "https://raw.githubusercontent.com/InferHaven/agent-skills/8eba05dc8550b2320dac137bceec6dae8572d0b4/NOTICE",
+      "local_path": "sources/InferHaven__agent-skills/NOTICE",
+      "bytes": 768,
+      "sha256": "3514cbad755df7231fb35704ba1dd210cedfd9561510a5d226b6641fd72dd59b"
+    },
+    {
+      "repository": "InferHaven/agent-skills",
+      "commit": "8eba05dc8550b2320dac137bceec6dae8572d0b4",
+      "upstream_path": "README.md",
+      "url": "https://raw.githubusercontent.com/InferHaven/agent-skills/8eba05dc8550b2320dac137bceec6dae8572d0b4/README.md",
+      "local_path": "sources/InferHaven__agent-skills/README.md",
+      "bytes": 4299,
+      "sha256": "b44b7e9a068df8c2830597c9fe1bbd330184c9d041807c8141ba5f0ecaf8b352"
+    },
+    {
+      "repository": "InferHaven/agent-skills",
+      "commit": "8eba05dc8550b2320dac137bceec6dae8572d0b4",
+      "upstream_path": "codetrain/SKILL.md",
+      "url": "https://raw.githubusercontent.com/InferHaven/agent-skills/8eba05dc8550b2320dac137bceec6dae8572d0b4/codetrain/SKILL.md",
+      "local_path": "sources/InferHaven__agent-skills/codetrain/SKILL.md",
+      "bytes": 20579,
+      "sha256": "224e9ed8c3a40a14e632743d4aa8bb4045f1e323d07999654e37c43feb3bbcae"
+    },
+    {
+      "repository": "langchain-ai/langgraph",
+      "commit": "e5e37b5d70dbfd93c7006bd90a658c6179a95946",
+      "upstream_path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/langchain-ai/langgraph/e5e37b5d70dbfd93c7006bd90a658c6179a95946/LICENSE",
+      "local_path": "sources/langchain-ai__langgraph/LICENSE",
+      "bytes": 1072,
+      "sha256": "d9bb52f2e3540d60ff50d8f0f5b6ba649b7fd346948c4c3d086c8afb120763c7"
+    },
+    {
+      "repository": "langchain-ai/langgraph",
+      "commit": "e5e37b5d70dbfd93c7006bd90a658c6179a95946",
+      "upstream_path": "README.md",
+      "url": "https://raw.githubusercontent.com/langchain-ai/langgraph/e5e37b5d70dbfd93c7006bd90a658c6179a95946/README.md",
+      "local_path": "sources/langchain-ai__langgraph/README.md",
+      "bytes": 6395,
+      "sha256": "3a13e257af1216962d53d72414a7f44ac1fc5cea34d994bdff60ea2a3b045933"
+    },
+    {
+      "repository": "open-spaced-repetition/ts-fsrs",
+      "commit": "edc4ceb79f08dcd41917c35c7eb14c8b09526100",
+      "upstream_path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/open-spaced-repetition/ts-fsrs/edc4ceb79f08dcd41917c35c7eb14c8b09526100/LICENSE",
+      "local_path": "sources/open-spaced-repetition__ts-fsrs/LICENSE",
+      "bytes": 1079,
+      "sha256": "8b83a73dd2894ff553d6de6113064b3ad9dfad3f839837b61f3b183881131d01"
+    },
+    {
+      "repository": "open-spaced-repetition/ts-fsrs",
+      "commit": "edc4ceb79f08dcd41917c35c7eb14c8b09526100",
+      "upstream_path": "README.md",
+      "url": "https://raw.githubusercontent.com/open-spaced-repetition/ts-fsrs/edc4ceb79f08dcd41917c35c7eb14c8b09526100/README.md",
+      "local_path": "sources/open-spaced-repetition__ts-fsrs/README.md",
+      "bytes": 4746,
+      "sha256": "abd83d7d1ddd46b7f4455d6f05cd90f9b6c7ca356733e84db7e3278116764730"
+    },
+    {
+      "repository": "open-spaced-repetition/ts-fsrs",
+      "commit": "edc4ceb79f08dcd41917c35c7eb14c8b09526100",
+      "upstream_path": "packages/fsrs/README.md",
+      "url": "https://raw.githubusercontent.com/open-spaced-repetition/ts-fsrs/edc4ceb79f08dcd41917c35c7eb14c8b09526100/packages/fsrs/README.md",
+      "local_path": "sources/open-spaced-repetition__ts-fsrs/packages/fsrs/README.md",
+      "bytes": 8047,
+      "sha256": "dd2b49d338ce21dd579f27b998ddf79c5447188a8c88533be8896b6b34274476"
+    },
+    {
+      "repository": "promptfoo/promptfoo",
+      "commit": "db6a5682c17c1a834bc729813119a4ee14b76041",
+      "upstream_path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/promptfoo/promptfoo/db6a5682c17c1a834bc729813119a4ee14b76041/LICENSE",
+      "local_path": "sources/promptfoo__promptfoo/LICENSE",
+      "bytes": 1053,
+      "sha256": "bf813686553f451e1b833fbd827488aee49b60b189626915bf3108d10b754e44"
+    },
+    {
+      "repository": "promptfoo/promptfoo",
+      "commit": "db6a5682c17c1a834bc729813119a4ee14b76041",
+      "upstream_path": "README.md",
+      "url": "https://raw.githubusercontent.com/promptfoo/promptfoo/db6a5682c17c1a834bc729813119a4ee14b76041/README.md",
+      "local_path": "sources/promptfoo__promptfoo/README.md",
+      "bytes": 4599,
+      "sha256": "7fd57809624e22da73bf6b6feb027c9e09aec74e0099bdea711fe2e276e87c4a"
+    },
+    {
+      "repository": "THU-MAIC/OpenMAIC",
+      "commit": "5bd8cc840ee6397d063e1fe6aba974b9f0401593",
+      "upstream_path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/THU-MAIC/OpenMAIC/5bd8cc840ee6397d063e1fe6aba974b9f0401593/LICENSE",
+      "local_path": "sources/THU-MAIC__OpenMAIC/LICENSE",
+      "bytes": 1065,
+      "sha256": "ba252563743227138231604c9138dd400faca5a10c3cf206b466e5466c565a19"
+    },
+    {
+      "repository": "THU-MAIC/OpenMAIC",
+      "commit": "5bd8cc840ee6397d063e1fe6aba974b9f0401593",
+      "upstream_path": "README.md",
+      "url": "https://raw.githubusercontent.com/THU-MAIC/OpenMAIC/5bd8cc840ee6397d063e1fe6aba974b9f0401593/README.md",
+      "local_path": "sources/THU-MAIC__OpenMAIC/README.md",
+      "bytes": 57210,
+      "sha256": "30f1d08ccfa4338a1f1af065bff822b5e677f56214e4fe19218e8076fa0cfa69"
+    },
+    {
+      "repository": "THU-MAIC/OpenMAIC",
+      "commit": "5bd8cc840ee6397d063e1fe6aba974b9f0401593",
+      "upstream_path": "skills/agent-runtime/curriculum-planner/SKILL.md",
+      "url": "https://raw.githubusercontent.com/THU-MAIC/OpenMAIC/5bd8cc840ee6397d063e1fe6aba974b9f0401593/skills/agent-runtime/curriculum-planner/SKILL.md",
+      "local_path": "sources/THU-MAIC__OpenMAIC/skills/agent-runtime/curriculum-planner/SKILL.md",
+      "bytes": 11595,
+      "sha256": "661a274f60d2a18fcf320715e8390cde178b2deb7a07c77669c4f1ce658ed1fb"
+    },
+    {
+      "repository": "THU-MAIC/OpenMAIC",
+      "commit": "5bd8cc840ee6397d063e1fe6aba974b9f0401593",
+      "upstream_path": "skills/agent-runtime/feynman-learning/SKILL.md",
+      "url": "https://raw.githubusercontent.com/THU-MAIC/OpenMAIC/5bd8cc840ee6397d063e1fe6aba974b9f0401593/skills/agent-runtime/feynman-learning/SKILL.md",
+      "local_path": "sources/THU-MAIC__OpenMAIC/skills/agent-runtime/feynman-learning/SKILL.md",
+      "bytes": 8215,
+      "sha256": "af7d9eaca12896a498259cbae3fa09d196d455b4e72af75d63ed1d1575ca944e"
+    },
+    {
+      "repository": "THU-MAIC/OpenMAIC",
+      "commit": "5bd8cc840ee6397d063e1fe6aba974b9f0401593",
+      "upstream_path": "skills/agent-runtime/understanding-by-design/SKILL.md",
+      "url": "https://raw.githubusercontent.com/THU-MAIC/OpenMAIC/5bd8cc840ee6397d063e1fe6aba974b9f0401593/skills/agent-runtime/understanding-by-design/SKILL.md",
+      "local_path": "sources/THU-MAIC__OpenMAIC/skills/agent-runtime/understanding-by-design/SKILL.md",
+      "bytes": 4211,
+      "sha256": "75af8be3ec7772b6ae97ac70ceedbb00fcfbb16a6d4addceb5f62ec0b3614808"
+    },
+    {
+      "repository": "THU-MAIC/OpenMAIC",
+      "commit": "5bd8cc840ee6397d063e1fe6aba974b9f0401593",
+      "upstream_path": "skills/agent-runtime/vocational/SKILL.md",
+      "url": "https://raw.githubusercontent.com/THU-MAIC/OpenMAIC/5bd8cc840ee6397d063e1fe6aba974b9f0401593/skills/agent-runtime/vocational/SKILL.md",
+      "local_path": "sources/THU-MAIC__OpenMAIC/skills/agent-runtime/vocational/SKILL.md",
+      "bytes": 3339,
+      "sha256": "0544506924e469b49c89295fe414da440cd081adca520ff584049fafff25a43c"
+    },
+    {
+      "repository": "THU-MAIC/OpenMAIC",
+      "commit": "5bd8cc840ee6397d063e1fe6aba974b9f0401593",
+      "upstream_path": "skills/agent-runtime/zone-of-proximal-development/SKILL.md",
+      "url": "https://raw.githubusercontent.com/THU-MAIC/OpenMAIC/5bd8cc840ee6397d063e1fe6aba974b9f0401593/skills/agent-runtime/zone-of-proximal-development/SKILL.md",
+      "local_path": "sources/THU-MAIC__OpenMAIC/skills/agent-runtime/zone-of-proximal-development/SKILL.md",
+      "bytes": 10662,
+      "sha256": "cac0ff39f207570c3a40410fe2b61536ce4a9a5e54b33779a96015e45aab4049"
+    }
+  ]
+}

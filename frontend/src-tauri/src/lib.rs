@@ -474,6 +474,7 @@ mod interview;
 pub mod interview_history;
 pub mod interview_exit;
 pub mod interview_video;
+pub mod education;
 mod interview_jobs;
 mod interview_screenshot;
 mod interview_windows;
@@ -516,6 +517,7 @@ pub fn run() {
         .manage(interview::InterviewState::default())
         .manage(interview_exit::ExitState::default())
         .manage(interview_video::VideoState::default())
+        .manage(education::EducationState::default())
         .manage(interview_windows::PresentationState::default())
         .manage(summary::summary_engine::ModelManagerState(Arc::new(tokio::sync::Mutex::new(None))))
         .setup(|_app| {
@@ -610,6 +612,12 @@ pub fn run() {
             database::setup::tingxian_storage_ready,
             interview::interview_status,
             interview_video::video_status,
+            education::education_list,
+            education::education_load,
+            education::education_save,
+            education::education_cancel,
+            education::education_preview,
+            education::education_generate,
             interview_video::video_inspect,
             interview_video::video_stop,
             interview_windows::interview_presentation_publish,

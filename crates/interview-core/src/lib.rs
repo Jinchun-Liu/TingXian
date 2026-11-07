@@ -1,4 +1,5 @@
 pub mod background;
+pub mod education;
 pub mod index;
 pub mod model;
 pub mod import_control;

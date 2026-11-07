@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "skill": {
+    "id": "tingxian-evidence-review", "version": "1.0.0", "modes": ["review"],
+    "license": "MIT", "dependencies": [], "allowed_capabilities": ["selected_text_feedback"],
+    "input_schema": "tingxian-learning-input-v1", "output_schema": "tingxian-feedback-v1",
+    "source_commits": ["5bd8cc840ee6397d063e1fe6aba974b9f0401593", "6d3f85726e7b0fedacc8a078e174161293777044"],
+    "regression_cases": ["missing-self", "alternative-solution", "stale-evidence", "source-injection"]
+  },
+  "packs": [
+    {
+      "id": "general-behavioral", "version": "1.0.0", "title": "通用行为", "language": "zh-CN", "review_status": "draft",
+      "license": "MIT", "source": "听弦自有合成题；不是用户真实经历或经过专家验证的题库",
+      "rubric_version": "general-behavioral/1.0.0",
+      "criteria": [
+        {"id":"relevance","title":"回应题意","anchors":["有效回答未回应任务","回应部分要求","回应目标和必要条件","说明边界并联系新情境"]},
+        {"id":"structure","title":"结构与表达","anchors":["关键关系无法辨认","有步骤但因果不清","顺序和因果清晰","简明且能解释取舍"]},
+        {"id":"evidence","title":"证据具体性","anchors":["只有结论没有可核验细节","有具体动作但结果依据缺失","区分本人动作、结果与依据","说明证据限制及待核查事项"]},
+        {"id":"reasoning","title":"逻辑与取舍","anchors":["没有理由或明显矛盾","有理由但遗漏约束","理由与约束相符","比较合理替代方案与适用边界"]}
+      ],
+      "questions": [
+        {"id":"collaboration","version":1,"goal":"区分个人行动、团队贡献和可核验结果","text":"选择一段你愿意分享的协作经历：目标是什么，你具体做了什么，结果由什么证据支持？没有相关经历时可明确按假设情境讨论。"},
+        {"id":"failure-review","version":1,"goal":"说明复盘中的事实、不确定性和下一步","text":"描述一次未达到预期的任务。哪些是观察到的事实，哪些只是推测？下一次你会如何验证改进？请不要补造经历。"}
+      ]
+    },
+    {
+      "id": "software-ai-foundations", "version": "1.0.0", "title": "软件与 AI", "language": "zh-CN", "review_status": "draft",
+      "license": "MIT", "source": "听弦自有 StockMarketAgent 合成场景；不代表生产事故或岗位能力认证",
+      "rubric_version": "software-ai-foundations/1.0.0",
+      "criteria": [
+        {"id":"semantics","title":"契约与数据语义","anchors":["混淆 null、0、缺失或空串","区分部分值但缺少契约依据","分别说明 Schema 与业务语义校验","解释边界、兼容变化和反例"]},
+        {"id":"consistency","title":"重试与一致性","anchors":["把超时直接等同失败","考虑重试但遗漏并发或租户隔离","说明幂等范围及提交结果核验","比较去重、状态查询或其他合理方案的边界"]},
+        {"id":"evidence","title":"验证与证据","anchors":["没有验证步骤","有测试但无法核对最终状态","结合响应、数据状态或可核验日志","明确无法仅凭响应码确定的事实及恢复步骤"]},
+        {"id":"reasoning","title":"逻辑与取舍","anchors":["没有理由或明显矛盾","有理由但遗漏约束","理由与约束相符","承认合理替代解法并说明限制"]}
+      ],
+      "questions": [
+        {"id":"stock-contract","version":1,"goal":"区分数据契约、业务语义和事务结果","text":"合成场景：StockMarketAgent 的 API 如何用契约测试和 JSON Schema 区分 null、数字 0、缺失字段和空字符串？多租户复用幂等键，事务已提交后响应超时，客户端重试时如何避免重复写入并核验最终状态？"},
+        {"id":"stock-variation","version":1,"goal":"把一致性核验迁移到并发和过期请求","text":"合成变式：两个并发请求带同一租户与幂等键，但请求体不同；稍后又收到过期重试。给出一种可验证的处理方案，说明响应超时后仍需核对什么。允许不同合理实现。"}
+      ]
+    }
+  ]
+}

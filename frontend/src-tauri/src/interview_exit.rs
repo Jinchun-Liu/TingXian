@@ -41,6 +41,9 @@ impl ExitState {
     async fn prepare<R:tauri::Runtime>(&self,id:u64,app:&tauri::AppHandle<R>)->Result<(),String> {
         let _operation=self.operation.try_lock().map_err(|_|"退出清理正在进行，请等待")?;
         self.set_phase(id,&[Phase::Requested,Phase::Prepared,Phase::Archived,Phase::Failed],Phase::Preparing)?;
+        if let Err(error)=crate::education::quiesce(app).await {
+            self.set_phase(id,&[Phase::Preparing],Phase::Failed)?;return Err(error);
+        }
         if let Err(error)=crate::interview_video::quiesce(app).await {
             self.set_phase(id,&[Phase::Preparing],Phase::Failed)?;return Err(error);
         }
@@ -94,6 +97,7 @@ pub(crate) fn ensure_history_generation<R:tauri::Runtime>(app:&tauri::AppHandle<
     if app.try_state::<ExitState>().is_some_and(|s|s.generation()!=generation){return Err("这份保存请求早于退出清理，已取消，避免重新写回旧记录".into());}Ok(())
 }
 pub(crate) fn request_exit<R:tauri::Runtime>(app:&tauri::AppHandle<R>,restart:bool) {
+    crate::education::cancel_all(app);
     crate::interview_video::suspend(app);
     let request=app.state::<ExitState>().request(restart);
     crate::tray::focus_main_window(app);

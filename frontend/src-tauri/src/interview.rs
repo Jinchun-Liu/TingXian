@@ -35,13 +35,14 @@ pub struct InterviewState {
     provider_keys: Mutex<std::collections::HashMap<String,(String,String)>>,
     pub(crate) lifecycle: Arc<Mutex<()>>,
     imports: Arc<std::sync::Mutex<Option<ProfileImportJob>>>,
-    network: Arc<RwLock<()>>,
+    pub(crate) network: Arc<RwLock<()>>,
     pub(crate) session: AtomicBool,
     pub(crate) background:crate::interview_background::Work,
     key: Mutex<Option<String>>,
     connection: crate::interview_connection::ConnectionState,
 }
 impl InterviewState {
+    pub(crate) fn education_assist_active(&self)->bool {self.session.load(Ordering::SeqCst)||!self.active.is_empty()}
     pub(crate) async fn index<R:tauri::Runtime>(&self, app:&tauri::AppHandle<R>)->Result<&Index,String> {
         self.index.get_or_try_init(||async {
             let dir=app.path().app_data_dir().map_err(|e|e.to_string())?.join("interview");

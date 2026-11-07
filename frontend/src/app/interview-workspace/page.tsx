@@ -1,6 +1,7 @@
 'use client';
 
 import {SavedSessionPreview} from '@/components/interview/SavedSessionPreview';
+import {EducationPanel,ReviewSeed} from '@/components/interview/EducationPanel';
 import {useSessionCommands} from '@/lib/session-commands';
 import {PreviousMeetings} from '@/components/interview/PreviousMeetings';
 import {AudioSettings} from '@/components/interview/AudioSettings';
@@ -68,6 +69,12 @@ export default function InterviewPage() {
   const [answerWarning,setAnswerWarning] = useState('');
   const [compactControls,setCompactControls]=useState(false);
   const [settings, setSettings] = useState(false);
+  const [educationOpen,setEducationOpen]=useState(false),[educationMounted,setEducationMounted]=useState(false);
+  const [reviewSeed,setReviewSeed]=useState<ReviewSeed|null>(null);
+  const openReview=(turnId?:string,rows?:Turn[],sourceRef:string|null=null)=>{
+    setReviewSeed({key:crypto.randomUUID(),history:rows??historyRef.current,sourceRef,turnId});
+    setEducationMounted(true);setEducationOpen(true);setSettings(false);setSavedSessions(null);
+  };
   const [settingsTab, setSettingsTab] = useState<'资料库'|'事实与术语'|'模型接口'|'音频'|'视频'>('资料库');
   const [openBackground,setOpenBackground]=useState(false);
   const [openVision, setOpenVision] = useState(false);
@@ -632,12 +639,12 @@ export default function InterviewPage() {
   const transcriptTools = (
     <details className="desk-transcripts"><summary>原始转写与本人回答记录</summary><div className="max-h-48 overflow-auto space-y-2 my-3">{transcripts.map(t => <button key={`${t.capture_session ?? 0}:${t.sequence_id}`} className="block text-left w-full p-2 rounded bg-slate-50" onClick={() => setQuestion(t.text)}>{t.timestamp} · {t.text}</button>)}</div><textarea aria-label="本轮实际回答" className="border rounded w-full h-20 p-2" value={confirmedAnswer} onChange={e => setConfirmedAnswer(e.target.value)} placeholder="可选：记录最近一轮自己实际说过的回答，供后续追问使用。" /><Button variant="outline" disabled={!confirmedAnswer.trim() || !history.length} onClick={() => { setHistory(h => { const last = h.map(t => t.role !== 'self' && t.status === 'done').lastIndexOf(true); return h.map((t,i) => i === last ? { ...t, confirmed_answer: confirmedAnswer } : t); }); setConfirmedAnswer(''); }}>确认本人实际回答</Button></details>
   );
-  const panelOpen = settings || savedSessions !== null;
+  const panelOpen = settings || savedSessions !== null || educationOpen;
   const closeSettings = () => { setSettings(false); settingsTrigger.current?.focus(); };
   const sendCommand=useSessionCommands(async(command)=>{
     if(busy||sessionOperation.current)return;
-    if(command==='audio'){setSavedSessions(null);setSettingsTab('音频');setSettings(true);return;}
-    if(command==='history'){setSettings(false);await listSessions();return;}
+    if(command==='audio'){setEducationOpen(false);setSavedSessions(null);setSettingsTab('音频');setSettings(true);return;}
+    if(command==='history'){setEducationOpen(false);setSettings(false);await listSessions();return;}
     if(command==='cancel'){await cancel().catch(error);return;}
     if(command==='clear'){await clearHistory();return;}
     if(command==='toggle')command=recording.isRecording?'stop':'start';
@@ -741,10 +748,11 @@ export default function InterviewPage() {
 
         </div></details>
         <nav className="tx-rail-nav" aria-label="工作台导航">
+          <button type="button" aria-current={educationOpen?'page':undefined} onClick={()=>{if(educationMounted){setEducationOpen(true);setSettings(false);setSavedSessions(null);}else openReview();}}><FileText/>复盘与练习<ChevronRight/></button>
           <button type="button" aria-current={savedSessions!==null?'page':undefined} onClick={()=>sendCommand('history')}><HistoryIcon/>会议记录<ChevronRight/></button>
           <button type="button" aria-current={settings&&settingsTab==='音频'?'page':undefined} onClick={()=>sendCommand('audio')}><AudioLines/>音频设置<ChevronRight/></button>
-          <button type="button" aria-current={settings&&settingsTab==='视频'?'page':undefined} onClick={()=>{setSettingsTab('视频');setSettings(true);setSavedSessions(null);}}><Video/>视频设置<ChevronRight/></button>
-          <button ref={settingsTrigger} type="button" aria-current={settings&&!['音频','视频'].includes(settingsTab)?'page':undefined} onClick={()=>{setSettingsTab('资料库');setSettings(true);setSavedSessions(null);}}><Settings2/>资料与模型<ChevronRight/></button>
+          <button type="button" aria-current={settings&&settingsTab==='视频'?'page':undefined} onClick={()=>{setEducationOpen(false);setSettingsTab('视频');setSettings(true);setSavedSessions(null);}}><Video/>视频设置<ChevronRight/></button>
+          <button ref={settingsTrigger} type="button" aria-current={settings&&!['音频','视频'].includes(settingsTab)?'page':undefined} onClick={()=>{setEducationOpen(false);setSettingsTab('资料库');setSettings(true);setSavedSessions(null);}}><Settings2/>资料与模型<ChevronRight/></button>
         </nav>
       </div>
       <footer className="desk-foot">
@@ -756,7 +764,7 @@ export default function InterviewPage() {
         {limit-calls<=REQUEST_LIMIT_WARNING && <Button variant="outline" size="sm" disabled={busy} onClick={()=>setLimit(l=>l+20)}>继续 20 次</Button>}
     <ResidueNotice blocked={busy || recording.isRecording || generating || history.length>0 || !!question || !!confirmedAnswer || !!status?.session_active} revision={residueRevision} onClear={clearResidue} />
 
-        {!recording.isRecording && !generating && !busy && !split && <Link className="tx-switch-workspace" href="/interview">通用对话助手 <span aria-hidden="true">↗</span></Link>}
+        {!recording.isRecording && !generating && !busy && !split && <Link className="tx-switch-workspace" href="/interview" onClick={e=>{if(!educationMounted)return;e.preventDefault();void interviewExit.protectNavigation().then(()=>{window.location.href='/interview';}).catch(e=>setNotice(String(e)));}}>通用对话助手 <span aria-hidden="true">↗</span></Link>}
       </footer>
       {split && <div className="desk-split-composer">
         {(notice||answerWarning) && <div role="status">{notice||answerWarning}</div>}
@@ -818,18 +826,19 @@ export default function InterviewPage() {
     {savedSessions !== null && <section className="desk-panel" aria-label="会议记录">
       <header className="desk-panel-heading"><h2>会议记录</h2><Button variant="ghost" size="sm" onClick={()=>setSavedSessions(null)}>返回对话</Button></header>
       <div className="desk-panel-body"><div className="tx-history">
-      <section><header className="tx-section-head"><h3>已保存会话</h3></header>{(history.length>0 || question || confirmedAnswer) && <label className="block"><input type="checkbox" disabled={busy || recording.isRecording || generating} checked={allowReplaceSession} onChange={e=>setAllowReplaceSession(e.target.checked)} /> 我已保存需要的内容，允许替换当前显示（未保存内容会丢失）</label>}{!savedSessions.length && <p className="tx-empty-line">暂无已保存会话</p>}{savedSessions.map(s=><div key={s.id} className="tx-history-row"><span>{new Date(s.saved_at).toLocaleString('zh-CN')} · {s.turns} 条发言 · {s.calls} 次调用</span><Button size="sm" variant="outline" disabled={busy || recording.isRecording || generating || (!!(history.length || question || confirmedAnswer) && !allowReplaceSession)} onClick={()=>restoreSession(s.id)}>恢复这份会话</Button><SavedSessionPreview id={s.id}/></div>)}{savedBefore!==null && <Button variant="outline" disabled={busy} onClick={()=>listSessions(true)}>更早的保存记录</Button>}</section>
+      <section><header className="tx-section-head"><h3>已保存会话</h3></header>{(history.length>0 || question || confirmedAnswer) && <label className="block"><input type="checkbox" disabled={busy || recording.isRecording || generating} checked={allowReplaceSession} onChange={e=>setAllowReplaceSession(e.target.checked)} /> 我已保存需要的内容，允许替换当前显示（未保存内容会丢失）</label>}{!savedSessions.length && <p className="tx-empty-line">暂无已保存会话</p>}{savedSessions.map(s=><div key={s.id} className="tx-history-row"><span>{new Date(s.saved_at).toLocaleString('zh-CN')} · {s.turns} 条发言 · {s.calls} 次调用</span><Button size="sm" variant="outline" disabled={busy || recording.isRecording || generating || (!!(history.length || question || confirmedAnswer) && !allowReplaceSession)} onClick={()=>restoreSession(s.id)}>恢复这份会话</Button><SavedSessionPreview id={s.id} onReview={snapshot=>openReview(undefined,snapshot.history,String(s.id))}/></div>)}{savedBefore!==null && <Button variant="outline" disabled={busy} onClick={()=>listSessions(true)}>更早的保存记录</Button>}</section>
       <PreviousMeetings initialId={initialMeetingId}/>
       <div className="tx-session-actions">{hasSessionContent && <div><Button variant="outline" size="sm" disabled={busy || !hasSessionContent} onClick={()=>run(saveSessionSnapshot)}>保存当前会话到本机</Button><Button variant="outline" size="sm" onClick={exportSession}>导出本次记录</Button><Button variant="outline" size="sm" disabled={busy || !hasSessionContent} onClick={end}>结束会话并保留历史</Button></div>}<details><summary>清理历史</summary><p>已保存会话将一并移入废纸篓。</p><Button variant="outline" size="sm" disabled={busy} onClick={()=>sendCommand('clear')}>清空历史，重新开始</Button></details></div>
       </div></div></section>}
     {!split && <div className="desk-reading" hidden={panelOpen}>
-      <AnswerConversation key={feedGeneration} history={history} preferences={preferences} selectedId={selectedQuestion} onSelect={setSelectedQuestion} onEdit={editTurn} />
+      <AnswerConversation key={feedGeneration} history={history} preferences={preferences} selectedId={selectedQuestion} onSelect={setSelectedQuestion} onEdit={editTurn} onReview={id=>openReview(id)} />
       <div className="desk-compose-dock">{composer}
         {phase.startsWith('仅本地') && <div className="text-xs space-y-2"><ConflictNotice conflicts={conflicts} onReview={()=>{setSettingsTab('事实与术语');setSettings(true);}} />{sources.map(source => <details key={source.source_id}><summary>{source.path} · {source.location} · {sourceStatusLabel(source.metadata)}</summary><p className="whitespace-pre-wrap">{source.text}</p></details>)}</div>}
       </div>
       {(transcripts.length>0 || history.length>0) && transcriptTools}
     </div>}
 
+    {educationMounted&&<EducationPanel seed={reviewSeed} scopeEpoch={`${feedGeneration}:${meeting.setup.mode}:${status?.index_version??''}:${settings}`} visible={educationOpen&&!settings&&savedSessions===null} assistActive={recording.isRecording||generating||!!status?.session_active} onClose={()=>setEducationOpen(false)} onConfigure={()=>{setEducationOpen(false);setSettingsTab('模型接口');setSettings(true);}}/>}
     </div>
   </main>;
 }

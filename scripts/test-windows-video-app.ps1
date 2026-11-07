@@ -37,7 +37,7 @@ try {
     $manifest = Get-Content "$evidence/test-manifest.xml" -Raw
     if ($manifest -notmatch 'Microsoft.Windows.Common-Controls' -or $manifest -notmatch '6.0.0.0') { throw 'Test manifest lacks Common Controls v6' }
     $testExit = 0
-    foreach ($suite in @('interview_video::tests','interview_windows::tests')) {
+    foreach ($suite in @('interview_video::tests','interview_windows::tests','education::tests')) {
         & $copy $suite --nocapture 2>&1 | Tee-Object "$evidence/test.log" -Append
         if ($LASTEXITCODE) { $testExit = $LASTEXITCODE; break }
     }

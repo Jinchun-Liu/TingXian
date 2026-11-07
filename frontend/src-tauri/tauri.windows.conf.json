@@ -3,6 +3,8 @@
   "bundle": {
     "targets": ["nsis"],
     "resources": {
+      "../../education/NOTICE.md": "licenses/education/NOTICE.md",
+      "../../education/licenses/": "licenses/education/",
       "templates": "templates",
       "binaries/video-worker/": "video-worker/",
       "binaries/onnxruntime/": "./",

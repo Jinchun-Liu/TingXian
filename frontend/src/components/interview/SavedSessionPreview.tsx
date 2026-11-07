@@ -4,12 +4,13 @@ import {invoke} from '@tauri-apps/api/core';
 import {parseSessionSnapshot,SessionSnapshot} from '@/lib/interview-session';
 import {Button} from '@/components/ui/button';
 
-export function SavedSessionPreview({id}:{id:number}){
+export function SavedSessionPreview({id,onReview}:{id:number;onReview?:(snapshot:SessionSnapshot)=>void}){
   const [snapshot,setSnapshot]=useState<SessionSnapshot|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
   return <div className="tx-snapshot-preview"><Button size="sm" variant="outline" disabled={busy} onClick={async()=>{
     if(snapshot){setSnapshot(null);return;}setBusy(true);setError('');
     try{setSnapshot(parseSessionSnapshot(await invoke('tingxian_session_preview',{id})));}catch(e){setError('读取失败：'+String(e));}finally{setBusy(false);}
   }}>{snapshot?'收起详情':'查看详情'}</Button>
+  {onReview&&<Button size="sm" variant="outline" disabled={busy} onClick={async()=>{setBusy(true);setError('');try{onReview(snapshot??parseSessionSnapshot(await invoke('tingxian_session_preview',{id})));}catch(e){setError('读取失败：'+String(e));}finally{setBusy(false);}}}>复盘这份会话</Button>}
   {snapshot&&<div className="tx-snapshot-body">{snapshot.history.map(t=><div key={t.id}><p>{t.role==='self'?'我':t.role==='manual'?'手动提问':'对方'} · {t.question}</p>{t.suggestion&&<p className="whitespace-pre-wrap">{t.suggestion}</p>}</div>)}
   {snapshot.input_drafts?.question&&<p className="whitespace-pre-wrap">{snapshot.input_drafts.self_edit?'未提交的本人修正':'未提交的问题'} · {snapshot.input_drafts.question}</p>}
   {snapshot.input_drafts?.confirmed_answer&&<p className="whitespace-pre-wrap">未确认的本人回答 · {snapshot.input_drafts.confirmed_answer}</p>}

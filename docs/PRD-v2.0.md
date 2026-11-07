@@ -1,3 +1,5 @@
+> 教育增量入口：[PRD v2.2](PRD-v2.2-interview-learning.md)。R01—R11 原规则继续有效；实时辅助、可选眼部与完整数字人冻结边界不变。
+
 <!-- Public copy: personal local paths replaced; original is retained in the private handoff. -->
 # 听弦 · 后续演进产品需求文档
 

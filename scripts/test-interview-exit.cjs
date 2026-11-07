@@ -90,6 +90,7 @@ async function checkStorageGeneration(){
   const s=setup();let release;s.gate(new Promise(resolve=>release=resolve));
   let sawPending=false;s.flow.subscribe(()=>{if(s.flow.pending())sawPending=true;});
   const running=s.flow.request(request(1));
+  await Promise.resolve();
   assert.equal(sawPending,true);assert.equal(s.flow.getSnapshot().busy,true);assert.equal(s.suspended(),true);
   await s.flow.request(request(1));await s.flow.retry();await s.flow.cancel();
   assert.deepEqual(s.calls,['suspend','interview_exit_prepare'],'duplicate quit or cancel during work ran another operation');
@@ -123,6 +124,9 @@ async function checkStorageGeneration(){
   releaseCancel();await cancelling;
   assert.equal(race.flow.getSnapshot().requestId,2,'late cancel closed the newer quit');assert.equal(race.suspended(),true);
   race.cancelGate(null);await race.flow.cancel();assert.equal(race.suspended(),false,'new request lost original write state');
+  const guarded=setup();const unguard=guarded.flow.protect(async()=>{throw Error('synthetic education save failure');});
+  await guarded.flow.request(request(1));assert.match(guarded.flow.getSnapshot().error,/education save failure/);assert.ok(!guarded.calls.includes('interview_exit_prepare'));assert.equal(guarded.cache().transcripts.length,1);
+  await assert.rejects(guarded.flow.protectNavigation(),/education save failure/);unguard();await guarded.flow.retry();assert.ok(guarded.calls.includes('interview_exit_finish'));
   await checkComponent();
   await checkStorageGeneration();
   console.log('PASS: exit waits for stop, archive and cache removal; every failure blocks quit; duplicate/stale notifications, explicit retry/cancel and prior cache suspension; no automatic AI or answer saving');
