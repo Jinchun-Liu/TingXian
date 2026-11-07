@@ -49,6 +49,35 @@ let groups=0;async function check(name,run){await run();groups++;console.log('PA
     const s=await study();s.evidence=[{id:'ref',text:'参考',hash:await e.sha('参考'),provenance:'reference_solution',location:'合成',allow_external:true}];e.editDraft(s,{text:answer});await e.commitAttempt(s);assert.equal(s.attempts[1].answer_exposed,true);assert.equal(s.attempts[1].assistance_level,'worked_example');
     const r=await e.prepareRequest(s,s.attempts[1].id,'interactive');assert.equal(e.validateFeedback(JSON.stringify(output(s,r)),s,taskFor(r),'fixture').independent_assessment,false);
   });
+  await check('known help survives revision, same-question re-answer and restoration',async()=>{
+    for(const level of ['worked_example','prompted','unknown']){
+      const s=e.newStudy();e.editDraft(s,{question:'合成：事务提交后超时如何核验？',text:answer,assistance_level:level});await e.commitAttempt(s);
+      const a=s.attempts[0],original=e.clone(a.revisions[0]);assert.ok(original.help_events.length,'self-reported help is recorded');
+      e.editDraft(s,{text:answer+' 补充核验步骤。',assistance_level:'independent'});await e.commitAttempt(s,a.id);
+      assert.equal(a.revisions[1].assistance_level,level,'revision must not erase previously recorded help');
+      assert.deepEqual(a.revisions[0],original,'original answer stays immutable');
+      assert.deepEqual(a.revisions[1].help_events,original.help_events,'a correction is not another help event');
+      e.editDraft(s,{text:answer,assistance_level:'independent'});await e.commitAttempt(s);
+      const retried=s.attempts[1];assert.equal(retried.assistance_level,level,'same question cannot become independent');
+      const r=await e.prepareRequest(s,retried.id,'interactive');assert.equal(e.validateFeedback(JSON.stringify(output(s,r)),s,taskFor(r),'fixture').independent_assessment,false);
+      const recovered=await e.restoreStudy(s);assert.equal(recovered.attempts[1].assistance_level,level);assert.deepEqual(recovered.attempts[1].help_events,retried.help_events);
+      e.editDraft(recovered,{question:'另一道未暴露答案的新题',question_ref:null,text:'我自己的新题回答',assistance_level:'independent'});await e.commitAttempt(recovered);assert.equal(recovered.attempts[2].assistance_level,'independent');
+    }
+    const s=await study();s.evidence=[{id:'reference',text:'参考解法',hash:await e.sha('参考解法'),provenance:'reference_solution',location:'synthetic',allow_external:true}];await e.commitAttempt(s);const helped=s.attempts[1];
+    s.evidence=[];e.editDraft(s,{assistance_level:'independent'});await e.commitAttempt(s,helped.id);assert.equal(helped.revisions[1].answer_exposed,true,'removing selected reference does not undo exposure');
+    assert.ok(helped.revisions[1].help_events.some(h=>h.kind==='reference_solution'&&h.ref==='reference'));
+  });
+  await check('capacity is checked before appending so full records remain saveable and recoverable',async()=>{
+    const s=await study(),base=e.clone(s.attempts[0]);s.attempts=Array.from({length:500},(_,i)=>({...e.clone(base),id:'attempt-'+i}));
+    e.editDraft(s,{text:'已满时仍需保留的草稿'});const before=e.clone(s);
+    await assert.rejects(e.commitAttempt(s),/上限/);assert.deepEqual(s,before);assert.equal((await e.restoreStudy(s)).attempts.length,500);
+    const revisions=await study(),a=revisions.attempts[0];a.revisions=Array.from({length:1000},(_,i)=>({...e.clone(a.revisions[0]),revision:i+1}));
+    await assert.rejects(e.commitAttempt(revisions,a.id),/上限/);assert.equal(a.revisions.length,1000);
+    const h=harness();h.c.study=await study();h.c.changed();await h.c.prepare(h.c.study.attempts[0].id);const r=h.c.preview.request;
+    h.c.study.tasks=Array.from({length:1000},(_,i)=>({...taskFor(r),task_id:'old-task-'+i,state:'cancelled'}));
+    await assert.rejects(h.c.send(),/上限/);assert.equal(h.c.study.tasks.length,1000);assert.ok(!h.calls.some(x=>x.name==='education_generate'));
+    await assert.rejects(e.prepareRequest(h.c.study,h.c.study.attempts[0].id,'background'),/上限/);h.c.dispose();
+  });
   await check('cancelled and revised generations reject late output without losing cost uncertainty',async()=>{
     for(const reason of ['cancel','mode','material','clear','revision']){const s=await study(),r=await e.prepareRequest(s,s.attempts[0].id,'interactive');s.tasks.push(taskFor(r));e.invalidate(s);assert.equal(e.applyResult(s,r,result(s,r)),false,reason);assert.equal(s.feedback.length,0);assert.equal(s.tasks[0].state,'cancelled');assert.equal(s.tasks[0].usage,null);assert.equal(s.tasks[0].request_attempts,1);}
   });

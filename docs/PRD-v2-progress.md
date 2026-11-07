@@ -77,6 +77,10 @@ Mac 0.6.5 的安装和短测证据已有记录。Windows 首版按 PRD 标为测
 
 ## EDU-M0/M1 教育增量（2026-11-07）
 
+接续复核修复同题帮助状态被改标独立、保存/恢复容量边界不一致的问题；15 组教育契约、
+完整 25 个前端脚本与 TypeScript 本机通过。既有 CI 包不包含本次修复，安装 GUI 和真实模型
+状态不变；见[接续验收](education-validation-2026-11-07-followup.md)。
+
 从 b00b63d 的活动眼部分支建立独立 `feat/interview-learning-20261107`，不改变冻结归档或眼部工作树。
 需求见 [v2.2](PRD-v2.2-interview-learning.md)，证据及未测门槛见[教育验收](education-validation-2026-11-07.md)。
 

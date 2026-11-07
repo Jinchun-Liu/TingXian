@@ -1,5 +1,8 @@
 # EDU-M0/M1 教育增量验收
 
+后续接手复核及两项 M1 修复见[接续记录](education-validation-2026-11-07-followup.md)。
+下文为原提交与原预览包的验收，不能替代后续修复的安装验证。
+
 起点 `b00b63d77e3a590b9fc8ddd421f4866eb11b9c9f`；独立分支
 `feat/interview-learning-20261107`，独立工作树 `TingXian-education`。
 fetch 后眼部分支没有差异；Mac 分支新增提交保留，未混入本轮。

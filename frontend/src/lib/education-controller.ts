@@ -1,4 +1,4 @@
-import {Study,Request,Result,Task,Draft,clone,newStudy,restoreStudy,editDraft,invalidate,commitAttempt,prepareRequest,applyResult,packs} from './education';
+import {Study,Request,Result,Task,Draft,clone,newStudy,restoreStudy,editDraft,invalidate,commitAttempt,prepareRequest,applyResult,packs,studyLimits} from './education';
 export type Bridge={invoke:<T>(name:string,args?:Record<string,unknown>)=>Promise<T>};
 export type Preview={request:Request;budget:number;model:string;endpoint:string;profile_stamp:string;scope_epoch:number;output_reserve:number;context_limit:number;estimate:string};
 
@@ -47,6 +47,7 @@ export class EducationController {
     const request={...p.request,confirmed:true},input=JSON.parse(request.input_json);
     const task:Task={task_id:request.task_id,session_id:request.session_id,generation:request.generation,input_hash:request.input_hash,attempt_id:input.attempt_id,answer_revision:input.answer_revision,lane:request.lane,state:'queued',budget:p.budget,cancel_requested:false,output_revision:null,error:'',usage:null,request_attempts:0,raw_output:'',reported:false};
     if(this.study.tasks.some(t=>t.task_id===request.task_id))return;
+    if(this.study.tasks.length>=studyLimits.tasks)throw Error('本份复盘任务数已达上限，请保存草稿后新建练习；当前输入保留');
     if(request.lane==='background'&&this.assistActive){this.error='实时辅助活跃，后台评估等待；结束后重新确认发送';this.notify();return;}
     this.study.tasks.push(task);this.pending.set(request.task_id,request);this.preview=null;
     this.study.consent_snapshot={task_id:request.task_id,input_hash:request.input_hash,profile_id:request.profile_id};this.changed();

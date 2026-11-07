@@ -2,6 +2,7 @@ import content from '../../../education/content-packs.json';
 import type {Turn, Source} from './interview-session';
 
 export const packs=content.packs;
+export const studyLimits={attempts:500,revisions:1000,tasks:1000} as const;
 export type Provenance='actual_self_speech'|'typed_self_response'|'ai_draft'|'ai_interviewer'|'hint'|'reference_solution'|'external_source'|'synthetic_fixture';
 export type Assistance='independent'|'prompted'|'worked_example'|'unknown';
 export type HelpEvent={id:string;kind:'feedback'|'hint'|'reference_solution'|'unknown';ref:string;at:string};
@@ -34,11 +35,28 @@ export async function commitAttempt(study:Study,reviseId?:string):Promise<void>{
   const hash=await sha(draft.text);if(study.generation!==generation)throw Error('输入已变化，请重新保存');
   const old=reviseId?study.attempts.find(a=>a.id===reviseId):undefined;
   if(reviseId&&!old)throw Error('原尝试不存在');
+  if(!old&&study.attempts.length>=studyLimits.attempts)throw Error('本份复盘作答数已达上限，请保存草稿后新建练习；当前输入保留');
+  if(old&&old.revisions.length>=studyLimits.revisions)throw Error('本次作答修订数已达上限，请保存草稿后新建练习；当前输入保留');
   if(old&&old.question!==draft.question)throw Error('题目变化请新建尝试，不能覆盖旧题');
-  const help:HelpEvent[]=study.feedback.map(f=>({id:uid(),kind:'feedback',ref:f.id,at:now()}));
-  if(study.source_session_ref)help.push({id:uid(),kind:'unknown',ref:study.source_session_ref,at:now()});
-  const exposed=draft.assistance_level==='worked_example'||study.evidence.some(e=>e.provenance==='reference_solution');
-  const assistance:Assistance=exposed?'worked_example':study.feedback.length?'prompted':study.source_session_ref?'unknown':draft.assistance_level;
+  // A text correction or another attempt at the same question cannot erase
+  // help already recorded for that question. A different question can still
+  // provide independent evidence; no old answer or feedback is rewritten.
+  const related=study.attempts.filter(a=>a===old||a.question===draft.question||!!draft.question_ref&&a.question_id===draft.question_ref);
+  const prior=related.flatMap(a=>a.revisions),feedback=study.feedback.filter(f=>related.some(a=>a.id===f.attempt_id));
+  const help:HelpEvent[]=clone([...new Map(prior.flatMap(r=>r.help_events).map(h=>[h.id,h])).values()]);
+  const record=(kind:HelpEvent['kind'],ref:string)=>{if(!help.some(h=>h.kind===kind&&h.ref===ref))help.push({id:uid(),kind,ref,at:now()});};
+  for(const f of feedback)record('feedback',f.id);
+  for(const a of related)for(const r of a.revisions){
+    // v1 records may describe assistance without a corresponding help event.
+    if(r.answer_exposed||r.assistance_level==='worked_example'){if(!r.help_events.some(h=>h.kind==='reference_solution'))record('reference_solution',`${a.id}:${r.revision}`);}
+    else if(r.assistance_level==='prompted'){if(!r.help_events.some(h=>h.kind==='hint'||h.kind==='feedback'))record('hint',`${a.id}:${r.revision}`);}
+    else if(r.assistance_level==='unknown'){if(!r.help_events.some(h=>h.kind==='unknown'))record('unknown',`${a.id}:${r.revision}`);}
+  }
+  if(study.source_session_ref)record('unknown',study.source_session_ref);
+  for(const e of study.evidence)if(e.provenance==='reference_solution')record('reference_solution',e.id);
+  if(draft.assistance_level!=='independent')record(draft.assistance_level==='worked_example'?'reference_solution':draft.assistance_level==='prompted'?'hint':'unknown','self-report');
+  const exposed=help.some(h=>h.kind==='reference_solution');
+  const assistance:Assistance=exposed?'worked_example':help.some(h=>h.kind==='feedback'||h.kind==='hint')?'prompted':help.some(h=>h.kind==='unknown')?'unknown':'independent';
   const revision:Revision={revision:(old?.revisions.length??0)+1,text:draft.text,hash,input_source:draft.input_source,source_ref:draft.source_ref,assistance_level:assistance,answer_exposed:exposed,help_events:help,created_at:now()};
   invalidate(study);
   if(old){old.revisions.push(revision);study.feedback.filter(f=>f.attempt_id===old.id).forEach(f=>f.status='stale');}
@@ -47,6 +65,7 @@ export async function commitAttempt(study:Study,reviseId?:string):Promise<void>{
   }
 }
 export async function prepareRequest(study:Study,attemptId:string,lane:Task['lane']):Promise<Request>{
+  if(study.tasks.length>=studyLimits.tasks)throw Error('本份复盘任务数已达上限，请保存草稿后新建练习；当前输入保留');
   const generation=study.generation,attempt=study.attempts.find(a=>a.id===attemptId);if(!attempt)throw Error('先保存本人作答');
   const answer=attempt.revisions.at(-1)!;
   if(study.draft.text!==answer.text||study.draft.question!==attempt.question)throw Error('输入已修改，请先保存修订或新的尝试');
@@ -102,7 +121,7 @@ export function applyResult(study:Study,request:Request,result:Result):boolean{
 export async function restoreStudy(raw:unknown):Promise<Study>{
   const s=clone(raw) as Study;
   if(!s||s.format!=='tingxian-learning-v1'||s.schema_version!==1||s.mode!=='review'||!text(s.id,100)||!packs.some(p=>p.id===s.pack_id&&p.version===s.pack_version)||!Number.isSafeInteger(s.generation)||s.generation<0||!Number.isSafeInteger(s.store_revision)||s.store_revision<0)throw Error('教育记录版本或结构无效，保留原文件');
-  if(!s.draft||typeof s.draft.question!=='string'||typeof s.draft.text!=='string'||!Array.isArray(s.attempts)||!Array.isArray(s.feedback)||!Array.isArray(s.tasks)||!Array.isArray(s.evidence)||!Array.isArray(s.items)||s.attempts.length>500||s.tasks.length>1000)throw Error('教育记录内容无效，保留原文件');
+  if(!s.draft||typeof s.draft.question!=='string'||typeof s.draft.text!=='string'||!Array.isArray(s.attempts)||!Array.isArray(s.feedback)||!Array.isArray(s.tasks)||!Array.isArray(s.evidence)||!Array.isArray(s.items)||s.attempts.length>studyLimits.attempts||s.tasks.length>studyLimits.tasks)throw Error('教育记录内容无效，保留原文件');
   if(!s.preferences||![16,20,24].includes(s.preferences.font_size)||!Number.isSafeInteger(s.preferences.context_limit)||s.preferences.context_limit<8192||s.preferences.context_limit>262144||!['independent','prompted','worked_example','unknown'].includes(s.draft.assistance_level)||!selfSources.includes(s.draft.input_source))throw Error('教育偏好或输入来源无效');
   const unique=(a:{id:string}[])=>{const ids=new Set<string>();for(const item of a){if(!text(item.id,128)||ids.has(item.id))throw Error('教育条目标识重复或无效');ids.add(item.id);}};
   unique(s.attempts);unique(s.feedback);unique(s.evidence);unique(s.items);unique(s.tasks.map(t=>({id:t.task_id})));
