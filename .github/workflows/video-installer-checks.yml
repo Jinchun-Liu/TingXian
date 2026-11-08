@@ -1,7 +1,7 @@
 name: Windows optional video component installer
 on:
   push:
-    branches: [feat/windows-eye-local-20261106]
+    branches: [feat/windows-eye-local-20261106, feat/windows-eye-output-20261107]
     paths: ['video/windows/**', 'packaging/windows-video/**', '.github/workflows/video-installer-checks.yml']
   pull_request:
     paths: ['video/windows/**', 'packaging/windows-video/**', '.github/workflows/video-installer-checks.yml']
@@ -28,10 +28,10 @@ jobs:
         run: ./packaging/windows-video/build.ps1 -BinaryDirectory "$env:RUNNER_TEMP/video-install-build/Release" -OutputDirectory "$env:RUNNER_TEMP/video-msi" -BuildRollbackFixture
       - name: Disposable-runner install, rollback, uninstall and reinstall
         run: ./packaging/windows-video/test-install.ps1 -PackageDirectory "$env:RUNNER_TEMP/video-msi" -BinaryDirectory "$env:RUNNER_TEMP/video-install-build/Release" -EvidenceDirectory "$env:RUNNER_TEMP/video-install-evidence"
-      - name: Check out installed 0.1.1 baseline for upgrade regression
+      - name: Check out installed 0.1.2 baseline for upgrade regression
         uses: actions/checkout@v4
         with:
-          ref: 745d16fcfcede42218529cb3ab5748bc51a123b2
+          ref: 084dae59e3ee150571e979211e4e4282826881b7
           path: component-baseline
       - name: Rebuild pinned baseline component
         run: |
@@ -50,7 +50,7 @@ jobs:
         with:
           name: TingXian-video-component-experimental
           path: |
-            ${{ runner.temp }}/video-msi/TingXian-VideoSource-0.1.2-experimental-x64.msi
+            ${{ runner.temp }}/video-msi/TingXian-VideoSource-0.2.0-experimental-x64.msi
             ${{ runner.temp }}/video-msi/build-manifest.json
             ${{ runner.temp }}/video-msi/payload/component-manifest.json
             ${{ runner.temp }}/video-install-evidence/

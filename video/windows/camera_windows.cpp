@@ -1,4 +1,5 @@
 #include "camera_session.h"
+#include "source_trust.h"
 #include <mfapi.h>
 #include <mferror.h>
 #include <mfvirtualcamera.h>
@@ -31,16 +32,18 @@ struct CameraApi {
 struct Key { HKEY key = nullptr; ~Key() { if (key) RegCloseKey(key); } };
 struct Handle { HANDLE value = nullptr; ~Handle() { if (value) CloseHandle(value); } };
 struct LocalMemory { void* value = nullptr; ~LocalMemory() { if (value) LocalFree(value); } };
-HRESULT registration(CameraProbe& probe) noexcept {
+HRESULT registration(CameraProbe& probe, SourceLease& source) noexcept {
     // Explicit 64-bit hives: never mistake HKCU/merged HKCR for the service install.
     Key user;
     LONG result = RegOpenKeyExW(HKEY_CURRENT_USER, SourceKey, 0, KEY_READ | KEY_WOW64_64KEY, &user.key);
     if (result == ERROR_SUCCESS) probe.user_registration_conflict = true;
     else if (result != ERROR_FILE_NOT_FOUND && result != ERROR_PATH_NOT_FOUND) return HRESULT_FROM_WIN32(result);
     Key machine;
-    result = RegOpenKeyExW(HKEY_LOCAL_MACHINE, ServerKey, 0, KEY_QUERY_VALUE | KEY_WOW64_64KEY, &machine.key);
+    result = RegOpenKeyExW(HKEY_LOCAL_MACHINE, ServerKey, 0, KEY_QUERY_VALUE | READ_CONTROL | KEY_WOW64_64KEY, &machine.key);
     if (result == ERROR_FILE_NOT_FOUND || result == ERROR_PATH_NOT_FOUND) return REGDB_E_CLASSNOTREG;
     if (result != ERROR_SUCCESS) return HRESULT_FROM_WIN32(result);
+    HRESULT security = check_source_security(machine.key, true);
+    if (FAILED(security)) return security;
     wchar_t path[32768]{}; DWORD bytes = sizeof(path);
     result = RegGetValueW(machine.key, nullptr, nullptr, RRF_RT_REG_SZ | RRF_ZEROONFAILURE, nullptr, path, &bytes);
     if (result != ERROR_SUCCESS) return HRESULT_FROM_WIN32(result);
@@ -56,7 +59,10 @@ HRESULT registration(CameraProbe& probe) noexcept {
     if (attributes == INVALID_FILE_ATTRIBUTES) return HRESULT_FROM_WIN32(GetLastError());
     if (attributes & FILE_ATTRIBUTE_DIRECTORY) return HRESULT_FROM_WIN32(ERROR_DIRECTORY);
     probe.machine_registration_present = true;
-    return probe.user_registration_conflict ? E_ACCESSDENIED : S_OK;
+    if (probe.user_registration_conflict) return E_ACCESSDENIED;
+    const HRESULT pinned = source.acquire(path);
+    probe.source_integrity_verified = SUCCEEDED(pinned);
+    return pinned;
 }
 
 class WindowsCameraBackend final : public CameraBackend {
@@ -67,6 +73,7 @@ class WindowsCameraBackend final : public CameraBackend {
     bool started_ = false;
     const char* startup_stage_ = "idle";
     Handle reservation_;
+    SourceLease source_;
 public:
     ~WindowsCameraBackend() override { shutdown(); }
     const char* startup_stage() const noexcept override { return startup_stage_; }
@@ -83,7 +90,7 @@ public:
         if (type != APTTYPE_MTA) return RPC_E_WRONG_THREAD;
         CameraProbe probe;
         startup_stage_ = "source_registration";
-        hr = registration(probe); if (FAILED(hr)) return hr;
+        hr = registration(probe, source_); if (FAILED(hr)) return hr;
         startup_stage_ = "reserve_output";
         hr = reserve_video_output(&reservation_.value); if (FAILED(hr)) return hr;
         startup_stage_ = "load_api";
@@ -145,6 +152,8 @@ public:
         if (!camera_ && !mf_started_ && reservation_.value) {
             CloseHandle(reservation_.value); reservation_.value = nullptr;
         }
+        // Keep the exact DLL and directory leases through failed Shutdown retries.
+        if (!camera_ && !mf_started_) source_.release();
         return hr;
     }
 };
@@ -183,7 +192,8 @@ CameraProbe probe_virtual_camera() noexcept {
     CameraApi api;
     result.api_error = api.load();
     result.api_exports_present = SUCCEEDED(result.api_error);
-    result.registration_error = registration(result);
+    SourceLease source;
+    result.registration_error = registration(result, source);
     return result;
 }
 CameraBackend* make_windows_camera_backend() noexcept { return new(std::nothrow) WindowsCameraBackend; }

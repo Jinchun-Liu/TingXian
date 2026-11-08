@@ -1,6 +1,7 @@
 // Explicit COM registration check only. It does not create a virtual device or
 // enumerate/open physical cameras. Kept outside ordinary CTest until installed.
 #include "video_contract.h"
+#include "video_timing.h"
 #include <mfapi.h>
 #include <mfidl.h>
 #include <wrl/client.h>
@@ -26,6 +27,11 @@ int wmain(int argc, wchar_t** argv) {
         FrameMetrics metrics{};
         if (SUCCEEDED(hr)) hr = frames->GetFrameMetrics(&metrics);
         if (SUCCEEDED(hr) && (metrics.enabled || metrics.accepted)) hr = E_UNEXPECTED;
+        ComPtr<ITimedFrameReceiver> timing;
+        if (SUCCEEDED(hr)) hr = source.As(&timing);
+        UINT32 version = 0;
+        if (SUCCEEDED(hr)) hr = timing->GetTimingVersion(&version);
+        if (SUCCEEDED(hr) && version != 2) hr = E_UNEXPECTED;
         if (source) {
             const HRESULT stopped = source->Shutdown();
             if (SUCCEEDED(hr)) hr = stopped;
@@ -37,6 +43,6 @@ int wmain(int argc, wchar_t** argv) {
     }
     MFShutdown(); CoUninitialize();
     if (FAILED(hr)) { std::cerr << "registered COM activation failed: 0x" << std::hex << unsigned(hr) << '\n'; return 1; }
-    std::cout << "{\"registered_com_activation\":true,\"source_survives_activation_release\":true,\"default_output_enabled\":false,\"device_created\":false,\"physical_camera_opened\":false}\n";
+    std::cout << "{\"registered_com_activation\":true,\"timing_version\":2,\"source_survives_activation_release\":true,\"default_output_enabled\":false,\"device_created\":false,\"physical_camera_opened\":false}\n";
     return 0;
 }

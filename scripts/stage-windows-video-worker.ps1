@@ -4,7 +4,7 @@ $source=Join-Path $PSScriptRoot '../video/windows'
 $stage=Join-Path $PSScriptRoot '../frontend/src-tauri/binaries/video-worker'
 cmake -S $source -B $BuildDirectory -A x64
 if ($LASTEXITCODE) {throw 'Video worker configure failed'}
-cmake --build $BuildDirectory --config Release --target tingxian-video-worker --parallel 2
+cmake --build $BuildDirectory --config Release --target tingxian-video-worker tingxian-video-device-probe --parallel 2
 if ($LASTEXITCODE) {throw 'Video worker build failed'}
 cmake --build $BuildDirectory --config Release --target TingXianCameraInput TingXianVideoOutput --parallel 2
 if ($LASTEXITCODE) {throw 'Video media adapters build failed'}

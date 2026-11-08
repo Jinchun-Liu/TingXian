@@ -37,12 +37,16 @@ foreach ($name in @('LICENSE.md','NOTICE.md')) {
 $files = @(Get-ChildItem -LiteralPath $payload -File | Sort-Object Name | ForEach-Object {
     [ordered]@{path=$_.Name;bytes=$_.Length;sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
 })
-[ordered]@{schema_version=1;component='tingxian_windows_video_source';version='0.1.2';channel='experimental';commit=$commit;files=$files} |
+[ordered]@{schema_version=1;component='tingxian_windows_video_source';version='0.2.0';timing_protocol=2;channel='experimental';commit=$commit;files=$files} |
     ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $payload 'component-manifest.json') -Encoding utf8
+# Generated from this very DLL before linking the output adapter/probe.
+$pinHeader = Get-Content -Raw -LiteralPath (Join-Path $bin 'source_pin.h')
+$sourceHash = (Get-FileHash -LiteralPath (Join-Path $payload 'TingXianVideoSource.dll')).Hash.ToLowerInvariant()
+if ($pinHeader -cnotmatch ('"'+$sourceHash+'"')) { throw 'Source and compiled consumer pin differ; preserve the build.' }
 $packages = @()
 foreach ($fixture in @($false, $true)) {
     if ($fixture -and !$BuildRollbackFixture) { continue }
-    $name = if ($fixture) { 'TingXian-VideoSource-0.1.2-ROLLBACK-FIXTURE-x64' } else { 'TingXian-VideoSource-0.1.2-experimental-x64' }
+    $name = if ($fixture) { 'TingXian-VideoSource-0.2.0-ROLLBACK-FIXTURE-x64' } else { 'TingXian-VideoSource-0.2.0-experimental-x64' }
     $obj = Join-Path $output ($name+'.wixobj')
     $msi = Join-Path $output ($name+'.msi')
     $arguments = @('-nologo','-arch','x64',"-dPayloadDir=$payload",'-out',$obj)

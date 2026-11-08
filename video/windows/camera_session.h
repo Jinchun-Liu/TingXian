@@ -72,6 +72,7 @@ struct CameraProbe {
     bool api_exports_present = false;
     bool machine_registration_present = false;
     bool user_registration_conflict = false;
+    bool source_integrity_verified = false;
     HRESULT api_error = S_OK;
     HRESULT registration_error = S_OK;
 };

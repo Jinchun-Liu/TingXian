@@ -1,6 +1,6 @@
 # 听弦可选视频组件（实验版）
 
-这是独立于普通用户基础安装包的媒体源组件，版本 `0.1.2`。它只部署原生 DLL、只读诊断、摘要清单和许可证，并在 HKLM 64 位视图注册听弦自己的 COM 类。没有眼部 SDK/模型、CUDA、音频、会话数据库或完整听弦程序；安装成功不表示眼部功能已完成。
+这是独立于普通用户基础安装包的媒体源组件，候选版本 `0.2.0`。它只部署原生 DLL、只读诊断、摘要清单和许可证，并在 HKLM 64 位视图注册听弦自己的 COM 类。没有眼部 SDK/模型、CUDA、音频、会话数据库或完整听弦程序；安装成功不表示眼部功能已完成。
 
 媒体源未来由 Windows FrameServer 读取，因此使用受保护的 `%ProgramFiles%\TingXian\VideoSource`，需要系统管理员授权。这个目录与 `D:\Applications\TingXian` 的基础应用分开，不迁移基础应用或用户资料。下载、测试产物和日志继续默认存 D 盘。普通用户不安装 WiX、Visual Studio、Python 或 Rust。
 
@@ -10,7 +10,7 @@
 
 正式尝试前，核对对应 commit、MSI 大小和独立发布的 SHA-256；保留原包作为恢复来源。检查目标目录及其父目录没有重定向或普通用户写权限。第一次安装若发现同 CLSID 的既有注册，安装会失败并保留该注册；先确认来源，不自动删改或添加信任。
 
-只安装经过本轮验收的 `TingXian-VideoSource-0.1.2-experimental-x64.msi`；不要运行名称含 `ROLLBACK-FIXTURE` 的包。系统授权由用户本人完成。可使用系统安装界面，或通过 `msiexec /i <MSI> /norestart /l*v <D盘日志>` 留存日志。安装器面向 x64、build 22000 及以上；CI Server 构建符合数值条件只用于部署检查，不构成 Windows 11 实机验收。
+只安装经过本轮验收的 `TingXian-VideoSource-0.2.0-experimental-x64.msi`；不要运行名称含 `ROLLBACK-FIXTURE` 的包。系统授权由用户本人完成。可使用系统安装界面，或通过 `msiexec /i <MSI> /norestart /l*v <D盘日志>` 留存日志。安装器面向 x64、build 22000 及以上；CI Server 构建符合数值条件只用于部署检查，不构成 Windows 11 实机验收。
 
 安装后 `tingxian-video-device-probe.exe --probe` 只读检查导出与注册；`machine_registration_present=true` 不代表真实设备、权限、FrameServer 或会议成功。源码测试工具 `tingxian-video-registration-test.exe --registered-no-device` 验证真实 COM 类加载，也不创建摄像头。实际安装版验收记录须明确二者区别。
 
@@ -44,8 +44,10 @@ cmake --build D:/TingXian-build/video-component --config Release --parallel 2
 4. 两轮安装/卸载，逐项核对摘要、基本 ACL、只读诊断、真实 COM 激活和已安装 DLL 的原生样本测试。
 5. 组件目录中的未知合成资料与未知注册值在卸载和重装后仍保留。
 
-`test-upgrade.ps1` 同样仅允许运行于一次性 runner：旧 0.1.1 DLL 必须准确复现“格式探测消耗生产者连接”；失败升级必须恢复旧版，成功升级必须通过全部源/IPC 回归，未知资料保持原摘要。固定基线是 `745d16f`，不读取用户资料。0.1.0 到 0.1.1 的生命周期差异与升级结果作为历史证据保留。
+`test-upgrade.ps1` 在一次性 runner 将固定的历史 0.1.2（`084dae59e3ee150571e979211e4e4282826881b7`）升级到 0.2.0。旧源必须被当前摘要门禁拒绝，真实 COM 须确认缺少 v2 接口；失败升级恢复旧源，成功升级通过已安装 v2 IPC，禁止降级并保留未知合成资料。此前 0.1.0/0.1.1 的升级记录仍保留。
 
 `test-install.ps1` 拒绝在普通机器或非 GitHub 托管环境运行。它不打开真实资料、音视频或会议设备。包的 COM 注册与实际虚拟摄像头创建分别验收；CI 不替代目标机正常防护安装、UAC、服务身份权限和会议测试。
 
 参考：[微软组件部署示例](https://github.com/microsoft/Windows-Camera/blob/626f8b19c5f367602f2e89c6b314573d3776c9df/Samples/VirtualCamera/README.md)、[WiX package scope](https://docs.firegiant.com/wix3/xsd/wix/package/)、[WiX upgrade scheduling](https://docs.firegiant.com/wix3/xsd/wix/majorupgrade/)。
+
+新适配器嵌入同批构建的源摘要；不同 CI run 的相同版本号不表示字节相同。主应用 CI 另产出配套可选 MSI，实际安装候选只使用同一 run 的应用与组件。隔离组件 CI 的 MSI 仅为安装实验，不与其他 run 混装。校验与证据边界见 [v2 组件记录](../../docs/eye-source-deployment-validation-2026-11-08.md)。

@@ -51,6 +51,8 @@ jobs:
         working-directory: frontend
       - name: Build and stage local inspection and native media adapters
         run: ./scripts/stage-windows-video-worker.ps1
+      - name: Build matching optional source MSI (do not install)
+        run: ./packaging/windows-video/build.ps1 -BinaryDirectory target/video-worker-build/Release -OutputDirectory "$env:RUNNER_TEMP/matching-video-msi"
       - name: Stage verified offline runtime
         run: |
           python scripts/prepare-windows-runtime.py
@@ -115,5 +117,14 @@ jobs:
         with:
           name: TingXian-Windows-x64-preview
           path: dist/windows/
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TingXian-Windows-matching-video-source-experimental
+          path: |
+            ${{ runner.temp }}/matching-video-msi/TingXian-VideoSource-0.2.0-experimental-x64.msi
+            ${{ runner.temp }}/matching-video-msi/build-manifest.json
+            ${{ runner.temp }}/matching-video-msi/payload/component-manifest.json
           if-no-files-found: error
           retention-days: 30

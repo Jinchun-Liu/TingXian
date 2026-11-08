@@ -22,7 +22,7 @@ $install = Join-Path $env:ProgramW6432 'TingXian\VideoSource'
 $dll = Join-Path $install 'TingXianVideoSource.dll'
 $sourceKey = 'SOFTWARE\Classes\CLSID\{44D20DA7-55EC-4B4A-A767-99E97D6E5A90}'
 $serverKey = $sourceKey + '\InprocServer32'
-$product = '{CDA85B35-A484-4930-B288-07F4BB9A5D8C}'
+$product = '{B7682B8D-467E-47DD-A3E2-B0F0E58EF864}'
 $machine = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryView]::Registry64)
 $installer = New-Object -ComObject WindowsInstaller.Installer
 $checks = [Collections.Generic.List[object]]::new()
@@ -60,8 +60,8 @@ try {
         $path = Join-Path $package $item.file
         Assert-True ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -eq $item.sha256) 'Package hash mismatch.'
     }
-    $msi = Join-Path $package 'TingXian-VideoSource-0.1.2-experimental-x64.msi'
-    $fixtureMsi = Join-Path $package 'TingXian-VideoSource-0.1.2-ROLLBACK-FIXTURE-x64.msi'
+    $msi = Join-Path $package 'TingXian-VideoSource-0.2.0-experimental-x64.msi'
+    $fixtureMsi = Join-Path $package 'TingXian-VideoSource-0.2.0-ROLLBACK-FIXTURE-x64.msi'
 
     # A fresh install must not overwrite an unrelated/stale registration.
     $foreign = 'C:\TingXianSyntheticFixture\preserve-this.dll'
@@ -119,11 +119,17 @@ try {
         & (Join-Path $install 'tingxian-video-device-probe.exe') --probe | Set-Content -LiteralPath (Join-Path $evidence "installed-probe-$cycle.json") -Encoding utf8
         Assert-True ($LASTEXITCODE -eq 0) 'Installed diagnostic failed.'
         $probe = Get-Content -LiteralPath (Join-Path $evidence "installed-probe-$cycle.json") -Raw | ConvertFrom-Json
-        Assert-True ($probe.machine_registration_present -and !$probe.user_registration_conflict -and !$probe.device_created) 'Installed registration probe differs.'
+        Assert-True ($probe.source_integrity_verified -and $probe.registration_error -eq '0x00000000' -and $probe.machine_registration_present -and !$probe.user_registration_conflict -and !$probe.device_created) 'Installed registration probe differs.'
         & (Join-Path $bin 'tingxian-video-registration-test.exe') --registered-no-device | Tee-Object -FilePath (Join-Path $evidence "registered-com-$cycle.log")
         Assert-True ($LASTEXITCODE -eq 0) 'Registered COM class did not activate.'
         & (Join-Path $bin 'tingxian-video-source-test.exe') $dll | Set-Content -LiteralPath (Join-Path $evidence "installed-source-$cycle.log") -Encoding utf8
         Assert-True ($LASTEXITCODE -eq 0) 'Installed media-source tests failed.'
+        & (Join-Path $bin 'tingxian-video-ipc-test.exe') $dll | Set-Content -LiteralPath (Join-Path $evidence "installed-timed-ipc-$cycle.log") -Encoding utf8
+        Assert-True ($LASTEXITCODE -eq 0) 'Installed timed IPC regressions failed.'
+        Assert-True ((Get-Item -LiteralPath $dll).VersionInfo.FileVersion -eq '0.2.0.0') 'Installed source version differs.'
+        if ($cycle -eq 1) {
+            & (Join-Path $PSScriptRoot 'test-source-trust.ps1') -BinaryDirectory $bin -EvidenceDirectory (Join-Path $evidence 'source-trust')
+        }
         Passed "installed cycle ${cycle}: hashes, protected ACL, diagnostic and real COM/MF"
 
         $key = $machine.CreateSubKey($sourceKey)

@@ -7,9 +7,9 @@
   <?endif?>
   <!-- Independent from the ordinary-user TingXian app. Bump ProductVersion and
        Product Id together for the next component release; keep UpgradeCode. -->
-  <Product Id="{CDA85B35-A484-4930-B288-07F4BB9A5D8C}"
+  <Product Id="{B7682B8D-467E-47DD-A3E2-B0F0E58EF864}"
            UpgradeCode="{C714EC90-881E-4B28-9969-13F563009429}"
-           Name="$(var.ProductLabel)" Version="0.1.2" Language="2052"
+           Name="$(var.ProductLabel)" Version="0.2.0" Language="2052"
            Codepage="936" Manufacturer="TingXian">
     <Package Id="*" InstallerVersion="500" Compressed="yes" Platform="x64"
              InstallScope="perMachine" InstallPrivileges="elevated" SummaryCodepage="936"
