@@ -15,6 +15,8 @@ mod tests;
 pub const HNS_PER_SECOND: u64 = 10_000_000;
 pub const RATE: u32 = 48_000;
 pub const MAX_PACKET_FRAMES: usize = 960;
+// Whole WASAPI input packets; output windows remain separately bounded at 960.
+pub const MAX_CAPTURE_FRAMES: usize = 4800;
 pub const MAX_AUDIO_FRAMES: usize = 9_600;
 pub const MAX_VIDEO_FRAMES: usize = 8;
 pub const NV12_BYTES: usize = 1280 * 720 * 3 / 2;
@@ -96,6 +98,7 @@ pub struct CorrectedFrame {
 
 #[derive(Default, Clone, Copy, Debug)]
 pub struct Metrics {
+    pub startup_discontinuities: u64,
     pub admitted_audio: u64,
     pub retired_audio: u64,
     pub cleared_audio: u64,
@@ -346,12 +349,12 @@ impl Timeline {
         if p.rate != RATE
             || p.channels != 1
             || p.samples.is_empty()
-            || p.samples.len() > MAX_PACKET_FRAMES
+            || p.samples.len() > MAX_CAPTURE_FRAMES
             || p.first_sample.checked_add(p.samples.len() as u64).is_none()
         {
             return Err(s.fail(Error::Format));
         }
-        if p.flags.discontinuity {
+        if p.flags.discontinuity && s.audio_origin.is_some() {
             return Err(s.fail(Error::Discontinuity));
         }
         if p.flags.timestamp_error || p.capture.0 > now.0 || now.0 - p.capture.0 > MAX_AGE {
@@ -375,6 +378,9 @@ impl Timeline {
             return Err(s.fail(Error::AudioOverflow));
         }
         s.audio_frames += p.samples.len();
+        if p.flags.discontinuity {
+            s.metrics.startup_discontinuities += 1;
+        }
         s.audio_origin.get_or_insert(p.first_sample);
         s.metrics.admitted_audio += p.samples.len() as u64;
         s.metrics.audio_peak = s.metrics.audio_peak.max(s.audio_frames);

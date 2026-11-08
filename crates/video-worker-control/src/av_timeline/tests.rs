@@ -3,6 +3,36 @@ use std::{sync::mpsc, thread, time::Duration};
 
 const BASE: u64 = 9_007_199_254_740_992; // Beyond exact f64 integer precision.
 const BLOCK: usize = 480;
+#[test]
+fn whole_capture_packets_keep_qpc_start_boundary_and_separate_output_limit() {
+    let timeline = Timeline::default();
+    let g = timeline.begin(0, 7).unwrap();
+    let mut first = pcm(12345, t(0));
+    first.samples = (12345..17145).map(value).collect();
+    first.flags.discontinuity = true;
+    timeline.push_audio(g, first, t(1_100_000)).unwrap();
+    let second = pcm(17145, t(1_000_000));
+    timeline.push_audio(g, second, t(1_100_000)).unwrap();
+    let s = timeline.snapshot();
+    assert_eq!(s.audio_frames, 5280);
+    assert_eq!(s.metrics.startup_discontinuities, 1);
+    assert_eq!(MAX_PACKET_FRAMES, 960); // output allocation/reservation unchanged
+    let mut later = pcm(17625, t(1_100_000));
+    later.flags.discontinuity = true;
+    assert_eq!(
+        timeline.push_audio(g, later, t(1_200_000)),
+        Err(Error::Discontinuity)
+    );
+    assert_eq!(timeline.snapshot().audio_frames, 0);
+    timeline.stop().unwrap();
+    let g = timeline.begin(timeline.snapshot().generation, 7).unwrap();
+    let mut oversized = pcm(0, t(0));
+    oversized.samples.resize(4801, 0.2);
+    assert_eq!(
+        timeline.push_audio(g, oversized, t(1_100_000)),
+        Err(Error::Format)
+    );
+}
 fn t(delta: u64) -> Time {
     Time(BASE + delta)
 }

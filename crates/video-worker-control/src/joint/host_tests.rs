@@ -1,9 +1,327 @@
 use super::*;
+use crate::capture;
 use crate::joint::host::{Error as HostError, Host};
 use crate::{
     Controller, EyeProvider, NativeCorrections, QpcStreamFeed, QpcStreamFrame, STREAM_BGR_BYTES,
 };
 use std::sync::{mpsc, Mutex};
+
+struct MemoryCapture {
+    lane: thread::ThreadId,
+    packets: mpsc::Receiver<PcmPacket>,
+    calls: Arc<Mutex<Vec<&'static str>>>,
+    phase: u32,
+    frames: u64,
+    count: u64,
+    mode: i32,
+    finish_gate: Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>,
+    finished: bool,
+}
+impl MemoryCapture {
+    fn note(&self, name: &'static str) {
+        assert_eq!(thread::current().id(), self.lane);
+        self.calls.lock().unwrap().push(name);
+    }
+}
+impl capture::Device for MemoryCapture {
+    fn inspect(&self, s: &capture::Selection) -> Result<(), capture::Error> {
+        self.note("inspect");
+        assert_eq!(
+            (&*s.microphone_id, &*s.output_return_id),
+            ("synthetic-mic", "fixture-capture")
+        );
+        if self.mode == 0 {
+            Err(capture::Error::Native(-1))
+        } else {
+            Ok(())
+        }
+    }
+    fn prepare(&mut self, _: &capture::Selection, generation: u64) -> Result<(), capture::Error> {
+        self.note("prepare");
+        assert!(generation > 0);
+        self.phase = 1;
+        if self.mode == 1 {
+            Err(capture::Error::Native(-2))
+        } else {
+            Ok(())
+        }
+    }
+    fn start(&mut self) -> Result<(), capture::Error> {
+        self.note("start");
+        assert_eq!(self.phase, 1);
+        self.phase = 2;
+        if self.mode == 2 {
+            Err(capture::Error::Native(-3))
+        } else {
+            Ok(())
+        }
+    }
+    fn read(&mut self, microphone: u64) -> Result<Option<PcmPacket>, capture::Error> {
+        self.note("read");
+        assert_eq!(self.phase, 2);
+        assert_eq!(microphone, 7);
+        if self.mode == 3 {
+            return Err(capture::Error::Native(-4));
+        }
+        let p = self.packets.try_recv().ok();
+        if let Some(p) = &p {
+            self.frames += p.samples.len() as u64;
+            self.count += 1;
+        }
+        Ok(p)
+    }
+    fn event(&self) -> Result<Option<BorrowedHandle<'_>>, capture::Error> {
+        self.note("event");
+        Ok(None)
+    }
+    fn status(&self) -> Result<capture::Status, capture::Error> {
+        self.note("status");
+        Ok(capture::Status {
+            phase: self.phase,
+            packets: self.count,
+            delivered_frames: self.frames,
+            reset: u32::from(self.phase == 3),
+            stop_error: if self.mode == 4 { -5 } else { 0 },
+            ..Default::default()
+        })
+    }
+    fn finish(&mut self) -> capture::Cleanup {
+        self.note("finish");
+        assert!(!self.finished);
+        self.finished = true;
+        if let Some((notice, gate)) = self.finish_gate.take() {
+            notice.send(()).unwrap();
+            gate.recv_timeout(Duration::from_secs(3)).unwrap();
+        }
+        self.phase = 3;
+        capture::Cleanup {
+            stop: Ok(()),
+            status: self.status(),
+            destroy: Ok(()),
+            reset_required: true,
+        }
+    }
+}
+impl Drop for MemoryCapture {
+    fn drop(&mut self) {
+        self.note("drop");
+        assert!(self.finished);
+    }
+}
+fn capture_launch(
+    mode: i32,
+    finish_gate: Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>,
+) -> (
+    capture::Launch,
+    mpsc::Sender<PcmPacket>,
+    Arc<Mutex<Vec<&'static str>>>,
+) {
+    let (send, packets) = mpsc::channel();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let observed = calls.clone();
+    let caller = thread::current().id();
+    (
+        capture::Launch {
+            selection: capture::Selection {
+                microphone_id: "synthetic-mic".into(),
+                output_return_id: "fixture-capture".into(),
+            },
+            factory: Box::new(move || {
+                assert_ne!(thread::current().id(), caller);
+                observed.lock().unwrap().push("create");
+                Ok(Box::new(MemoryCapture {
+                    lane: thread::current().id(),
+                    packets,
+                    calls: observed,
+                    phase: 0,
+                    frames: 0,
+                    count: 0,
+                    mode,
+                    finish_gate,
+                    finished: false,
+                }))
+            }),
+        },
+        send,
+        calls,
+    )
+}
+
+#[test]
+fn media_host_capture_failures_retire_on_owner_and_cleanup_failure_stays_latched() {
+    for mode in 0..5 {
+        let (source, reader) = SourceRun::new(Arc::new(Controller::default()));
+        let host = Host::default();
+        let path = root().join("output.barrier");
+        let (capture, _send, calls) = capture_launch(mode, None);
+        let input = host
+            .start_capture_tapped(
+                config(path.clone()),
+                capture,
+                source.state.clone(),
+                reader,
+                |_| {},
+            )
+            .unwrap();
+        if mode == 4 {
+            let _endpoint = input.take_endpoint(Duration::from_secs(3)).unwrap();
+            input.request_stop();
+        }
+        assert_eq!(host.wait_idle(Duration::from_secs(10)), mode != 4);
+        let s = host.snapshot();
+        assert!(!s.busy);
+        assert!(matches!(s.failure, Some(HostError::Capture(_))), "{s:?}");
+        assert_eq!(s.cleanup_uncertain, mode == 4);
+        assert_eq!(s.capture_cleanup.unwrap().failure().is_some(), mode == 4);
+        let trace = calls.lock().unwrap();
+        assert_eq!(trace.first(), Some(&"create"));
+        assert_eq!(trace.last(), Some(&"drop"));
+        assert_eq!(trace.iter().filter(|s| **s == "finish").count(), 1);
+        if mode == 0 {
+            assert!(!path.exists() && !trace.contains(&"prepare"));
+        }
+        if mode == 1 {
+            assert!(!trace.contains(&"start"));
+        }
+        host.resume();
+        assert_eq!(host.wait_idle(Duration::ZERO), mode != 4);
+        drop(trace);
+        drop(input);
+        drop(host);
+        if mode != 0 {
+            fenced(path);
+        }
+    }
+}
+
+#[test]
+fn media_host_capture_permission_unknown_source_and_three_unexposed_lifetimes() {
+    let host = Host::default();
+    let path = root().join("output.barrier");
+    for n in 0..3 {
+        let (source, reader) = SourceRun::new(Arc::new(Controller::default()));
+        let config_capture = capture::Config {
+            library: capture::tests::pin(),
+            microphone_id: "tingxian-nonexistent-microphone".into(),
+        };
+        let input = host.start_captured(
+            config(path.clone()),
+            config_capture,
+            source.state.clone(),
+            reader,
+            host.snapshot().generation,
+            n != 0,
+        );
+        if n == 0 {
+            assert!(matches!(input, Err(HostError::Permission)));
+        } else {
+            let input = input.unwrap();
+            assert!(host.wait_idle(Duration::from_secs(10)));
+            assert!(matches!(
+                host.snapshot().failure,
+                Some(HostError::Capture(_))
+            ));
+            assert_eq!(host.snapshot().capture.unwrap().packets, 0);
+            assert_eq!(
+                input.submit(input.generation(), pcm(v::now().qpc_100ns(), 0)),
+                Err(HostError::Source)
+            );
+        }
+        assert!(!host.snapshot().busy && !path.exists());
+    }
+}
+
+#[test]
+fn media_host_capture_delivers_unsplit_original_voice_and_waits_for_capture_destruction() {
+    let (source, reader) = SourceRun::new(Arc::new(Controller::default()));
+    let host = Host::default();
+    let path = root().join("output.barrier");
+    let (cleanup, cleanup_ready) = mpsc::channel();
+    let (finish, finish_gate) = mpsc::channel();
+    let (capture, send, calls) = capture_launch(-1, Some((cleanup, finish_gate)));
+    let (anchor, anchored) = mpsc::channel();
+    let (resume, ready) = mpsc::channel();
+    let (proof, proven) = mpsc::channel();
+    let mut base = None;
+    let mut consumed = 0;
+    let mut reported = false;
+    let mut pts = 0;
+    let input = host
+        .start_capture_tapped(
+            config(path.clone()),
+            capture,
+            source.state.clone(),
+            reader,
+            move |owner| {
+                if base.is_none() {
+                    let until = Instant::now() + Duration::from_secs(2);
+                    while owner.snapshot().eye.unwrap().received == 0 {
+                        assert!(Instant::now() < until);
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    let now = v::now().qpc_100ns();
+                    a::anchor(&owner.audio, now);
+                    base = Some(now);
+                    anchor.send(now).unwrap();
+                    ready.recv_timeout(Duration::from_secs(2)).unwrap();
+                } else {
+                    let target = (v::now().qpc_100ns() - base.unwrap()) * 48000 / 10_000_000;
+                    let delta = target.saturating_sub(consumed);
+                    assert!(delta <= 4800);
+                    a::step(&owner.audio, delta as u32, 0);
+                    consumed = target;
+                }
+                if let Some(p) = &owner.pending {
+                    if !p.neutral {
+                        pts = p.presentation.qpc_100ns();
+                    }
+                }
+                if owner.snapshot().committed_windows > 0 && !reported {
+                    assert_eq!(owner.snapshot().neutral_windows, 0);
+                    reported = true;
+                    proof.send((pts, a::read(&owner.audio))).unwrap();
+                    ready.recv_timeout(Duration::from_secs(2)).unwrap();
+                }
+            },
+        )
+        .unwrap();
+    let mut mf = v::Reader::connect(input.take_endpoint(Duration::from_secs(3)).unwrap());
+    let capture_time = source.frame(81);
+    let base = anchored.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert_eq!(
+        input.submit(input.generation(), pcm(base, 0)),
+        Err(HostError::Source)
+    );
+    let mut first = pcm(base - 1_100_000, 0);
+    first.samples.resize(4800, 0.2);
+    first.flags.discontinuity = true;
+    let second = pcm(base - 100_000, 10);
+    send.send(first).unwrap();
+    send.send(second).unwrap();
+    resume.send(()).unwrap();
+    let (pts, values) = proven.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert_eq!(values.len(), 960);
+    assert!(values.iter().all(|v| (*v - 0.2).abs() < 0.00001));
+    mf.sample_eye(81, capture_time, pts);
+    assert_eq!(host.snapshot().capture.unwrap().delivered_frames, 5280);
+    assert_eq!(host.snapshot().admitted_packets, 2);
+    assert_eq!(host.snapshot().queued_frames, 0);
+    host.request_stop();
+    resume.send(()).unwrap();
+    cleanup_ready.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert!(!host.wait_idle(Duration::from_millis(20)));
+    assert!(host.snapshot().busy);
+    finish.send(()).unwrap();
+    assert!(host.wait_idle(Duration::from_secs(10)));
+    assert!(host.snapshot().capture_cleanup.unwrap().failure().is_none());
+    let trace = calls.lock().unwrap();
+    assert_eq!(trace.iter().filter(|s| **s == "finish").count(), 1);
+    assert_eq!(trace.last(), Some(&"drop"));
+    mf.neutral_after_stop();
+    drop(input);
+    drop(host);
+    fenced(path);
+}
 
 #[test]
 fn media_host_source_stop_revokes_unclaimed_endpoint_and_ingress_before_owner_tick() {

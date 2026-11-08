@@ -477,11 +477,19 @@ impl JointOutput {
     /// timeout services deadlines/disconnects even if an endpoint stops signaling.
     /// Stop is first in the wait set and never commits another pending window.
     pub fn wait(&mut self, stop: BorrowedHandle<'_>) -> Result<Progress, Error> {
+        self.wait_with_input(stop, None)
+    }
+    pub(super) fn wait_with_input(
+        &mut self,
+        stop: BorrowedHandle<'_>,
+        input: Option<BorrowedHandle<'_>>,
+    ) -> Result<Progress, Error> {
         self.active()?;
         let result = (|| {
             let mut handles = [
                 stop.as_raw_handle(),
                 self.video.event().map_err(Error::Video)?.as_raw_handle(),
+                std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
             ];
@@ -494,23 +502,33 @@ impl JointOutput {
                 handles[count as usize] = route.event().as_raw_handle();
                 count += 1;
             }
+            let input_index = input.map(|event| {
+                let index = count;
+                handles[index as usize] = event.as_raw_handle();
+                count += 1;
+                index
+            });
             let result = unsafe { WaitForMultipleObjects(count, handles.as_ptr(), 0, 5) };
             if result == WAIT_OBJECT_0 {
-                return Ok(true);
+                return Ok(2);
+            }
+            if input_index.is_some_and(|i| result == WAIT_OBJECT_0 + i) {
+                return Ok(1);
             }
             if result == WAIT_TIMEOUT || (result > WAIT_OBJECT_0 && result < WAIT_OBJECT_0 + count)
             {
-                Ok(false)
+                Ok(0)
             } else {
                 Err(Error::Wait)
             }
         })();
         match result {
-            Ok(true) => {
+            Ok(2) => {
                 self.stop();
                 self.failure.map_or(Ok(Progress::Stopped), Err)
             }
-            Ok(false) => self.advance(),
+            Ok(1) => Ok(Progress::Waiting), // Drain the capture packet before choosing output.
+            Ok(_) => self.advance(),
             Err(e) => Err(self.fail(e)),
         }
     }

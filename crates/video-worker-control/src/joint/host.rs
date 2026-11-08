@@ -1,8 +1,9 @@
-//! Main-process native owner lane. No capture, registration, UI start command,
-//! or serializable endpoint authority. Inputs are already authorized native PCM.
+//! Main-process native owner lane. Capture is optional and explicitly authorized;
+//! no registration, UI start command or serializable endpoint authority.
 use super::{Config, JointOutput, Snapshot as JointSnapshot};
 use crate::{
     av_timeline::{PcmPacket, Source, MAX_PACKET_FRAMES, RATE},
+    capture,
     stream::Shared as StreamLease,
     timed_video::TimedEndpoint,
     Controller, NativeCorrections,
@@ -34,6 +35,7 @@ pub enum Error {
     Output(super::Error),
     SourceRetirement,
     CleanupUncertain,
+    Capture(capture::Error),
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Snapshot {
@@ -47,6 +49,8 @@ pub struct Snapshot {
     pub cleared_frames: u64,
     pub failure: Option<Error>,
     pub output: Option<JointSnapshot>,
+    pub capture: Option<capture::Status>,
+    pub capture_cleanup: Option<capture::Cleanup>,
 }
 struct StopEvent(HANDLE);
 // Kernel event operations are thread-safe; Shared owns its lifetime.
@@ -90,6 +94,8 @@ struct State {
     endpoint: Option<TimedEndpoint>,
     endpoint_taken: bool,
     output: Option<JointSnapshot>,
+    capture: Option<capture::Status>,
+    capture_cleanup: Option<capture::Cleanup>,
 }
 struct Shared {
     state: Mutex<State>,
@@ -100,6 +106,7 @@ struct Shared {
     source: Arc<Controller>,
     source_id: u64,
     source_lease: Arc<StreamLease>,
+    native_capture: bool,
 }
 impl Shared {
     fn close(&self, failure: Option<Error>) {
@@ -157,6 +164,11 @@ impl Input {
     pub fn submit(&self, generation: u64, packet: PcmPacket) -> Result<(), Error> {
         if generation != self.shared.generation {
             return Err(Error::Stale);
+        }
+        // A capture-owned run has exactly one PCM producer. Reject injection
+        // without stopping the legitimate owner or permitting source mixing.
+        if self.shared.native_capture {
+            return Err(Error::Source);
         }
         let result = self.shared.source_lease.while_open(|open, source_id| {
             if !open || source_id != self.shared.source_id {
@@ -268,6 +280,8 @@ impl Host {
             cleared_frames: 0,
             failure: None,
             output: None,
+            capture: None,
+            capture_cleanup: None,
         });
         out.generation = inner.generation;
         out.busy = inner.active.is_some();
@@ -285,6 +299,8 @@ impl Host {
             out.cleared_frames = s.cleared;
             out.failure = s.failure;
             out.output = s.output;
+            out.capture = s.capture;
+            out.capture_cleanup = s.capture_cleanup;
         }
         out
     }
@@ -302,7 +318,53 @@ impl Host {
             reader,
             expected_generation,
             authorized,
+            None,
             |_| {},
+        )
+    }
+    /// Native-only explicit microphone+output authorization. The return endpoint
+    /// is derived from the selected output pair, not independently spoofable.
+    /// Restored settings must never call this method automatically.
+    pub fn start_captured(
+        &self,
+        config: Config,
+        capture: capture::Config,
+        source: Arc<Controller>,
+        reader: NativeCorrections,
+        expected_generation: u64,
+        authorized: bool,
+    ) -> Result<Input, Error> {
+        let launch = capture.launch(config.pair.capture_id.clone());
+        self.start_inner(
+            config,
+            source,
+            reader,
+            expected_generation,
+            authorized,
+            Some(launch),
+            |_| {},
+        )
+    }
+    #[cfg(test)]
+    pub(super) fn start_capture_tapped<F>(
+        &self,
+        config: Config,
+        capture: capture::Launch,
+        source: Arc<Controller>,
+        reader: NativeCorrections,
+        tap: F,
+    ) -> Result<Input, Error>
+    where
+        F: FnMut(&mut JointOutput) + Send + 'static,
+    {
+        self.start_inner(
+            config,
+            source,
+            reader,
+            self.snapshot().generation,
+            true,
+            Some(capture),
+            tap,
         )
     }
     #[cfg(test)]
@@ -318,7 +380,15 @@ impl Host {
     where
         F: FnMut(&mut JointOutput) + Send + 'static,
     {
-        self.start_inner(config, source, reader, expected_generation, authorized, tap)
+        self.start_inner(
+            config,
+            source,
+            reader,
+            expected_generation,
+            authorized,
+            None,
+            tap,
+        )
     }
     fn start_inner<F>(
         &self,
@@ -327,6 +397,7 @@ impl Host {
         reader: NativeCorrections,
         expected_generation: u64,
         authorized: bool,
+        capture: Option<capture::Launch>,
         tap: F,
     ) -> Result<Input, Error>
     where
@@ -371,6 +442,8 @@ impl Host {
                 endpoint: None,
                 endpoint_taken: false,
                 output: None,
+                capture: None,
+                capture_cleanup: None,
             }),
             changed: Condvar::new(),
             stop: StopEvent::new()?,
@@ -379,13 +452,14 @@ impl Host {
             source,
             source_id,
             source_lease,
+            native_capture: capture.is_some(),
         });
         let running = shared.clone();
         let thread = thread::Builder::new()
             .name("tingxian-media-output".into())
             .spawn(move || {
                 let clean = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    drive(config, reader, &running, tap)
+                    drive(config, reader, &running, capture, tap)
                 })) {
                     Ok(clean) => clean,
                     Err(_) => {
@@ -473,6 +547,8 @@ impl Host {
                             cleared_frames: s.cleared,
                             failure: s.failure,
                             output: s.output,
+                            capture: s.capture,
+                            capture_cleanup: s.capture_cleanup,
                         },
                     )
                 };
@@ -499,14 +575,74 @@ impl Drop for Host {
         self.request_stop();
     }
 }
-fn drive<F>(config: Config, reader: NativeCorrections, shared: &Arc<Shared>, mut tap: F) -> bool
+struct CaptureOwner<'a> {
+    device: Box<dyn capture::Device>,
+    selection: capture::Selection,
+    shared: &'a Arc<Shared>,
+    finished: Option<bool>,
+}
+impl CaptureOwner<'_> {
+    fn finish(&mut self) -> bool {
+        if let Some(clean) = self.finished {
+            return clean;
+        }
+        let cleanup = self.device.finish();
+        {
+            let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.capture_cleanup = Some(cleanup);
+            if let Ok(status) = cleanup.status {
+                state.capture = Some(status);
+            }
+        }
+        if let Some(e) = cleanup.failure() {
+            self.shared.close(Some(Error::Capture(e)));
+        }
+        let clean = cleanup.failure().is_none();
+        self.finished = Some(clean);
+        clean
+    }
+    fn status(&self) -> Result<(), Error> {
+        let status = self.device.status().map_err(Error::Capture)?;
+        self.shared
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .capture = Some(status);
+        Ok(())
+    }
+}
+impl Drop for CaptureOwner<'_> {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+fn drive<F>(
+    config: Config,
+    reader: NativeCorrections,
+    shared: &Arc<Shared>,
+    launch: Option<capture::Launch>,
+    mut tap: F,
+) -> bool
 where
     F: FnMut(&mut JointOutput),
 {
     let mut clean = true;
+    let mut capture = None::<CaptureOwner<'_>>;
+    // Factory execution is on the output owner after host authorization and
+    // generation admission, never on the UI thread or while holding its lock.
     let result = (|| {
         if shared.closed() {
             return Ok(());
+        }
+        if let Some(launch) = launch {
+            capture = Some(CaptureOwner {
+                device: (launch.factory)().map_err(Error::Capture)?,
+                selection: launch.selection,
+                shared,
+                finished: None,
+            });
+            let c = capture.as_ref().unwrap();
+            c.device.inspect(&c.selection).map_err(Error::Capture)?;
         }
         let candidate = super::Candidate::inspect(config).map_err(Error::Output)?;
         if shared.closed() {
@@ -516,11 +652,53 @@ where
             clean = failure.cleanup.is_none_or(|c| c.failure().is_none());
             Error::Output(failure.cause)
         })?;
+        // Declared after output: unwind retires capture before output/source
+        // cleanup can wait. Before activation the outer guard still owns it.
+        let mut capture = capture.take();
         let result = (|| {
             owner.bind_corrections(reader).map_err(Error::Output)?;
+            if let Some(c) = capture.as_mut() {
+                if shared.closed() {
+                    return Ok(());
+                }
+                c.device
+                    .prepare(&c.selection, shared.generation)
+                    .map_err(Error::Capture)?;
+                if shared.closed() {
+                    return Ok(());
+                }
+                c.device.start().map_err(Error::Capture)?;
+                c.status()?;
+            }
             shared.publish(endpoint)?;
             while !shared.closed() {
                 tap(&mut owner);
+                if let Some(c) = capture.as_mut() {
+                    for _ in 0..MAX_PACKETS {
+                        if shared.closed() || shared.source_lease.closed() {
+                            break;
+                        }
+                        let Some(packet) =
+                            c.device.read(shared.microphone).map_err(Error::Capture)?
+                        else {
+                            break;
+                        };
+                        if shared.closed() || shared.source_lease.closed() {
+                            break;
+                        }
+                        // Unsplit source packet, original first-sample QPC. No
+                        // second capture queue and no time based on receipt.
+                        owner
+                            .push_audio(owner.generation, packet)
+                            .map_err(Error::Output)?;
+                        shared
+                            .state
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .admitted += 1;
+                    }
+                    c.status()?;
+                }
                 for _ in 0..MAX_PACKETS {
                     let Some(packet) = shared.pop() else {
                         break;
@@ -532,7 +710,15 @@ where
                 if shared.closed() {
                     break;
                 }
-                let progress = owner.wait(shared.stop.handle()).map_err(Error::Output)?;
+                let event = capture
+                    .as_ref()
+                    .map(|c| c.device.event())
+                    .transpose()
+                    .map_err(Error::Capture)?
+                    .flatten();
+                let progress = owner
+                    .wait_with_input(shared.stop.handle(), event)
+                    .map_err(Error::Output)?;
                 shared.output(owner.snapshot());
                 if matches!(progress, super::Progress::Stopped) {
                     break;
@@ -540,8 +726,17 @@ where
             }
             Ok(())
         })();
+        if let Err(e) = result {
+            shared.close(Some(e));
+        }
+        // Revoke presentation before potentially slow capture cleanup. Capture
+        // is stopped/destroyed before output/source retirement can claim idle.
+        owner.video.cancel();
+        if let Some(c) = capture.as_mut() {
+            clean &= c.finish();
+        }
         let cleanup = owner.stop();
-        clean = cleanup.failure().is_none();
+        clean &= cleanup.failure().is_none();
         if let Some(e) = cleanup.failure() {
             shared.close(Some(Error::Output(e)));
         }
@@ -551,6 +746,9 @@ where
     })();
     if let Err(e) = result {
         shared.close(Some(e));
+    }
+    if let Some(c) = capture.as_mut() {
+        clean &= c.finish();
     }
     clean
 }
