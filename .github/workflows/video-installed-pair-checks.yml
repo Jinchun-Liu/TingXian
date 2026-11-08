@@ -1,0 +1,55 @@
+name: Windows installed app and source pair
+on:
+  workflow_dispatch:
+    inputs:
+      app_run_id:
+        description: Successful Windows preview run containing both matching artifacts
+        required: true
+        type: string
+      app_commit:
+        description: Exact source commit of that app run
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  installed-no-device-pair:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify artifact provenance before download
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_RUN: ${{ inputs.app_run_id }}
+          APP_COMMIT: ${{ inputs.app_commit }}
+        run: |
+          if ($env:APP_RUN -notmatch '^[0-9]+$' -or $env:APP_COMMIT -notmatch '^[0-9a-f]{40}$') { throw 'Invalid provenance input' }
+          $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:APP_RUN" | ConvertFrom-Json
+          if ($LASTEXITCODE -or $run.conclusion -ne 'success' -or $run.head_sha -cne $env:APP_COMMIT -or $run.path -ne '.github/workflows/windows-preview.yml') { throw 'App run is not the requested successful Windows preview' }
+          New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/pair-evidence" | Out-Null
+          $run | Select-Object id,head_sha,status,conclusion,path,html_url | ConvertTo-Json | Set-Content "$env:RUNNER_TEMP/pair-evidence/provenance.json"
+      - uses: actions/download-artifact@v4
+        with:
+          name: TingXian-Windows-x64-preview
+          run-id: ${{ inputs.app_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/pair-app
+      - uses: actions/download-artifact@v4
+        with:
+          name: TingXian-Windows-matching-video-source-experimental
+          run-id: ${{ inputs.app_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/pair-source
+      - name: Install matching artifacts and check through the actual app (no devices)
+        env:
+          APP_COMMIT: ${{ inputs.app_commit }}
+        run: ./.github/check-video-installed-pair.ps1 -AppDirectory "$env:RUNNER_TEMP/pair-app" -SourceDirectory "$env:RUNNER_TEMP/pair-source" -EvidenceDirectory "$env:RUNNER_TEMP/pair-evidence" -ExpectedCommit $env:APP_COMMIT
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: TingXian-installed-pair-no-device-evidence
+          path: ${{ runner.temp }}/pair-evidence/
+          if-no-files-found: error
+          retention-days: 30
