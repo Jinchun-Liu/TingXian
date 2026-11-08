@@ -1,5 +1,10 @@
 name: Windows installed app and source pair
 on:
+  # Register and execute this pinned deployment experiment on the isolated branch;
+  # a new dispatch-only workflow is not discoverable on the default branch yet.
+  push:
+    branches: [feat/windows-eye-output-20261107]
+    paths: ['.github/workflows/video-installed-pair-checks.yml']
   workflow_dispatch:
     inputs:
       app_run_id:
@@ -16,16 +21,19 @@ permissions:
 jobs:
   installed-no-device-pair:
     runs-on: windows-2025
-    timeout-minutes: 15
+    timeout-minutes: 30
+    env:
+      APP_RUN: ${{ inputs.app_run_id || '42465815107' }}
+      APP_COMMIT: ${{ inputs.app_commit || '9fc5fce9cb4c1594ba5e893df040086c16023946' }}
     steps:
       - uses: actions/checkout@v4
       - name: Verify artifact provenance before download
         env:
           GH_TOKEN: ${{ github.token }}
-          APP_RUN: ${{ inputs.app_run_id }}
-          APP_COMMIT: ${{ inputs.app_commit }}
         run: |
           if ($env:APP_RUN -notmatch '^[0-9]+$' -or $env:APP_COMMIT -notmatch '^[0-9a-f]{40}$') { throw 'Invalid provenance input' }
+          gh run watch $env:APP_RUN --repo $env:GITHUB_REPOSITORY --interval 20 --exit-status
+          if ($LASTEXITCODE) { throw 'Required application build did not succeed' }
           $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:APP_RUN" | ConvertFrom-Json
           if ($LASTEXITCODE -or $run.conclusion -ne 'success' -or $run.head_sha -cne $env:APP_COMMIT -or $run.path -ne '.github/workflows/windows-preview.yml') { throw 'App run is not the requested successful Windows preview' }
           New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/pair-evidence" | Out-Null
@@ -33,18 +41,16 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: TingXian-Windows-x64-preview
-          run-id: ${{ inputs.app_run_id }}
+          run-id: ${{ env.APP_RUN }}
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/pair-app
       - uses: actions/download-artifact@v4
         with:
           name: TingXian-Windows-matching-video-source-experimental
-          run-id: ${{ inputs.app_run_id }}
+          run-id: ${{ env.APP_RUN }}
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/pair-source
       - name: Install matching artifacts and check through the actual app (no devices)
-        env:
-          APP_COMMIT: ${{ inputs.app_commit }}
         run: ./.github/check-video-installed-pair.ps1 -AppDirectory "$env:RUNNER_TEMP/pair-app" -SourceDirectory "$env:RUNNER_TEMP/pair-source" -EvidenceDirectory "$env:RUNNER_TEMP/pair-evidence" -ExpectedCommit $env:APP_COMMIT
       - uses: actions/upload-artifact@v4
         if: always()
