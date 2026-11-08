@@ -140,6 +140,9 @@ impl Shared {
     fn closed(&self) -> bool {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).closed
     }
+    fn input_closed(&self) -> bool {
+        self.closed() || self.source_lease.closed()
+    }
     fn pop(&self) -> Option<PcmPacket> {
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if s.closed {
@@ -844,7 +847,7 @@ where
     // Factory execution is on the output owner after host authorization and
     // generation admission, never on the UI thread or while holding its lock.
     let result = (|| {
-        if shared.closed() {
+        if shared.input_closed() {
             return Ok(());
         }
         if let Some(launch) = launch {
@@ -868,7 +871,7 @@ where
             });
         }
         let candidate = super::Candidate::inspect(config).map_err(Error::Output)?;
-        if shared.closed() {
+        if shared.input_closed() {
             return Ok(());
         }
         let (mut owner, endpoint) = candidate.activate(true).map_err(|failure| {
@@ -882,37 +885,37 @@ where
         let result = (|| {
             owner.bind_corrections(reader).map_err(Error::Output)?;
             if let Some(c) = inputs.camera.as_mut() {
-                if shared.closed() {
+                if shared.input_closed() {
                     return Ok(());
                 }
                 c.device
                     .prepare(&c.selected, shared.generation)
                     .map_err(Error::Camera)?;
-                if shared.closed() {
+                if shared.input_closed() {
                     return Ok(());
                 }
                 c.device.start().map_err(Error::Camera)?;
                 c.status()?;
             }
             if let Some(c) = inputs.capture.as_mut() {
-                if shared.closed() {
+                if shared.input_closed() {
                     return Ok(());
                 }
                 c.device
                     .prepare(&c.selection, shared.generation)
                     .map_err(Error::Capture)?;
-                if shared.closed() {
+                if shared.input_closed() {
                     return Ok(());
                 }
                 c.device.start().map_err(Error::Capture)?;
                 c.status()?;
             }
             shared.publish(endpoint)?;
-            while !shared.closed() {
+            while !shared.input_closed() {
                 tap(&mut owner);
                 if let Some(c) = inputs.capture.as_mut() {
                     for _ in 0..MAX_PACKETS {
-                        if shared.closed() || shared.source_lease.closed() {
+                        if shared.input_closed() {
                             break;
                         }
                         let Some(packet) =
@@ -920,7 +923,7 @@ where
                         else {
                             break;
                         };
-                        if shared.closed() || shared.source_lease.closed() {
+                        if shared.input_closed() {
                             break;
                         }
                         // Unsplit source packet, original first-sample QPC. No
@@ -947,7 +950,7 @@ where
                         .push_audio(owner.generation, packet)
                         .map_err(Error::Output)?;
                 }
-                if shared.closed() {
+                if shared.input_closed() {
                     break;
                 }
                 let event = inputs

@@ -59,6 +59,11 @@ impl camera::Device for CameraMemory {
         assert!(generation > 0);
         self.phase = 2;
         self.generation = generation;
+        if self.mode == 7 {
+            let (notice, gate) = self.gate.take().unwrap();
+            notice.send(()).unwrap();
+            gate.recv_timeout(Duration::from_secs(3)).unwrap();
+        }
         if self.mode == 0 {
             Err(camera::Error::Native(-1))
         } else {
@@ -313,6 +318,42 @@ fn media_camera_frame_returning_after_stop_is_not_submitted_to_eye() {
     drop(host);
     fenced(path);
 }
+
+#[test]
+fn media_camera_source_stopped_during_prepare_cannot_start_either_input() {
+    let (source, feed, reader) = MediaSource::new();
+    let host = Host::default();
+    let path = root().join("output.barrier");
+    let (mic, _pcm, trace) = capture_launch(-1, None);
+    let (notice, ready) = mpsc::channel();
+    let (release, gate) = mpsc::channel();
+    let (camera, _frames, cam_trace) = camera_launch(7, trace.clone(), Some((notice, gate)));
+    let input = host
+        .start_media_tapped(
+            config(path.clone()),
+            mic,
+            camera,
+            feed,
+            source.state.clone(),
+            reader,
+            0,
+            true,
+            |_| {},
+        )
+        .unwrap();
+    ready.recv_timeout(Duration::from_secs(3)).unwrap();
+    source.state.request_stop();
+    assert!(!host.wait_idle(Duration::from_millis(20)));
+    release.send(()).unwrap();
+    assert!(host.wait_idle(Duration::from_secs(10)));
+    assert!(!cam_trace.lock().unwrap().contains(&"start"));
+    assert!(!trace.lock().unwrap().contains(&"prepare"));
+    assert_eq!(host.snapshot().camera_submitted, 0);
+    assert!(input.take_endpoint(Duration::ZERO).is_err());
+    drop(input);
+    drop(host);
+    fenced(path);
+}
 #[test]
 fn media_camera_to_actual_eye_worker_and_mf_keeps_original_qpc_and_voice() {
     let (source, feed, reader) = MediaSource::new();
@@ -383,7 +424,14 @@ fn media_camera_to_actual_eye_worker_and_mf_keeps_original_qpc_and_voice() {
     frames.send(frame).unwrap();
     anchor_ready.recv_timeout(Duration::from_secs(3)).unwrap();
     let mut mf = v::Reader::connect(endpoint);
-    let (pts, values) = proven.recv_timeout(Duration::from_secs(3)).unwrap();
+    let (pts, values) = proven.recv_timeout(Duration::from_secs(3)).unwrap_or_else(|e| {
+        let before = host.snapshot();
+        host.request_stop();
+        let _ = resume.send(());
+        let _ = finish.send(());
+        let clean = host.wait_idle(Duration::from_secs(10));
+        panic!("full camera/voice proof missing: {e:?}; before={before:?}; clean={clean}; after={:?}", host.snapshot());
+    });
     assert_eq!(values.len(), 960);
     assert!(values.iter().all(|v| (*v - 0.2).abs() < 0.00001));
     mf.sample_eye(81, capture_time, pts);
