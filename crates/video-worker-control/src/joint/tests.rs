@@ -17,6 +17,8 @@ use windows_sys::Win32::System::Threading::{CreateEventW, SetEvent, WaitForSingl
 static NEXT: AtomicU64 = AtomicU64::new(1);
 #[path = "eye_tests.rs"]
 mod eye_tests;
+#[path = "host_tests.rs"]
+mod host_tests;
 fn root() -> PathBuf {
     let root = PathBuf::from(
         std::env::var_os("TINGXIAN_VIDEO_TEST_ROOT").expect("isolated test directory"),

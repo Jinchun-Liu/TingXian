@@ -144,6 +144,26 @@ impl Controller {
         } else { inner.snapshot.phase = Phase::Off; inner.snapshot.reason = None; }
     }
     pub fn request_stop(&self) { Self::stop_locked(&mut self.inner.lock().unwrap_or_else(|e|e.into_inner())); }
+    #[cfg(windows)]
+    fn owns_stream(&self,id:u64,lease:&Arc<stream::Shared>)->bool {
+        let inner=self.inner.lock().unwrap_or_else(|e|e.into_inner());
+        inner.snapshot.generation==id && inner.active.as_ref().is_some_and(|a|
+            a.id==id && !a.signal.stopped() && a.stream.as_ref().is_some_and(|s|Arc::ptr_eq(s,lease)))
+    }
+    #[cfg(windows)]
+    fn stop_stream(&self,id:u64,lease:&Arc<stream::Shared>) {
+        let mut inner=self.inner.lock().unwrap_or_else(|e|e.into_inner());
+        if inner.active.as_ref().is_some_and(|a|a.id==id && a.stream.as_ref().is_some_and(|s|Arc::ptr_eq(s,lease))) {
+            Self::stop_locked(&mut inner);
+        }
+    }
+    #[cfg(windows)]
+    fn wait_stream_idle(&self,id:u64,lease:&Arc<stream::Shared>,timeout:Duration)->bool {
+        let matches=|s:&Inner|s.active.as_ref().is_some_and(|a|a.id==id && a.stream.as_ref().is_some_and(|p|Arc::ptr_eq(p,lease)));
+        let inner=self.inner.lock().unwrap_or_else(|e|e.into_inner());
+        let (inner,_)=self.idle.wait_timeout_while(inner,timeout,|s|matches(s)).unwrap_or_else(|e|e.into_inner());
+        !matches(&inner) && !inner.cleanup_uncertain
+    }
     pub fn suspend(&self) {
         let mut inner = self.inner.lock().unwrap_or_else(|e|e.into_inner());
         inner.suspended = true; Self::stop_locked(&mut inner);

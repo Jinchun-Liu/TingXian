@@ -3,6 +3,7 @@
 //! atomic transaction across two devices or proof of receiver synchronization.
 mod barrier;
 mod eye;
+pub mod host;
 use crate::{
     audio::{self, AudioPair, NativeAudio, PinnedAudioLibrary},
     av_timeline::{
