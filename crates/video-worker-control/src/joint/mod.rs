@@ -86,6 +86,37 @@ pub struct Cleanup {
     /// Stays true until a future, independently validated recovery protocol.
     pub restart_blocked: bool,
 }
+impl Cleanup {
+    /// Local cleanup only. Successful reset never proves external device drain.
+    fn failure(&self) -> Option<Error> {
+        if let Err(e) = self.timeline {
+            return Some(Error::Timeline(e));
+        }
+        let audio = match self.audio {
+            Ok(status) => status,
+            Err(e) => return Some(Error::Audio(e)),
+        };
+        for hr in [audio.stop_error, audio.reset_error] {
+            if hr < 0 {
+                return Some(Error::Audio(audio::Error::Native(hr)));
+            }
+        }
+        if !audio.revoked || audio.phase != 3 || !audio.client_reset {
+            return Some(Error::Audio(audio::Error::Protocol));
+        }
+        match self.video {
+            Err(e) => return Some(Error::Video(e)),
+            // `pending` also denotes an unconsumed cancellation receipt. The
+            // native stop joins the sender and local_clear proves payload
+            // retirement; retaining that receipt is not queued media.
+            Ok(status) if !status.local_clear => {
+                return Some(Error::Video(timed_video::Error::Protocol));
+            }
+            _ => {}
+        }
+        self.eye.and_then(Result::err).map(Error::Eye)
+    }
+}
 #[derive(Clone, Copy, Debug)]
 pub struct Snapshot {
     pub phase: Phase,
@@ -476,7 +507,7 @@ impl JointOutput {
         match result {
             Ok(true) => {
                 self.stop();
-                Ok(Progress::Stopped)
+                self.failure.map_or(Ok(Progress::Stopped), Err)
             }
             Ok(false) => self.advance(),
             Err(e) => Err(self.fail(e)),
@@ -515,15 +546,14 @@ impl JointOutput {
             restart_blocked: true,
         };
         self.cleanup = Some(result);
-        if let Some(Err(e)) = eye {
-            if self.failure.is_none() {
-                self.failure = Some(Error::Eye(e));
-            }
-            self.phase = Phase::Fault;
-        }
         if self.failure.is_none() {
-            self.phase = Phase::Stopped;
+            self.failure = result.failure();
         }
+        self.phase = if self.failure.is_some() {
+            Phase::Fault
+        } else {
+            Phase::Stopped
+        };
         result
     }
 }

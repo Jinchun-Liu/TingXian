@@ -501,6 +501,25 @@ fn joint_cleanup_preserves_reset_failure_and_stops_other_lane() {
     fenced(path);
 }
 #[test]
+fn joint_stop_event_reports_reset_failure_instead_of_completed_stop() {
+    let (mut owner, mut reader, path, _) = staged(false);
+    a::step(&owner.audio, 0, 4);
+    let stop = Signal::new();
+    stop.set();
+    let result = owner.wait(stop.handle());
+    let cleanup = owner.snapshot().cleanup.unwrap();
+    let error = cleanup.audio.unwrap().reset_error;
+    assert!(error < 0);
+    assert_eq!(result, Err(Error::Audio(audio::Error::Native(error))));
+    assert_eq!(owner.snapshot().phase, Phase::Fault);
+    assert_eq!(owner.snapshot().failure, result.err());
+    assert_eq!(owner.snapshot().committed_windows, 0);
+    local_stopped(&owner);
+    reader.neutral_after_stop();
+    drop(owner);
+    fenced(path);
+}
+#[test]
 fn joint_denied_intent_does_not_create_barrier_or_start() {
     let path = root().join("output.barrier");
     assert!(matches!(
