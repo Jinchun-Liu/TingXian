@@ -5,6 +5,8 @@ use crate::{
     Controller, EyeProvider, NativeCorrections, QpcStreamFeed, QpcStreamFrame, STREAM_BGR_BYTES,
 };
 use std::sync::{mpsc, Mutex};
+#[path = "camera_host_tests.rs"]
+mod camera_host_tests;
 
 struct MemoryCapture {
     lane: thread::ThreadId,

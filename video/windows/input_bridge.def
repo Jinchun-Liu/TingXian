@@ -1,0 +1,12 @@
+LIBRARY TingXianCameraInput
+EXPORTS
+    TxCameraAbi
+    TxCameraCreate
+    TxCameraPrepare
+    TxCameraStart
+    TxCameraRead
+    TxCameraRevoke
+    TxCameraStop
+    TxCameraStatusRead
+    TxCameraReadyEvent
+    TxCameraDestroy

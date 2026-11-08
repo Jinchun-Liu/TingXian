@@ -8,6 +8,8 @@ pub mod audio;
 #[cfg(windows)]
 pub mod capture;
 #[cfg(windows)]
+pub mod camera;
+#[cfg(windows)]
 pub mod timed_video;
 #[cfg(windows)]
 pub mod joint;

@@ -24,6 +24,7 @@ public:
     HRESULT prepare(const std::wstring& selected_symbolic_link, UINT64 generation, bool explicit_intent) noexcept;
     HRESULT start() noexcept;
     HRESULT read(Frame& out) noexcept; // no wait; S_FALSE = no fresh frame
+    HRESULT revoke() noexcept; // gate only, before either input's blocking cleanup
     HRESULT stop() noexcept;
     Status status() const noexcept;
     HANDLE ready_event() const noexcept; // borrowed, never close

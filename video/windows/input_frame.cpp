@@ -171,6 +171,17 @@ public:
 HRESULT make_callback(const std::shared_ptr<Mailbox>& mailbox, LONG stride, IMFSourceReaderCallback** out) {
     if (!out) return E_POINTER; *out = nullptr;
     if (!mailbox || !mailbox->valid()) return E_INVALIDARG;
+    // MF can release the final callback reference on a system worker. Its
+    // destructor event precedes return from Release, so that event alone does
+    // NOT permit DLL unload. Pin only this small optional code module for the
+    // process lifetime before handing any callback to MF; devices/MF sessions
+    // and frame buffers are still explicitly retired. No vendor SDK is pinned.
+    static const HRESULT code_pin = [] {
+        HMODULE module = nullptr;
+        return GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+            reinterpret_cast<LPCWSTR>(&make_callback), &module) ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+    }();
+    if (FAILED(code_pin)) return code_pin;
     *out = new (std::nothrow) Callback(mailbox, stride); return *out ? S_OK : E_OUTOFMEMORY;
 }
 }

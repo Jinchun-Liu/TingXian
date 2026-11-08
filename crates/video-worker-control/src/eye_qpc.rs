@@ -39,6 +39,9 @@ pub struct QpcStreamFeed {
     inner: StreamFeed,
 }
 impl QpcStreamFeed {
+    pub(crate) fn belongs_to(&self, lease: &Arc<Shared>) -> bool {
+        Arc::ptr_eq(&self.inner.shared, lease) && !lease.closed()
+    }
     pub(crate) fn new(inner: StreamFeed) -> Self {
         Self { inner }
     }

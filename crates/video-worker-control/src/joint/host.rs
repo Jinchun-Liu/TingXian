@@ -3,10 +3,10 @@
 use super::{Config, JointOutput, Snapshot as JointSnapshot};
 use crate::{
     av_timeline::{PcmPacket, Source, MAX_PACKET_FRAMES, RATE},
-    capture,
+    camera, capture,
     stream::Shared as StreamLease,
     timed_video::TimedEndpoint,
-    Controller, NativeCorrections,
+    Controller, NativeCorrections, QpcStreamFeed, QpcStreamFrame,
 };
 use std::{
     collections::VecDeque,
@@ -36,6 +36,8 @@ pub enum Error {
     SourceRetirement,
     CleanupUncertain,
     Capture(capture::Error),
+    Camera(camera::Error),
+    CameraFeed(crate::Reason),
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Snapshot {
@@ -51,6 +53,10 @@ pub struct Snapshot {
     pub output: Option<JointSnapshot>,
     pub capture: Option<capture::Status>,
     pub capture_cleanup: Option<capture::Cleanup>,
+    pub camera: Option<camera::Status>,
+    pub camera_cleanup: Option<camera::Cleanup>,
+    pub camera_submitted: u64,
+    pub camera_gaps: u64,
 }
 struct StopEvent(HANDLE);
 // Kernel event operations are thread-safe; Shared owns its lifetime.
@@ -96,6 +102,10 @@ struct State {
     output: Option<JointSnapshot>,
     capture: Option<capture::Status>,
     capture_cleanup: Option<capture::Cleanup>,
+    camera: Option<camera::Status>,
+    camera_cleanup: Option<camera::Cleanup>,
+    camera_submitted: u64,
+    camera_gaps: u64,
 }
 struct Shared {
     state: Mutex<State>,
@@ -282,6 +292,10 @@ impl Host {
             output: None,
             capture: None,
             capture_cleanup: None,
+            camera: None,
+            camera_cleanup: None,
+            camera_submitted: 0,
+            camera_gaps: 0,
         });
         out.generation = inner.generation;
         out.busy = inner.active.is_some();
@@ -301,6 +315,10 @@ impl Host {
             out.output = s.output;
             out.capture = s.capture;
             out.capture_cleanup = s.capture_cleanup;
+            out.camera = s.camera;
+            out.camera_cleanup = s.camera_cleanup;
+            out.camera_submitted = s.camera_submitted;
+            out.camera_gaps = s.camera_gaps;
         }
         out
     }
@@ -318,6 +336,7 @@ impl Host {
             reader,
             expected_generation,
             authorized,
+            None,
             None,
             |_| {},
         )
@@ -342,7 +361,60 @@ impl Host {
             expected_generation,
             authorized,
             Some(launch),
+            None,
             |_| {},
+        )
+    }
+    /// Explicit full native input route. The feed must belong to this exact
+    /// controller/reader lease, and ownership moves into the media thread.
+    pub fn start_media(
+        &self,
+        config: Config,
+        microphone: capture::Config,
+        camera: camera::Config,
+        feed: QpcStreamFeed,
+        source: Arc<Controller>,
+        reader: NativeCorrections,
+        expected_generation: u64,
+        authorized: bool,
+    ) -> Result<Input, Error> {
+        let microphone = microphone.launch(config.pair.capture_id.clone());
+        self.start_inner(
+            config,
+            source,
+            reader,
+            expected_generation,
+            authorized,
+            Some(microphone),
+            Some((camera.launch(), feed)),
+            |_| {},
+        )
+    }
+    #[cfg(test)]
+    pub(super) fn start_media_tapped<F>(
+        &self,
+        config: Config,
+        microphone: capture::Launch,
+        camera: camera::Launch,
+        feed: QpcStreamFeed,
+        source: Arc<Controller>,
+        reader: NativeCorrections,
+        expected_generation: u64,
+        authorized: bool,
+        tap: F,
+    ) -> Result<Input, Error>
+    where
+        F: FnMut(&mut JointOutput) + Send + 'static,
+    {
+        self.start_inner(
+            config,
+            source,
+            reader,
+            expected_generation,
+            authorized,
+            Some(microphone),
+            Some((camera, feed)),
+            tap,
         )
     }
     #[cfg(test)]
@@ -364,6 +436,7 @@ impl Host {
             self.snapshot().generation,
             true,
             Some(capture),
+            None,
             tap,
         )
     }
@@ -387,6 +460,7 @@ impl Host {
             expected_generation,
             authorized,
             None,
+            None,
             tap,
         )
     }
@@ -398,6 +472,7 @@ impl Host {
         expected_generation: u64,
         authorized: bool,
         capture: Option<capture::Launch>,
+        camera: Option<(camera::Launch, QpcStreamFeed)>,
         tap: F,
     ) -> Result<Input, Error>
     where
@@ -408,6 +483,12 @@ impl Host {
         }
         let source_id = reader.generation();
         let source_lease = reader.lease();
+        if camera
+            .as_ref()
+            .is_some_and(|(_, feed)| !feed.belongs_to(&source_lease))
+        {
+            return Err(Error::Source);
+        }
         if !source.owns_stream(source_id, &source_lease) {
             return Err(Error::Source);
         }
@@ -444,6 +525,10 @@ impl Host {
                 output: None,
                 capture: None,
                 capture_cleanup: None,
+                camera: None,
+                camera_cleanup: None,
+                camera_submitted: 0,
+                camera_gaps: 0,
             }),
             changed: Condvar::new(),
             stop: StopEvent::new()?,
@@ -459,7 +544,7 @@ impl Host {
             .name("tingxian-media-output".into())
             .spawn(move || {
                 let clean = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    drive(config, reader, &running, capture, tap)
+                    drive(config, reader, &running, capture, camera, tap)
                 })) {
                     Ok(clean) => clean,
                     Err(_) => {
@@ -549,6 +634,10 @@ impl Host {
                             output: s.output,
                             capture: s.capture,
                             capture_cleanup: s.capture_cleanup,
+                            camera: s.camera,
+                            camera_cleanup: s.camera_cleanup,
+                            camera_submitted: s.camera_submitted,
+                            camera_gaps: s.camera_gaps,
                         },
                     )
                 };
@@ -616,18 +705,142 @@ impl Drop for CaptureOwner<'_> {
         self.finish();
     }
 }
+struct CameraOwner<'a> {
+    device: Box<dyn camera::Device>,
+    selected: String,
+    feed: QpcStreamFeed,
+    shared: &'a Arc<Shared>,
+    revoked: Option<Result<(), camera::Error>>,
+    finished: Option<bool>,
+}
+impl CameraOwner<'_> {
+    fn revoke(&mut self) {
+        if self.revoked.is_none() {
+            self.revoked = Some(self.device.revoke());
+        }
+    }
+    fn finish(&mut self) -> bool {
+        if let Some(clean) = self.finished {
+            return clean;
+        }
+        self.revoke();
+        let mut cleanup = self.device.finish();
+        if let Some(Err(e)) = self.revoked {
+            cleanup.revoke = Err(e);
+        }
+        {
+            let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.camera_cleanup = Some(cleanup);
+            if let Ok(status) = cleanup.status {
+                state.camera = Some(status);
+            }
+        }
+        if let Some(e) = cleanup.failure() {
+            self.shared.close(Some(Error::Camera(e)));
+        }
+        let clean = cleanup.failure().is_none();
+        self.finished = Some(clean);
+        clean
+    }
+    fn status(&self) -> Result<(), Error> {
+        let status = self.device.status().map_err(Error::Camera)?;
+        self.shared
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .camera = Some(status);
+        Ok(())
+    }
+    fn pump(&mut self) -> Result<(), Error> {
+        if self.shared.closed() || self.shared.source_lease.closed() {
+            return Ok(());
+        }
+        let Some(mut frame) = self.device.read().map_err(Error::Camera)? else {
+            return self.status();
+        };
+        if self.shared.closed() || self.shared.source_lease.closed() {
+            return Ok(());
+        }
+        if frame.generation != self.shared.generation {
+            return Err(Error::Camera(camera::Error::Protocol));
+        }
+        self.feed
+            .submit(QpcStreamFrame {
+                id: frame.sequence,
+                capture: frame.capture,
+                bgr: std::mem::take(&mut frame.bgr),
+            })
+            .map_err(Error::CameraFeed)?;
+        {
+            let mut s = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+            s.camera_submitted += 1;
+            s.camera_gaps += u64::from(frame.discontinuity);
+        }
+        self.status()
+    }
+}
+impl Drop for CameraOwner<'_> {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+// A single guard owns both inputs. On normal exit AND unwinding it revokes the
+// stream/video and camera delivery before any potentially blocking cleanup;
+// microphone retirement precedes camera Flush/Shutdown waits.
+struct InputOwners<'a> {
+    shared: &'a Arc<Shared>,
+    capture: Option<CaptureOwner<'a>>,
+    camera: Option<CameraOwner<'a>>,
+    cancellation: Option<crate::timed_video::Cancellation>,
+    finished: Option<bool>,
+}
+impl InputOwners<'_> {
+    fn finish(&mut self) -> bool {
+        if let Some(clean) = self.finished {
+            return clean;
+        }
+        self.shared.close(None);
+        if let Some(c) = &self.cancellation {
+            c.cancel();
+        }
+        if let Some(c) = self.camera.as_mut() {
+            c.revoke();
+        }
+        let mut clean = true;
+        if let Some(c) = self.capture.as_mut() {
+            clean &= c.finish();
+        }
+        if let Some(c) = self.camera.as_mut() {
+            clean &= c.finish();
+        }
+        self.finished = Some(clean);
+        clean
+    }
+}
+impl Drop for InputOwners<'_> {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
 fn drive<F>(
     config: Config,
     reader: NativeCorrections,
     shared: &Arc<Shared>,
     launch: Option<capture::Launch>,
+    camera_launch: Option<(camera::Launch, QpcStreamFeed)>,
     mut tap: F,
 ) -> bool
 where
     F: FnMut(&mut JointOutput),
 {
     let mut clean = true;
-    let mut capture = None::<CaptureOwner<'_>>;
+    let mut inputs = Some(InputOwners {
+        shared,
+        capture: None,
+        camera: None,
+        cancellation: None,
+        finished: None,
+    });
     // Factory execution is on the output owner after host authorization and
     // generation admission, never on the UI thread or while holding its lock.
     let result = (|| {
@@ -635,14 +848,24 @@ where
             return Ok(());
         }
         if let Some(launch) = launch {
-            capture = Some(CaptureOwner {
+            inputs.as_mut().unwrap().capture = Some(CaptureOwner {
                 device: (launch.factory)().map_err(Error::Capture)?,
                 selection: launch.selection,
                 shared,
                 finished: None,
             });
-            let c = capture.as_ref().unwrap();
+            let c = inputs.as_ref().unwrap().capture.as_ref().unwrap();
             c.device.inspect(&c.selection).map_err(Error::Capture)?;
+        }
+        if let Some((launch, feed)) = camera_launch {
+            inputs.as_mut().unwrap().camera = Some(CameraOwner {
+                device: (launch.factory)().map_err(Error::Camera)?,
+                selected: launch.selected,
+                feed,
+                shared,
+                revoked: None,
+                finished: None,
+            });
         }
         let candidate = super::Candidate::inspect(config).map_err(Error::Output)?;
         if shared.closed() {
@@ -652,12 +875,26 @@ where
             clean = failure.cleanup.is_none_or(|c| c.failure().is_none());
             Error::Output(failure.cause)
         })?;
-        // Declared after output: unwind retires capture before output/source
-        // cleanup can wait. Before activation the outer guard still owns it.
-        let mut capture = capture.take();
+        // Declared after output: revoke both inputs/output before unwind can
+        // wait for either device. The outer guard covers pre-activation errors.
+        let mut inputs = inputs.take().unwrap();
+        inputs.cancellation = Some(owner.video.cancellation());
         let result = (|| {
             owner.bind_corrections(reader).map_err(Error::Output)?;
-            if let Some(c) = capture.as_mut() {
+            if let Some(c) = inputs.camera.as_mut() {
+                if shared.closed() {
+                    return Ok(());
+                }
+                c.device
+                    .prepare(&c.selected, shared.generation)
+                    .map_err(Error::Camera)?;
+                if shared.closed() {
+                    return Ok(());
+                }
+                c.device.start().map_err(Error::Camera)?;
+                c.status()?;
+            }
+            if let Some(c) = inputs.capture.as_mut() {
                 if shared.closed() {
                     return Ok(());
                 }
@@ -673,7 +910,7 @@ where
             shared.publish(endpoint)?;
             while !shared.closed() {
                 tap(&mut owner);
-                if let Some(c) = capture.as_mut() {
+                if let Some(c) = inputs.capture.as_mut() {
                     for _ in 0..MAX_PACKETS {
                         if shared.closed() || shared.source_lease.closed() {
                             break;
@@ -699,6 +936,9 @@ where
                     }
                     c.status()?;
                 }
+                if let Some(c) = inputs.camera.as_mut() {
+                    c.pump()?;
+                }
                 for _ in 0..MAX_PACKETS {
                     let Some(packet) = shared.pop() else {
                         break;
@@ -710,14 +950,22 @@ where
                 if shared.closed() {
                     break;
                 }
-                let event = capture
+                let event = inputs
+                    .capture
                     .as_ref()
                     .map(|c| c.device.event())
                     .transpose()
                     .map_err(Error::Capture)?
                     .flatten();
+                let camera_event = inputs
+                    .camera
+                    .as_ref()
+                    .map(|c| c.device.event())
+                    .transpose()
+                    .map_err(Error::Camera)?
+                    .flatten();
                 let progress = owner
-                    .wait_with_input(shared.stop.handle(), event)
+                    .wait_with_inputs(shared.stop.handle(), event, camera_event)
                     .map_err(Error::Output)?;
                 shared.output(owner.snapshot());
                 if matches!(progress, super::Progress::Stopped) {
@@ -732,9 +980,7 @@ where
         // Revoke presentation before potentially slow capture cleanup. Capture
         // is stopped/destroyed before output/source retirement can claim idle.
         owner.video.cancel();
-        if let Some(c) = capture.as_mut() {
-            clean &= c.finish();
-        }
+        clean &= inputs.finish();
         let cleanup = owner.stop();
         clean &= cleanup.failure().is_none();
         if let Some(e) = cleanup.failure() {
@@ -747,8 +993,8 @@ where
     if let Err(e) = result {
         shared.close(Some(e));
     }
-    if let Some(c) = capture.as_mut() {
-        clean &= c.finish();
+    if let Some(inputs) = inputs.as_mut() {
+        clean &= inputs.finish();
     }
     clean
 }

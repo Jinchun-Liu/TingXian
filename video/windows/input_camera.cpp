@@ -150,12 +150,18 @@ HRESULT CameraInput::read(Frame& out) noexcept {
     if (FAILED(next)) { out.clear(); return next; }
     return hr;
 }
+HRESULT CameraInput::revoke() noexcept {
+    auto& s = *impl_; if (FAILED(s.correct_thread())) return RPC_E_WRONG_THREAD;
+    if (s.mailbox) s.mailbox->close();
+    if (s.state.phase != Phase::stopped && s.state.phase != Phase::fault) s.state.phase = Phase::stopping;
+    return S_OK;
+}
 HRESULT CameraInput::stop() noexcept {
     auto& s = *impl_; if (FAILED(s.correct_thread())) return RPC_E_WRONG_THREAD;
     if (s.state.phase == Phase::stopped) return S_OK;
     if (s.state.cleanup_uncertain) return HRESULT_FROM_WIN32(ERROR_BUSY);
     s.state.phase = Phase::stopping;
-    if (s.mailbox) s.mailbox->close(); // revoke first, including callbacks still copying
+    revoke(); // revoke first, including callbacks still copying
     if (s.reader && s.requested) {
         s.state.flush = s.reader->Flush(DWORD(MF_SOURCE_READER_ALL_STREAMS));
         if (SUCCEEDED(s.state.flush) && WaitForSingleObject(s.mailbox->flushed(), CleanupWaitMs) != WAIT_OBJECT_0)

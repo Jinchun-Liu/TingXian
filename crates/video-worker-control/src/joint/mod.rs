@@ -484,11 +484,20 @@ impl JointOutput {
         stop: BorrowedHandle<'_>,
         input: Option<BorrowedHandle<'_>>,
     ) -> Result<Progress, Error> {
+        self.wait_with_inputs(stop, input, None)
+    }
+    pub(super) fn wait_with_inputs(
+        &mut self,
+        stop: BorrowedHandle<'_>,
+        input: Option<BorrowedHandle<'_>>,
+        camera: Option<BorrowedHandle<'_>>,
+    ) -> Result<Progress, Error> {
         self.active()?;
         let result = (|| {
             let mut handles = [
                 stop.as_raw_handle(),
                 self.video.event().map_err(Error::Video)?.as_raw_handle(),
+                std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -508,11 +517,19 @@ impl JointOutput {
                 count += 1;
                 index
             });
+            let camera_index = camera.map(|event| {
+                let index = count;
+                handles[index as usize] = event.as_raw_handle();
+                count += 1;
+                index
+            });
             let result = unsafe { WaitForMultipleObjects(count, handles.as_ptr(), 0, 5) };
             if result == WAIT_OBJECT_0 {
                 return Ok(2);
             }
-            if input_index.is_some_and(|i| result == WAIT_OBJECT_0 + i) {
+            if input_index.is_some_and(|i| result == WAIT_OBJECT_0 + i)
+                || camera_index.is_some_and(|i| result == WAIT_OBJECT_0 + i)
+            {
                 return Ok(1);
             }
             if result == WAIT_TIMEOUT || (result > WAIT_OBJECT_0 && result < WAIT_OBJECT_0 + count)
