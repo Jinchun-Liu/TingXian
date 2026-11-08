@@ -47,7 +47,7 @@ jobs:
           $env:TINGXIAN_EYE_TEST_BIN = "$env:RUNNER_TEMP/eye-worker-build/Release"
           $env:TINGXIAN_AUDIO_TEST_BIN = "$env:RUNNER_TEMP/audio-output-build/Release"
           $env:TINGXIAN_VIDEO_TEST_ROOT = "$env:RUNNER_TEMP/video-controller-fixtures"
-          cargo test -p video-worker-control --locked -- --test-threads=1 2>&1 | Tee-Object "$env:RUNNER_TEMP/video-source-build/controller-test.log"
+          cargo test -p video-worker-control --locked -- --test-threads=1 --show-output 2>&1 | Tee-Object "$env:RUNNER_TEMP/video-source-build/controller-test.log"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $test = @(Get-ChildItem target/debug/deps/video_worker_control-*.exe)
           if ($test.Count -ne 1) { throw 'Expected one controller test executable' }

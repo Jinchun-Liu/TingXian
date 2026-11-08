@@ -371,6 +371,7 @@ fn media_camera_to_actual_eye_worker_and_mf_keeps_original_qpc_and_voice() {
     let mut consumed = 0;
     let mut reported = false;
     let mut pts = 0;
+    let mut first_interval = None;
     let input = host
         .start_media_tapped(
             config(path.clone()),
@@ -415,12 +416,17 @@ fn media_camera_to_actual_eye_worker_and_mf_keeps_original_qpc_and_voice() {
                     consumed = target;
                 }
                 if let Some(p) = &owner.pending {
+                    let eye = owner.snapshot().eye.unwrap();
+                    first_interval = Some((p.neutral, p.presentation.qpc_100ns(),
+                        eye.capture_qpc, eye.completed_qpc, v::now().qpc_100ns()));
                     if !p.neutral {
                         pts = p.presentation.qpc_100ns();
                     }
                 }
                 if owner.snapshot().committed_windows > 0 && !reported {
-                    assert_eq!(owner.snapshot().neutral_windows, 0);
+                    println!("camera/voice first interval: {first_interval:?}");
+                    assert_eq!(owner.snapshot().neutral_windows, 0,
+                        "first interval (neutral, presentation, original capture, corrected, observed): {first_interval:?}");
                     reported = true;
                     proof.send((pts, a::read(&owner.audio))).unwrap();
                     resume_gate.recv_timeout(Duration::from_secs(3)).unwrap();
