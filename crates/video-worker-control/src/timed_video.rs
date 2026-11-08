@@ -11,6 +11,7 @@ use std::{
     path::PathBuf,
     ptr::{null_mut, NonNull},
     rc::Rc,
+    sync::{Arc, Mutex},
 };
 use windows_sys::Win32::{
     Foundation::*,
@@ -254,13 +255,18 @@ struct CancelTarget {
     raw: *mut c_void,
     cancel: Cancel,
 }
-/// Owner-lane-only revocation capability. It cannot start/output/wait and turns
-/// inert BEFORE the DLL/instance is destroyed. Rc/Cell prevent cross-thread use.
+// The C ABI explicitly permits concurrent TxTimedCancel. No other instance
+// operation is exported here. The shared mutex serializes this call against
+// clearing the pointer before destruction/unload; it never owns a stale DLL.
+unsafe impl Send for CancelTarget {}
+/// Revocation only, from any native lane. No start/output/wait authority.
+/// The actual video owner remains !Send/!Sync and retires on its original lane.
 #[derive(Clone)]
-pub(crate) struct Cancellation(Rc<std::cell::Cell<Option<CancelTarget>>>);
+pub(crate) struct Cancellation(Arc<Mutex<Option<CancelTarget>>>);
 impl Cancellation {
     pub(crate) fn cancel(&self) {
-        if let Some(target) = self.0.get() {
+        let guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(target) = *guard {
             unsafe {
                 (target.cancel)(target.raw);
             }
@@ -280,7 +286,11 @@ pub struct NativeTimedVideo {
 }
 impl Drop for NativeTimedVideo {
     fn drop(&mut self) {
-        self.cancellation.0.set(None);
+        *self
+            .cancellation
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
         unsafe {
             (self.library.cancel)(self.raw.as_ptr());
             (self.library.stop)(self.raw.as_ptr());
@@ -292,7 +302,7 @@ impl NativeTimedVideo {
     pub fn load(pin: PinnedTimedLibrary) -> Result<Self, Error> {
         let library = Library::load(pin)?;
         let raw = NonNull::new(unsafe { (library.create)() }).ok_or(Error::Load(Reason::Launch))?;
-        let cancellation = Cancellation(Rc::new(std::cell::Cell::new(Some(CancelTarget {
+        let cancellation = Cancellation(Arc::new(Mutex::new(Some(CancelTarget {
             raw: raw.as_ptr(),
             cancel: library.cancel,
         }))));

@@ -161,11 +161,15 @@ fn frame(id: u64, capture: Time, completed: Time) -> Vec<u8> {
     b.extend(vec![128; NV12_BYTES - 1280 * 720]);
     b
 }
-struct Peer {
+pub(crate) struct Peer {
     _job: StreamJob,
-    feed: QpcStreamFeed,
+    pub(crate) feed: QpcStreamFeed,
     done: Option<JoinHandle<()>>,
     release: mpsc::Sender<()>,
+}
+pub(crate) fn partial_peer() -> Peer {
+    let capture = now().unwrap(); let mut bytes = header(3,0,7,0); bytes.push(0x54);
+    peer(bytes, capture, false, false, None)
 }
 impl Drop for Peer {
     fn drop(&mut self) {

@@ -560,12 +560,12 @@ void relay_reader(const wchar_t* dll, bool timed = false) {
     BYTE reply = 'R'; pipe_write(output, &reply, 1); UINT64 expected = 0;
     for (;;) {
         BYTE command = 0; pipe_read(input, &command, 1);
-        if (command == 'T' && timed) {
+        if ((command == 'T' || command == 'E') && timed) {
             TimedFrame expected_frame;pipe_read(input,&expected_frame,sizeof(expected_frame));
             source.wait([&]{UINT64 now=0;return qpc_now(now)&&now>=expected_frame.presentation_qpc;},"planned sample not due");
             TimedSample stamp;LONGLONG pts=0;
             const bool neutral=expected_frame.flags==TimedNeutral;
-            source.pixels(neutral?32:160,neutral?128:96,-1,&stamp,&pts);
+            source.pixels(neutral?32:command=='E'?188:160,neutral?128:command=='E'?128:96,-1,&stamp,&pts);
             expect(stamp.frame_id==expected_frame.frame_id&&stamp.capture_qpc==expected_frame.capture_qpc&&
                 stamp.presentation_qpc==expected_frame.presentation_qpc&&UINT64(pts)==expected_frame.presentation_qpc,
                 "Rust v2 timeline lost actual MF time/identity");

@@ -153,6 +153,8 @@ impl Drop for NativeCorrections {
     }
 }
 impl NativeCorrections {
+    pub(crate) fn lease(&self) -> Arc<Shared> { self.lease.clone() }
+    pub(crate) fn generation(&self) -> u64 { self.generation }
     fn connect(endpoint: NativeOutputEndpoint, lease: Arc<Shared>) -> Result<Self, Reason> {
         if lease.protocol != Protocol::Qpc {
             return Err(Reason::Protocol);
@@ -352,4 +354,4 @@ impl NativeCorrections {
 
 #[cfg(test)]
 #[path = "eye_qpc_tests.rs"]
-mod tests;
+pub(crate) mod tests;

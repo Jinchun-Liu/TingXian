@@ -2,6 +2,7 @@
 //! installation. Video queue admission gates original-voice commitment, not an
 //! atomic transaction across two devices or proof of receiver synchronization.
 mod barrier;
+mod eye;
 use crate::{
     audio::{self, AudioPair, NativeAudio, PinnedAudioLibrary},
     av_timeline::{
@@ -11,6 +12,8 @@ use crate::{
     timed_video::{self, Admission, NativeTimedVideo, PinnedTimedLibrary, TimedEndpoint},
 };
 pub use barrier::Error as BarrierError;
+use eye::EyeRoute;
+pub use eye::EyeStatus;
 use std::{
     os::windows::io::{AsRawHandle, BorrowedHandle},
     path::PathBuf,
@@ -28,6 +31,7 @@ pub enum Error {
     Deadline,
     Revoked,
     Wait,
+    Eye(crate::Reason),
     Barrier(BarrierError),
     Audio(audio::Error),
     Video(timed_video::Error),
@@ -78,6 +82,7 @@ pub struct Cleanup {
     pub timeline: Result<u64, av_timeline::Error>,
     pub audio: Result<audio::Status, audio::Error>,
     pub video: Result<timed_video::Status, timed_video::Error>,
+    pub eye: Option<Result<(), crate::Reason>>,
     /// Stays true until a future, independently validated recovery protocol.
     pub restart_blocked: bool,
 }
@@ -90,6 +95,7 @@ pub struct Snapshot {
     pub pending_samples: usize,
     pub failure: Option<Error>,
     pub cleanup: Option<Cleanup>,
+    pub eye: Option<EyeStatus>,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct PrepareFailure {
@@ -136,6 +142,7 @@ pub struct JointOutput {
     failure: Option<Error>,
     cleanup: Option<Cleanup>,
     prime_deadline: Option<u64>,
+    eye: Option<EyeRoute>,
 }
 impl Candidate {
     /// Only reads native component pins and current endpoint metadata. Failure
@@ -202,6 +209,7 @@ impl Candidate {
             failure: None,
             cleanup: None,
             prime_deadline: None,
+            eye: None,
         };
         if let Err(e) = owner.audio.prepare(&pair, channels, generation) {
             let cause = owner.fail(Error::Audio(e));
@@ -244,6 +252,26 @@ impl JointOutput {
             pending_samples: self.pending.as_ref().map_or(0, |p| p.frames),
             failure: self.failure,
             cleanup: self.cleanup,
+            eye: self.eye.as_ref().map(EyeRoute::snapshot),
+        }
+    }
+    /// Bind once, before output starts. The reader moves to a dedicated native
+    /// lane; subsequent manual video submission cannot bypass this source.
+    pub fn bind_corrections(&mut self, reader: crate::NativeCorrections) -> Result<(), Error> {
+        self.active()?;
+        if self.eye.is_some()
+            || self.phase != Phase::WaitingVideo
+            || self.video_ticket.is_some()
+            || self.timeline.snapshot().metrics.admitted_video != 0
+        {
+            return Err(Error::Source);
+        }
+        match EyeRoute::start(reader, self.video.cancellation()) {
+            Ok(route) => {
+                self.eye = Some(route);
+                Ok(())
+            }
+            Err(e) => Err(self.fail(Error::Eye(e))),
         }
     }
     fn active(&self) -> Result<(), Error> {
@@ -270,6 +298,9 @@ impl JointOutput {
         if generation != self.generation {
             return Err(Error::Stale);
         }
+        if self.eye.is_some() {
+            return Err(self.fail(Error::Source));
+        }
         let result = audio::native_now().map_err(Error::Audio).and_then(|now| {
             self.timeline
                 .push_video(generation, frame, now)
@@ -280,7 +311,30 @@ impl JointOutput {
     /// One bounded state transition, never a spin/wait under the timeline lock.
     pub fn advance(&mut self) -> Result<Progress, Error> {
         self.active()?;
-        match self.advance_inner() {
+        let result = (|| {
+            let permit = if let Some(route) = &self.eye {
+                let Some(permit) = route.admit().map_err(Error::Eye)? else {
+                    return Ok(Progress::Waiting);
+                };
+                if let Some(frame) = route.take().map_err(Error::Eye)? {
+                    self.timeline
+                        .push_video(
+                            self.generation,
+                            frame,
+                            audio::native_now().map_err(Error::Audio)?,
+                        )
+                        .map_err(Error::Timeline)?;
+                }
+                permit.check().map_err(Error::Eye)?;
+                Some(permit)
+            } else {
+                None
+            };
+            let result = self.advance_inner();
+            drop(permit); // Never report owner cleanup while its admission lives.
+            result
+        })();
+        match result {
             Ok(p) => Ok(p),
             Err(e) => Err(self.fail(e)),
         }
@@ -308,6 +362,9 @@ impl JointOutput {
             // Native commit re-observes the device clock/guard and can still
             // fail after video admission. Such a partial outcome stops BOTH.
             let mut pending = self.pending.take().unwrap();
+            if let Some(route) = &self.eye {
+                route.check().map_err(Error::Eye)?;
+            }
             self.audio
                 .commit(
                     pending.ticket.take().unwrap(),
@@ -327,6 +384,9 @@ impl JointOutput {
         }
         if self.phase == Phase::WaitingVideo {
             let start = audio::native_now().map_err(Error::Audio)?.qpc_100ns();
+            if let Some(route) = &self.eye {
+                route.check().map_err(Error::Eye)?;
+            }
             self.audio.start(true).map_err(Error::Audio)?;
             self.prime_deadline = Some(start.saturating_add(200_000 - GUARD));
             self.phase = Phase::PrimingAudio;
@@ -391,11 +451,16 @@ impl JointOutput {
                 stop.as_raw_handle(),
                 self.video.event().map_err(Error::Video)?.as_raw_handle(),
                 std::ptr::null_mut(),
+                std::ptr::null_mut(),
             ];
             let mut count = 2;
             if let Some(event) = self.audio.ready_event().map_err(Error::Audio)? {
                 handles[2] = event.as_raw_handle();
                 count = 3;
+            }
+            if let Some(route) = &self.eye {
+                handles[count as usize] = route.event().as_raw_handle();
+                count += 1;
             }
             let result = unsafe { WaitForMultipleObjects(count, handles.as_ptr(), 0, 5) };
             if result == WAIT_OBJECT_0 {
@@ -431,6 +496,9 @@ impl JointOutput {
         }
         // Fast video revocation before cleanup. No device wait while timeline
         // is locked; preserve all three results instead of returning early.
+        if let Some(route) = &self.eye {
+            route.request_stop();
+        }
         self.video.cancel();
         let timeline = self.timeline.stop();
         self.pending = None;
@@ -438,13 +506,21 @@ impl JointOutput {
         self.prime_deadline = None;
         let audio = self.audio.stop();
         let video = self.video.stop();
+        let eye = self.eye.as_mut().map(EyeRoute::retire);
         let result = Cleanup {
             timeline,
             audio,
             video,
+            eye,
             restart_blocked: true,
         };
         self.cleanup = Some(result);
+        if let Some(Err(e)) = eye {
+            if self.failure.is_none() {
+                self.failure = Some(Error::Eye(e));
+            }
+            self.phase = Phase::Fault;
+        }
         if self.failure.is_none() {
             self.phase = Phase::Stopped;
         }

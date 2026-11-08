@@ -124,19 +124,47 @@ impl Reader {
         }
     }
     pub(crate) fn sample(&mut self, id: u64, capture: u64, presentation: u64) {
-        let mut bytes = vec![b'T'];
+        self.sample_kind(b'T', id, capture, presentation);
+    }
+    pub(crate) fn sample_eye(&mut self, id: u64, capture: u64, presentation: u64) {
+        self.sample_kind(b'E', id, capture, presentation);
+    }
+    fn sample_kind(&mut self, kind: u8, id: u64, capture: u64, presentation: u64) {
+        let mut bytes = vec![kind];
         bytes.extend_from_slice(&id.to_le_bytes());
         bytes.extend_from_slice(&capture.to_le_bytes());
         bytes.extend_from_slice(&presentation.to_le_bytes());
         bytes.extend_from_slice(&u32::from(id == 0).to_le_bytes());
         bytes.extend_from_slice(&0u32.to_le_bytes());
         self.input.write_all(&bytes).unwrap();
-        self.received(b'T');
+        self.received(kind);
     }
     pub(crate) fn neutral_after_stop(&mut self) {
         self.input.write_all(b"N").unwrap();
         self.received(b'N');
     }
+}
+
+#[test]
+fn timed_cross_thread_cancel_is_inert_after_owner_and_library_teardown() {
+    let mut owner = NativeTimedVideo::load(pin()).unwrap();
+    let endpoint = owner.open(19, true).unwrap();
+    let token = owner.cancellation();
+    let (cancelled, observed) = std::sync::mpsc::channel();
+    let (release, resume) = std::sync::mpsc::channel();
+    let other = thread::spawn(move || {
+        token.cancel();
+        cancelled.send(()).unwrap();
+        resume.recv().unwrap();
+        token.cancel();
+    });
+    observed.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(owner.status().unwrap().phase, Phase::Stopping);
+    owner.stop().unwrap();
+    drop(endpoint);
+    drop(owner);
+    release.send(()).unwrap();
+    other.join().unwrap();
 }
 fn simple_window<'a>(
     generation: u64,
