@@ -63,6 +63,15 @@ impl capture::Device for MemoryCapture {
         if self.mode == 3 {
             return Err(capture::Error::Native(-4));
         }
+        if self.mode == 5 {
+            panic!("synthetic capture unwind");
+        }
+        if self.mode == 6 {
+            if let Some((notice, gate)) = self.finish_gate.take() {
+                notice.send(()).unwrap();
+                gate.recv_timeout(Duration::from_secs(3)).unwrap();
+            }
+        }
         let p = self.packets.try_recv().ok();
         if let Some(p) = &p {
             self.frames += p.samples.len() as u64;
@@ -229,6 +238,70 @@ fn media_host_capture_permission_unknown_source_and_three_unexposed_lifetimes() 
         }
         assert!(!host.snapshot().busy && !path.exists());
     }
+}
+
+#[test]
+fn media_host_capture_unwind_destroys_input_and_never_claims_clean_idle() {
+    let (source, reader) = SourceRun::new(Arc::new(Controller::default()));
+    let host = Host::default();
+    let path = root().join("output.barrier");
+    let (capture, _send, calls) = capture_launch(5, None);
+    let input = host
+        .start_capture_tapped(
+            config(path.clone()),
+            capture,
+            source.state.clone(),
+            reader,
+            |_| {},
+        )
+        .unwrap();
+    assert!(!host.wait_idle(Duration::from_secs(10)));
+    let s = host.snapshot();
+    assert!(!s.busy && s.cleanup_uncertain);
+    assert_eq!(s.failure, Some(HostError::Thread));
+    assert!(s.capture_cleanup.unwrap().failure().is_none());
+    let trace = calls.lock().unwrap();
+    assert_eq!(trace.last(), Some(&"drop"));
+    assert_eq!(trace.iter().filter(|s| **s == "finish").count(), 1);
+    drop(trace);
+    drop(input);
+    drop(host);
+    fenced(path);
+}
+
+#[test]
+fn media_host_capture_packet_returning_after_stop_never_reaches_timeline() {
+    let (source, reader) = SourceRun::new(Arc::new(Controller::default()));
+    let host = Host::default();
+    let path = root().join("output.barrier");
+    let (notice, entered) = mpsc::channel();
+    let (release, gate) = mpsc::channel();
+    let (capture, send, _calls) = capture_launch(6, Some((notice, gate)));
+    let input = host
+        .start_capture_tapped(
+            config(path.clone()),
+            capture,
+            source.state.clone(),
+            reader,
+            |_| {},
+        )
+        .unwrap();
+    let mut mf = v::Reader::connect(input.take_endpoint(Duration::from_secs(3)).unwrap());
+    entered.recv_timeout(Duration::from_secs(3)).unwrap();
+    send.send(pcm(v::now().qpc_100ns() - 100_000, 0)).unwrap();
+    host.request_stop();
+    assert!(!host.wait_idle(Duration::from_millis(20)));
+    release.send(()).unwrap();
+    assert!(host.wait_idle(Duration::from_secs(10)));
+    let s = host.snapshot();
+    assert_eq!(s.capture.unwrap().delivered_frames, 480);
+    assert_eq!(s.admitted_packets, 0);
+    assert_eq!(s.output.unwrap().committed_windows, 0);
+    assert_eq!(s.queued_frames, 0);
+    mf.neutral_after_stop();
+    drop(input);
+    drop(host);
+    fenced(path);
 }
 
 #[test]
