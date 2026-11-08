@@ -14,19 +14,25 @@ consumers. Main-window integration and current-chain installed FrameServer check
 remain pending. There is no physical-camera enumeration/opening, audio, external network,
 GPU loading, automatic download or registry modification in this DLL.
 
-`tingxian-camera-input` is a separate optional static input component. It has an
-explicit selected-hardware/intent gate, asynchronous MF reads, original device
-QPC timestamps, a one-frame slot, and distinct input revocation/cleanup results.
-It is not linked into the output DLL or application start flow. Its CTest uses
-memory-created samples and denied/invalid starts only; it never opens a camera.
-See [input validation and support limits](../../docs/eye-camera-input-validation-2026-11-08.md).
+The separate optional input library `tingxian-camera-input` also exposes ABI 1
+through `TingXianCameraInput.dll`. It has an explicit selected-hardware/intent
+gate, asynchronous MF reads, original device QPC timestamps, a one-frame slot,
+and distinct input revocation/cleanup results. Its Rust binding feeds the same
+authorized eye stream as `Host::start_media`, which owns both native inputs and
+the joint outputs on one thread. It is not linked into the output DLL or wired
+to application start. The input DLL is not yet included in application packaging.
+Callback code is pinned until process exit so final callback Release can safely
+return; device/frame cleanup remains mandatory and separately reported.
+Tests use memory samples, an SDK-free worker and denied/invalid physical starts;
+they never open a camera. See [support limits](../../docs/eye-camera-input-validation-2026-11-08.md)
+and [host integration evidence](../../docs/eye-camera-host-validation-2026-11-08.md).
 
 ## Frame and lifecycle behavior
 
 The following describes v1. [Explicit scheduled v2](TIMING.md) adds separate QPC
 capture/presentation times and a four-slot queue for the shared AV route. The
-legacy caller is unchanged; the joint AV owner and installed meeting path remain
-pending.
+legacy caller is unchanged. The joint AV owner has synthetic regression evidence;
+the installed meeting path remains pending.
 
 - Default is a neutral NV12 frame (Y=32, UV=128), including after restart.
 - `BeginVideo` creates a fresh generation. `SubmitNv12` requires that generation,
