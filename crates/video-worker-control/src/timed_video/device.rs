@@ -1,5 +1,6 @@
 //! Native virtual camera lifetime, separate from timed frame admission.
 //! The caller owns an MTA lane; no UI command, restored start or registration.
+pub mod host;
 use super::{Error, Library, PinnedTimedLibrary};
 use crate::joint::host::Input;
 use std::{

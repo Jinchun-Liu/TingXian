@@ -140,3 +140,10 @@ This is a native integration API, **not** a main-window start command or proof
 that the installed COM media source is trusted/compatible. Full scheduling,
 source binary trust, device compatibility and receiver drain remain gates.
 CI uses injected backends and inert/rejected production-DLL calls only.
+
+The dedicated Rust `timed_video::device::host::Host` now owns that MTA and an
+independent cancellation monitor. It follows the exact media Input/source lease;
+slow Windows Start cannot block the media lane. Failed close retains the live
+apartment and native owner until a repeated explicit stop requests cleanup retry.
+Main-window stop, suspend/quiesce/resume and inspection admission include this
+owner. No UI media start is enabled yet; see the AV-E7c acceptance record.

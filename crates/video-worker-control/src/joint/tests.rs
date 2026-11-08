@@ -18,8 +18,8 @@ static NEXT: AtomicU64 = AtomicU64::new(1);
 #[path = "eye_tests.rs"]
 mod eye_tests;
 #[path = "host_tests.rs"]
-mod host_tests;
-fn root() -> PathBuf {
+pub(crate) mod host_tests;
+pub(crate) fn root() -> PathBuf {
     let root = PathBuf::from(
         std::env::var_os("TINGXIAN_VIDEO_TEST_ROOT").expect("isolated test directory"),
     )
@@ -31,7 +31,7 @@ fn root() -> PathBuf {
     fs::create_dir_all(&root).unwrap();
     root
 }
-fn config(path: PathBuf) -> Config {
+pub(crate) fn config(path: PathBuf) -> Config {
     Config {
         audio: a::pin(true),
         video: v::pin(),

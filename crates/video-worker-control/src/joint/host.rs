@@ -171,6 +171,10 @@ pub struct Input {
     shared: Arc<Shared>,
 }
 impl Input {
+    /// Exact lease only; observers cannot stop or inspect a later host generation.
+    pub(crate) fn is_closed(&self) -> bool {
+        self.shared.input_closed()
+    }
     pub fn generation(&self) -> u64 {
         self.shared.generation
     }

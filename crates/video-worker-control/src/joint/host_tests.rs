@@ -438,13 +438,13 @@ fn media_host_source_stop_revokes_unclaimed_endpoint_and_ingress_before_owner_ti
     fenced(path);
 }
 
-struct SourceRun {
-    state: Arc<Controller>,
+pub(crate) struct SourceRun {
+    pub(crate) state: Arc<Controller>,
     feed: QpcStreamFeed,
     run: Option<thread::JoinHandle<crate::Snapshot>>,
 }
 impl SourceRun {
-    fn new(state: Arc<Controller>) -> (Self, NativeCorrections) {
+    pub(crate) fn new(state: Arc<Controller>) -> (Self, NativeCorrections) {
         let generation = state.snapshot().generation;
         let (run, feed) = state
             .begin_qpc_stream_if_current(

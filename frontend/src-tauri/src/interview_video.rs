@@ -4,7 +4,9 @@ use tauri::{Manager, State, WebviewWindow};
 use video_worker_control::{BundledWorker, Controller, Snapshot};
 
 #[derive(Default)]
-pub struct VideoState(pub Arc<Controller>, #[cfg(windows)] pub Arc<video_worker_control::joint::host::Host>);
+pub struct VideoState(pub Arc<Controller>,
+    #[cfg(windows)] pub Arc<video_worker_control::joint::host::Host>,
+    #[cfg(windows)] pub Arc<video_worker_control::timed_video::device::host::Host>);
 fn owner<R:tauri::Runtime>(window:&WebviewWindow<R>)->Result<(),String> {
     if window.label()=="main" {Ok(())} else {Err("仅主窗口可以管理视频".into())}
 }
@@ -38,7 +40,7 @@ pub async fn video_inspect<R:tauri::Runtime>(window:WebviewWindow<R>,state:State
     owner(&window)?;
     crate::interview_exit::ensure_not_exiting(window.app_handle())?;
     #[cfg(windows)]
-    if !state.1.wait_idle(Duration::ZERO) {return Err("媒体输出清理尚未确认，请先停止并保留诊断".into());}
+    if !state.1.wait_idle(Duration::ZERO) || !state.2.wait_idle(Duration::ZERO) {return Err("媒体输出清理尚未确认，请先停止并保留诊断".into());}
     let root=window.app_handle().path().resource_dir().map_err(|_|"无法读取应用组件目录")?;
     let Some(run)=state.0.begin_if_current(pinned_worker(root),expected_generation).map_err(str::to_owned)? else {return Ok(state.0.snapshot());};
     tauri::async_runtime::spawn_blocking(move ||run.execute()).await.map_err(|_|"视频检查意外退出，请重新检查".into())
@@ -47,13 +49,19 @@ async fn wait_idle(state:&VideoState)->Result<(),String> {
     let controller=state.0.clone();
     #[cfg(windows)]
     let media=state.1.clone();
+    #[cfg(windows)]
+    let device=state.2.clone();
     let done=tauri::async_runtime::spawn_blocking(move ||{
         #[cfg(windows)]
         let media_done=media.wait_idle(Duration::from_secs(12));
+        #[cfg(windows)]
+        let device_done=device.wait_idle(Duration::from_secs(7));
         #[cfg(not(windows))]
         let media_done=true;
+        #[cfg(not(windows))]
+        let device_done=true;
         let worker_done=controller.wait_idle(Duration::from_secs(7));
-        media_done && worker_done
+        media_done && device_done && worker_done
     })
         .await.map_err(|_|"视频清理任务异常，尚未确认退出")?;
     if done {Ok(())} else {Err("媒体线程或工作进程清理尚未确认，请保留诊断并重试".into())}
@@ -62,13 +70,13 @@ async fn wait_idle(state:&VideoState)->Result<(),String> {
 pub async fn video_stop<R:tauri::Runtime>(window:WebviewWindow<R>,state:State<'_,VideoState>)->Result<Snapshot,String> {
     owner(&window)?;
     #[cfg(windows)]
-    state.1.request_stop();
+    {state.2.request_stop();state.1.request_stop();}
     state.0.request_stop();wait_idle(&state).await?;Ok(state.0.snapshot())
 }
 pub(crate) fn suspend<R:tauri::Runtime>(app:&tauri::AppHandle<R>) {
     if let Some(state)=app.try_state::<VideoState>() {
         #[cfg(windows)]
-        state.1.suspend();
+        {state.2.suspend();state.1.suspend();}
         state.0.suspend();
     }
 }
@@ -76,13 +84,13 @@ pub(crate) fn resume<R:tauri::Runtime>(app:&tauri::AppHandle<R>) {
     if let Some(state)=app.try_state::<VideoState>() {
         state.0.resume();
         #[cfg(windows)]
-        state.1.resume();
+        {state.1.resume();state.2.resume();}
     }
 }
 pub(crate) async fn quiesce<R:tauri::Runtime>(app:&tauri::AppHandle<R>)->Result<(),String> {
     if let Some(state)=app.try_state::<VideoState>() {
         #[cfg(windows)]
-        state.1.suspend();
+        {state.2.suspend();state.1.suspend();}
         state.0.suspend();wait_idle(&state).await?;
     }
     Ok(())
@@ -143,11 +151,15 @@ mod tests {
         assert_eq!(app.state::<VideoState>().0.snapshot().generation,0,"component read started an eye job");
         #[cfg(windows)]
         assert_eq!(app.state::<VideoState>().1.snapshot().generation,0,"display changed media authority");
+        #[cfg(windows)]
+        assert_eq!(app.state::<VideoState>().2.snapshot().generation,0,"display changed device authority");
         let initial:Value=invoke(&main,"video_status",json!({})).expect("main status must reach the handler").deserialize().unwrap();
         assert_eq!(initial["phase"],"off");
         crate::interview_exit::request_exit(app.handle(),false);
         #[cfg(windows)]
         assert!(app.state::<VideoState>().1.snapshot().suspended);
+        #[cfg(windows)]
+        assert!(app.state::<VideoState>().2.snapshot().suspended);
         assert!(invoke(&main,"video_inspect",json!({"expectedGeneration":0})).is_err(),"inspection admitted during quit");
         let request:Value=invoke(&main,"interview_exit_status",json!({})).unwrap().deserialize().unwrap();
         invoke(&main,"interview_exit_cancel",json!({"requestId":request["request_id"]})).unwrap();
@@ -159,8 +171,14 @@ mod tests {
             assert!(!media.snapshot().suspended && !media.snapshot().busy);
             assert!(media.snapshot().output.is_none() && media.wait_idle(Duration::ZERO));
             assert_eq!(media.snapshot().generation,1,"cancel must not restore old media intent");
+            let device=&app.state::<VideoState>().2;
+            assert!(!device.snapshot().suspended && !device.snapshot().busy);
+            assert!(device.snapshot().native.is_none() && device.wait_idle(Duration::ZERO));
+            assert_eq!(device.snapshot().generation,1,"cancel must not restore device intent");
         }
         invoke(&main,"video_stop",json!({})).unwrap();
+        #[cfg(windows)]
+        assert_eq!(app.state::<VideoState>().2.snapshot().generation,2,"explicit stop must reach the device owner");
         let stopped=app.state::<VideoState>().0.snapshot().generation;
         assert_eq!(invoke(&main,"video_inspect",json!({"expectedGeneration":stopped-1})).err(),Some(json!("视频状态已变化，请重新检查")),"stale webview launch must reach generation admission");
         assert_eq!(app.state::<VideoState>().0.snapshot().generation,stopped);
