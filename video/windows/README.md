@@ -14,6 +14,13 @@ consumers. Main-window integration and current-chain installed FrameServer check
 remain pending. There is no physical-camera enumeration/opening, audio, external network,
 GPU loading, automatic download or registry modification in this DLL.
 
+`tingxian-camera-input` is a separate optional static input component. It has an
+explicit selected-hardware/intent gate, asynchronous MF reads, original device
+QPC timestamps, a one-frame slot, and distinct input revocation/cleanup results.
+It is not linked into the output DLL or application start flow. Its CTest uses
+memory-created samples and denied/invalid starts only; it never opens a camera.
+See [input validation and support limits](../../docs/eye-camera-input-validation-2026-11-08.md).
+
 ## Frame and lifecycle behavior
 
 The following describes v1. [Explicit scheduled v2](TIMING.md) adds separate QPC
