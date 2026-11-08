@@ -23,6 +23,8 @@ if ($LASTEXITCODE) { throw 'Installed runtime hashes differ' }
 $savedPath = $env:PATH
 try {
     $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$location"
+    & "$PSScriptRoot/check-windows-media-bundle.ps1" -InstallDirectory $location -EvidenceDirectory (Join-Path $env:RUNNER_TEMP 'media-bundle-install')
+    if ($LASTEXITCODE) { throw 'Installed native media bundle verification failed' }
     $video = Start-Process -FilePath $exe -ArgumentList '--video-worker-check' -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput (Join-Path $env:RUNNER_TEMP 'tingxian-video-check.stdout') -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'tingxian-video-check.stderr')
     if ($video.ExitCode -ne 0) { Get-Content (Join-Path $env:RUNNER_TEMP 'tingxian-video-check.stderr'); throw 'Installed video inspection worker check failed' }
     # Disposable install only: a changed EXE plus matching mutable text digest

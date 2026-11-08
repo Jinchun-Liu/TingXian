@@ -612,6 +612,7 @@ pub fn run() {
             interview_video::video_status,
             interview_video::video_inspect,
             interview_video::video_stop,
+            interview_video::video_components,
             interview_windows::interview_presentation_publish,
             interview_windows::interview_presentation_get,
             interview_windows::interview_presentation_action,

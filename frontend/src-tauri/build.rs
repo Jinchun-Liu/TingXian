@@ -2,9 +2,12 @@
 mod ffmpeg;
 #[path = "build/onnxruntime.rs"]
 mod onnxruntime;
+#[path = "../../crates/video-worker-control/src/bundle_contract.rs"]
+mod bundle_contract;
 
 fn main() {
     pin_video_worker();
+    pin_media_bundle();
     // GPU Acceleration Detection and Build Guidance
     detect_and_report_gpu_capabilities();
 
@@ -23,6 +26,31 @@ fn main() {
     onnxruntime::ensure_onnxruntime_runtime();
 
     tauri_build::build()
+}
+
+fn pin_media_bundle() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref()!=Ok("windows") {return;}
+    use sha2::{Digest,Sha256};
+    let root=std::path::Path::new("binaries/video-worker/media");
+    let manifest=root.join(bundle_contract::MANIFEST);
+    println!("cargo:rerun-if-changed={}",root.display());
+    if !manifest.is_file() {
+        assert_ne!(std::env::var("PROFILE").as_deref(),Ok("release"),"Stage native media adapters before release: scripts/stage-windows-video-worker.ps1");
+        println!("cargo:rustc-env=TINGXIAN_MEDIA_MANIFEST_SHA256=");return;
+    }
+    let text=std::fs::read_to_string(&manifest).expect("Cannot read staged media manifest");
+    let pins=bundle_contract::Pins::parse(&text).expect("Invalid staged media manifest");
+    for entry in std::fs::read_dir(root).expect("Cannot list staged media components") {
+        let entry=entry.expect("Cannot inspect staged media entry");
+        assert!(entry.file_name().to_str().is_some_and(bundle_contract::allowed_name),"Unreviewed media stage entry");
+        assert!(entry.file_type().expect("Cannot inspect media entry type").is_file(),"Media component must be a regular file");
+    }
+    for (i,name) in bundle_contract::FILES.iter().enumerate() {
+        let bytes=std::fs::read(root.join(name)).expect("Staged media component missing");
+        assert!(bundle_contract::x64_dll(&bytes),"Staged media component must be an x64 DLL: {name}");
+        assert_eq!(format!("{:x}",Sha256::digest(&bytes)),pins.0[i],"Staged media component digest differs: {name}");
+    }
+    println!("cargo:rustc-env=TINGXIAN_MEDIA_MANIFEST_SHA256={:x}",Sha256::digest(text.as_bytes()));
 }
 
 fn pin_video_worker() {

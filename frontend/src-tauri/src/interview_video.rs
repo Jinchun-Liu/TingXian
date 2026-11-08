@@ -14,6 +14,21 @@ fn pinned_worker(root:std::path::PathBuf)->Option<BundledWorker> {
         path:root.join("video-worker").join("tingxian-video-worker.exe"),sha256:hash.to_string()
     })
 }
+// File inspection only. No caller-supplied path, digest, DLL load or device access.
+#[tauri::command]
+pub async fn video_components<R:tauri::Runtime>(window:WebviewWindow<R>)->Result<serde_json::Value,String> {
+    owner(&window)?;
+    #[cfg(windows)] {
+        let root=window.app_handle().path().resource_dir().map_err(|_|"无法读取应用组件目录")?;
+        tauri::async_runtime::spawn_blocking(move || {
+            serde_json::to_value(video_worker_control::bundle::inspect(&root.join("video-worker/media"),option_env!("TINGXIAN_MEDIA_MANIFEST_SHA256")))
+                .map_err(|_|"无法读取媒体组件状态".to_owned())
+        }).await.map_err(|_|"媒体组件检查意外退出".to_owned())?
+    }
+    #[cfg(not(windows))] {
+        Ok(serde_json::json!({"state":"unsupported_platform","verified_components":0,"media_started":false}))
+    }
+}
 #[tauri::command]
 pub fn video_status<R:tauri::Runtime>(window:WebviewWindow<R>,state:State<'_,VideoState>)->Result<Snapshot,String> {
     owner(&window)?;Ok(state.0.snapshot())
@@ -88,6 +103,19 @@ pub fn installation_check()->Result<(),String> {
     Ok(())
 }
 
+#[cfg(windows)]
+pub fn media_installation_check()->Result<(),String> {
+    use video_worker_control::bundle::{inspect,State};
+    let exe=std::env::current_exe().map_err(|_|"无法定位安装目录")?;
+    let root=exe.parent().ok_or("安装目录无效")?;
+    let report=inspect(&root.join("video-worker/media"),option_env!("TINGXIAN_MEDIA_MANIFEST_SHA256"));
+    println!("{}",serde_json::to_string(&report).map_err(|_|"组件报告序列化失败")?);
+    if report.state!=State::IntegrityVerified || report.verified_components!=4 || report.media_started {
+        return Err(format!("Native media integrity check failed: {:?}",report.state));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,7 +123,7 @@ mod tests {
     #[test]
     fn video_ipc_is_main_only_and_exit_cancellation_does_not_restart_work() {
         let app=tauri::test::mock_builder().manage(VideoState::default()).manage(crate::interview_exit::ExitState::default())
-            .invoke_handler(tauri::generate_handler![video_status,video_inspect,video_stop,
+            .invoke_handler(tauri::generate_handler![video_status,video_inspect,video_stop,video_components,
                 crate::interview_exit::interview_exit_status,crate::interview_exit::interview_exit_cancel])
             .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
         let main=tauri::WebviewWindowBuilder::new(&app,"main",Default::default()).build().unwrap();
@@ -104,11 +132,15 @@ mod tests {
             tauri::test::get_ipc_response(window,tauri::webview::InvokeRequest{cmd:cmd.into(),callback:tauri::ipc::CallbackFn(0),
                 error:tauri::ipc::CallbackFn(1),url:if cfg!(any(windows,target_os="android")){"http://tauri.localhost"}else{"tauri://localhost"}.parse().unwrap(),body:tauri::ipc::InvokeBody::Json(body),
                 headers:Default::default(),invoke_key:tauri::test::INVOKE_KEY.into()});
-        for cmd in ["video_status","video_inspect","video_stop"] {
+        for cmd in ["video_status","video_inspect","video_stop","video_components"] {
             let error=invoke(&display,cmd,json!({"expectedGeneration":0})).err().expect("display must be rejected");
             assert_eq!(error,json!("仅主窗口可以管理视频"),"wrong denial for {cmd}");
         }
         assert_eq!(app.state::<VideoState>().0.snapshot().generation,0,"display changed video state");
+        let components:Value=invoke(&main,"video_components",json!({})).expect("main component inspection failed").deserialize().unwrap();
+        assert_eq!(components["media_started"],false);
+        assert_eq!(components["verified_components"],if components["state"]=="integrity_verified" {4}else{0});
+        assert_eq!(app.state::<VideoState>().0.snapshot().generation,0,"component read started an eye job");
         #[cfg(windows)]
         assert_eq!(app.state::<VideoState>().1.snapshot().generation,0,"display changed media authority");
         let initial:Value=invoke(&main,"video_status",json!({})).expect("main status must reach the handler").deserialize().unwrap();

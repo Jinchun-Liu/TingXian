@@ -3,6 +3,9 @@
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::{Arc, Condvar, Mutex}, time::Duration};
 pub mod av_timeline;
+pub mod bundle_contract;
+#[cfg(windows)]
+pub mod bundle;
 #[cfg(windows)]
 pub mod audio;
 #[cfg(windows)]

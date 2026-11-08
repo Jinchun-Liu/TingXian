@@ -1,5 +1,11 @@
 # 听弦 Windows 测试版
 
+2026-11-08 后续源码构建新增 `video-worker/media/` 内的四个自有媒体适配 DLL；
+构建时验证清单并将摘要固定在应用中。`meetily.exe --video-components-check` 只读
+验证安装文件，不加载 DLL、不采集或注册设备。它不表示眼部模型或同步会议功能就绪，
+不改变原发布安装包的内容；SDK/模型、驱动及主窗启动仍单独交付。见
+[组件验收记录](../../docs/eye-media-bundle-validation-2026-11-08.md)。
+
 目标系统为 Windows 11 x64。0.7.0-beta.1 使用 CPU Whisper，普通问答不要求 NVIDIA 显卡。CUDA 和数字人暂未交付。真实会议、蓝牙与 USB 设备、无高端独显机器仍须按 `docs/windows-validation.md` 验收。
 
 ## 安装

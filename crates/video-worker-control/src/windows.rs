@@ -46,6 +46,19 @@ fn wide(value: &OsStr) -> Result<Vec<u16>, Reason> {
 // Keep the EXE open without write/delete sharing from hashing through process exit.
 // Directory leases prevent parent-path replacement during this interval too.
 pub(crate) struct Verified { _directories: Vec<File>, _file: File }
+impl Verified {
+    // Read the verified handle, never reopen a mutable pathname after hashing.
+    pub(crate) fn read_bounded(&self, limit: u64) -> Result<Vec<u8>, Reason> {
+        use std::io::{Seek, SeekFrom};
+        if regular(&self._file)? > limit { return Err(Reason::Integrity); }
+        let mut file = &self._file;
+        file.seek(SeekFrom::Start(0)).map_err(|_|Reason::Integrity)?;
+        let mut data = Vec::new();
+        file.take(limit + 1).read_to_end(&mut data).map_err(|_|Reason::Integrity)?;
+        if data.len() as u64 > limit { return Err(Reason::Integrity); }
+        Ok(data)
+    }
+}
 pub(crate) fn lock_parents(target: &std::path::Path) -> Result<Vec<File>, Reason> {
     if !target.is_absolute() { return Err(Reason::Integrity); }
     let mut path = std::path::PathBuf::new(); let mut directories = Vec::new();
