@@ -139,6 +139,9 @@ HRESULT enumerate_on_mta(std::vector<Endpoint>& endpoints) {
         hr = device->OpenPropertyStore(STGM_READ, &store);
         if (FAILED(hr)) return hr;
         e.name = property(store.Get(), PKEY_Device_FriendlyName);
+        Property form;
+        if (SUCCEEDED(store->GetValue(PKEY_AudioEndpoint_FormFactor, &form.value)) && form.value.vt == VT_UI4)
+            e.form_factor = form.value.ulVal;
         if (e.active) {
             const auto instance = connected_adapter(device.Get(), enumerator.Get());
             e.topology_resolved = !instance.empty();

@@ -15,6 +15,7 @@ struct Endpoint {
     Flow flow = Flow::render;
     bool active = false;
     bool topology_resolved = false;
+    uint32_t form_factor = UINT32_MAX; // Metadata only; unknown is never a microphone grant.
 };
 struct Pair { std::wstring render_id, capture_id; };
 // PnP identity, not friendly names. This does not certify driver signatures or

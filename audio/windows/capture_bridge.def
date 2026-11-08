@@ -1,0 +1,12 @@
+LIBRARY TingXianAudioCapture
+EXPORTS
+    TxCaptureAbi
+    TxCaptureCreate
+    TxCaptureInspect
+    TxCapturePrepare
+    TxCaptureStart
+    TxCaptureRead
+    TxCaptureStop
+    TxCaptureStatusRead
+    TxCaptureReadyEvent
+    TxCaptureDestroy

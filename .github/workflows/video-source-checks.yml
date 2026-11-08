@@ -90,6 +90,9 @@ jobs:
             ${{ runner.temp }}/audio-output-build/Release/TingXianAudioFixture.dll
             ${{ runner.temp }}/audio-output-build/Release/tingxian-audio-output-test.exe
             ${{ runner.temp }}/audio-output-build/Release/tingxian-audio-probe.exe
+            ${{ runner.temp }}/audio-output-build/Release/TingXianAudioCapture.dll
+            ${{ runner.temp }}/audio-output-build/Release/tingxian-audio-input-test.exe
+            ${{ runner.temp }}/audio-output-build/Release/tingxian-audio-input-probe.exe
             ${{ runner.temp }}/audio-output-build/Testing/Temporary/LastTest.log
           if-no-files-found: error
           retention-days: 14
