@@ -192,6 +192,36 @@ fn original_pcm_and_corrected_video_share_the_capture_window() {
     assert!(s.audio_frames <= MAX_AUDIO_FRAMES);
 }
 
+#[test]
+fn measured_first_window_lag_crossing_suppresses_video_and_voice_without_retiming() {
+    // Diagnostic CI 42463733676 measured a 455112 x 100 ns source/video gap.
+    // Another 6 ms of processing/setup crosses the fixed 50 ms lag limit even
+    // though the frame remains younger than the 250 ms absolute safety lease.
+    // Reproduce both cases deterministically, independent of runner wall time.
+    for (extra, expected) in [(0, true), (60_000, false)] {
+        let timeline = Timeline::default();
+        let g = timeline.begin(0, 7).unwrap();
+        let presentation = t(855_112 + extra);
+        for n in 0..9 {
+            timeline.push_audio(g, pcm(n * BLOCK as u64, t(n * 100_000)), presentation).unwrap();
+        }
+        timeline.push_video(g, frame(81, t(0), &pixels()), presentation).unwrap();
+        let ready = timeline.with_window(g, interval(g, 2_400, presentation), presentation, |view| {
+            assert_eq!(view.is_some(), expected, "available media must still obey the lag boundary");
+            if let Some(w) = view {
+                assert_eq!(w.video.capture, t(0), "original capture may not be refreshed");
+                assert_eq!(w.first_capture, t(455_112));
+                assert!(w.position_at(BLOCK - 1).is_some());
+            }
+            true
+        }).unwrap();
+        assert_eq!(ready, expected);
+        let s = timeline.snapshot();
+        assert_eq!(s.metrics.output_frames, if expected {480} else {0});
+        assert_eq!(s.metrics.silence_frames, if expected {0} else {480});
+    }
+}
+
 fn clock_time(sample: u64, ppm: i64) -> Time {
     Time(
         BASE + (u128::from(sample) * HNS_PER_SECOND as u128 * (1_000_000 + ppm) as u128

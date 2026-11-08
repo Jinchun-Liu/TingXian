@@ -197,7 +197,9 @@ fn camera_frame(generation: u64) -> camera::Frame {
     camera::Frame {
         generation,
         sequence: 81,
-        capture: Time::from_qpc_100ns(v::now().qpc_100ns() - 300_000),
+        // Timestamp at this synthetic capture, before IPC/processing. Do not
+        // invent 30 ms of input history in the nominal full-chain proof.
+        capture: v::now(),
         discontinuity: true,
         bgr,
     }
@@ -393,6 +395,15 @@ fn media_camera_to_actual_eye_worker_and_mf_keeps_original_qpc_and_voice() {
                     let until = Instant::now() + Duration::from_secs(3);
                     while owner.snapshot().eye.unwrap().received == 0 {
                         assert!(Instant::now() < until, "camera correction missing");
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    // The first output window presents after 20 ms of priming
+                    // and selects source time 40 ms earlier. For a fast worker,
+                    // allow the just-captured frame to belong to that first
+                    // source window. This is elapsed time, never a refreshed
+                    // timestamp; the production lag/age/deadline gates stay on.
+                    let captured = owner.snapshot().eye.unwrap().capture_qpc;
+                    while v::now().qpc_100ns() < captured + 250_000 {
                         thread::sleep(Duration::from_millis(1));
                     }
                     let now = v::now().qpc_100ns();
