@@ -62,6 +62,8 @@ jobs:
           path: |
             ${{ runner.temp }}/video-source-build/Release/TingXianVideoSource.dll
             ${{ runner.temp }}/video-source-build/Release/TingXianVideoOutput.dll
+            ${{ runner.temp }}/video-source-build/Release/tingxian-camera-input-test.exe
+            ${{ runner.temp }}/video-source-build/Release/tingxian-camera-input.lib
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-source-test.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-timing-test.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-timed-output-test.exe
