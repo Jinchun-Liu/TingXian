@@ -7,6 +7,29 @@ use sha2::{Digest, Sha256};
 use std::{fs, mem::size_of};
 
 const BASE: u64 = 100_000_000;
+#[test]
+fn synthetic_audio_device_readiness_wakes_once_on_start_and_each_clock_advance() {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::Threading::WaitForSingleObject;
+    let mut audio = NativeAudio::load(pin(true)).unwrap();
+    assert!(audio.ready_event().unwrap().is_none());
+    audio.prepare(&pair(), 2, 1).unwrap();
+    let wait = |audio: &NativeAudio| unsafe {
+        WaitForSingleObject(audio.ready_event().unwrap().unwrap().as_raw_handle(), 0)
+    };
+    assert_eq!(wait(&audio), WAIT_TIMEOUT);
+    audio.start(true).unwrap();
+    assert_eq!(wait(&audio), WAIT_OBJECT_0);
+    assert_eq!(wait(&audio), WAIT_TIMEOUT);
+    step(&audio, 96, 0);
+    assert_eq!(wait(&audio), WAIT_OBJECT_0);
+    assert_eq!(wait(&audio), WAIT_TIMEOUT);
+    step(&audio, 0, 0); // No device progress must not manufacture readiness.
+    assert_eq!(wait(&audio), WAIT_TIMEOUT);
+    assert_eq!(audio.status().unwrap().submitted_frames, 960);
+    audio.stop().unwrap();
+    assert!(matches!(audio.ready_event(), Err(Error::Off)));
+}
 fn time(offset: u64) -> Time {
     Time::from_qpc_100ns(BASE + offset)
 }

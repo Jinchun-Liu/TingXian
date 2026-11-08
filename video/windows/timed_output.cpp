@@ -135,7 +135,9 @@ void TimedPipeOutput::run() noexcept {
     if(!revoked_) {
         revoked_=true;status_.phase=TimedOutputPhase::fault;status_.error=FAILED(hr)?hr:E_UNEXPECTED;
         if(status_.pending && !receipt_) receipt_=TimedReceipt{2,Admission::unknown,status_.generation,status_.serial,status_.error,0};
-    } else if(status_.phase!=TimedOutputPhase::fault) status_.phase=TimedOutputPhase::stopped;
+    // Payload clearance is not owner-thread retirement: sender_ is still
+    // joinable here. Only stop(), after join, may publish stopped.
+    } else if(status_.phase!=TimedOutputPhase::fault) status_.phase=TimedOutputPhase::stopping;
     notify();
 }
 }

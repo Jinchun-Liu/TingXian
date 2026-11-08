@@ -57,6 +57,16 @@ void run(){
         pass("idle/explicit open and accept cancellation without a device");
     }
     {
+        Owner o; o.open(); TxTimedCancel(o.raw);
+        o.wait([&]{ return o.status().local_clear != 0; });
+        expect(o.status().phase == TimedOutputPhase::stopping,"sender claimed owner retirement before join");
+        TimedTicket rejected;
+        expect(FAILED(TxTimedReserve(o.raw,1,&rejected,sizeof(rejected))),"cancelled sender admitted new output");
+        check(TxTimedStop(o.raw),"owner join after sender clearance");
+        expect(o.status().phase == TimedOutputPhase::stopped && o.status().local_clear,"joined sender did not settle");
+        pass("cleared sender stays stopping until owner joins it");
+    }
+    {
         Owner o;o.open();Peer peer(o);auto t=o.reserve();TimedTicket second;
         expect(TxTimedReserve(o.raw,1,&second,sizeof(second))==S_FALSE,"second reservation accepted");
         HRESULT wrong=S_OK;std::thread thread([&]{wrong=TxTimedReserve(o.raw,1,&second,sizeof(second));});thread.join();

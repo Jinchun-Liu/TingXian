@@ -5,15 +5,24 @@ using namespace tingxian::audio;
 namespace {
 class Fixture final : public Backend {
 public:
+    HANDLE ready = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    bool initialized = false;
+    ~Fixture() override { if (ready) CloseHandle(ready); }
+    HANDLE ready_event() const noexcept override { return initialized ? ready : nullptr; }
     Format format{48000, 2, 1920, 10000000};
     Snapshot now{0, 0, 100000000};
     std::array<float, 1920> last{};
     UINT32 count = 0, failure = 0;
     HRESULT prepare(const Pair&, UINT32 channels, Format& out) noexcept override {
+        if (!ready) return E_OUTOFMEMORY;
         if (failure == 7) return E_FAIL; // Failure after prepare may have acquired resources.
+        ResetEvent(ready); initialized = true;
         format.channels = channels; out = format; return S_OK;
     }
-    HRESULT start() noexcept override { return now.padding == 960 ? S_OK : E_UNEXPECTED; }
+    HRESULT start() noexcept override {
+        if (now.padding != 960) return E_UNEXPECTED;
+        SetEvent(ready); return S_OK;
+    }
     HRESULT snapshot(Snapshot& out) noexcept override {
         if (failure == 1) return HRESULT_FROM_WIN32(ERROR_DEVICE_NOT_CONNECTED);
         out = now; return S_OK;
@@ -35,6 +44,8 @@ public:
         c.client_reset = SUCCEEDED(c.stop_error) && SUCCEEDED(c.reset_error);
         c.external_drain_verified = c.client_reset && failure != 5;
         if (c.client_reset) { last.fill(0); count = 0; now = {}; }
+        if (ready) ResetEvent(ready);
+        initialized = false;
         return c;
     }
 };
@@ -52,6 +63,10 @@ HRESULT fixture_step(Backend& backend, UINT32 consumed, UINT32 failure) noexcept
     f.now.position += ticks; f.now.qpc_100ns += ticks;
     f.now.padding -= std::min(f.now.padding, consumed);
     f.failure = failure;
+    // Mirror production event-driven readiness when the synthetic device clock
+    // advances. A missing event made host tests depend on a 5ms polling timeout
+    // despite their 18ms bootstrap lease; do not relax the production deadline.
+    if (consumed || failure) SetEvent(f.ready);
     return S_OK;
 }
 HRESULT fixture_read(Backend& backend, float* out, UINT32 capacity, UINT32* samples) noexcept {

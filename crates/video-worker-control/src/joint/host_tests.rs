@@ -312,7 +312,6 @@ fn media_host_capture_delivers_unsplit_original_voice_and_waits_for_capture_dest
     let (cleanup, cleanup_ready) = mpsc::channel();
     let (finish, finish_gate) = mpsc::channel();
     let (capture, send, calls) = capture_launch(-1, Some((cleanup, finish_gate)));
-    let (anchor, anchored) = mpsc::channel();
     let (resume, ready) = mpsc::channel();
     let (proof, proven) = mpsc::channel();
     let mut base = None;
@@ -335,8 +334,13 @@ fn media_host_capture_delivers_unsplit_original_voice_and_waits_for_capture_dest
                     let now = v::now().qpc_100ns();
                     a::anchor(&owner.audio, now);
                     base = Some(now);
-                    anchor.send(now).unwrap();
-                    ready.recv_timeout(Duration::from_secs(2)).unwrap();
+                    // Seed synthetic input on this lane immediately after its
+                    // clock anchor; a main-thread round trip is not device time.
+                    let mut first = pcm(now - 1_100_000, 0);
+                    first.samples.resize(4800, 0.2);
+                    first.flags.discontinuity = true;
+                    send.send(first).unwrap();
+                    send.send(pcm(now - 100_000, 10)).unwrap();
                 } else {
                     let target = (v::now().qpc_100ns() - base.unwrap()) * 48000 / 10_000_000;
                     let delta = target.saturating_sub(consumed);
@@ -359,19 +363,11 @@ fn media_host_capture_delivers_unsplit_original_voice_and_waits_for_capture_dest
         )
         .unwrap();
     let mut mf = v::Reader::connect(input.take_endpoint(Duration::from_secs(3)).unwrap());
-    let capture_time = source.frame(81);
-    let base = anchored.recv_timeout(Duration::from_secs(3)).unwrap();
     assert_eq!(
-        input.submit(input.generation(), pcm(base, 0)),
+        input.submit(input.generation(), pcm(v::now().qpc_100ns(), 0)),
         Err(HostError::Source)
     );
-    let mut first = pcm(base - 1_100_000, 0);
-    first.samples.resize(4800, 0.2);
-    first.flags.discontinuity = true;
-    let second = pcm(base - 100_000, 10);
-    send.send(first).unwrap();
-    send.send(second).unwrap();
-    resume.send(()).unwrap();
+    let capture_time = source.frame(81);
     let (pts, values) = proven.recv_timeout(Duration::from_secs(3)).unwrap();
     assert_eq!(values.len(), 960);
     assert!(values.iter().all(|v| (*v - 0.2).abs() < 0.00001));
@@ -565,7 +561,7 @@ fn media_host_owned_thread_delivers_pcm_and_mf_then_waits_for_actual_retirement(
     let proof = Arc::new(Mutex::new((0u64, Vec::<f32>::new())));
     let capture_proof = proof.clone();
     let (committed, noticed) = mpsc::channel();
-    let (anchored, anchor_ready) = mpsc::channel();
+    let (authority, input_ready) = mpsc::sync_channel::<Arc<crate::joint::host::Input>>(1);
     let (release, resume) = mpsc::channel();
     let mut anchor = None;
     let mut consumed = 0u64;
@@ -588,12 +584,18 @@ fn media_host_owned_thread_delivers_pcm_and_mf_then_waits_for_actual_retirement(
                         );
                         thread::sleep(Duration::from_millis(1));
                     }
+                    let ingress = input_ready.recv_timeout(Duration::from_secs(2)).unwrap();
                     let now = v::now().qpc_100ns();
                     a::anchor(&owner.audio, now);
                     anchor = Some(now);
                     consumed = 0;
-                    anchored.send(now).unwrap();
-                    resume.recv_timeout(Duration::from_secs(2)).unwrap();
+                    // Keep the five real ingress submissions, but do not spend
+                    // the synthetic device's bootstrap lease on test IPC.
+                    for n in 0..5 {
+                        ingress
+                            .submit(ingress.generation(), pcm(now - 400_000 + n * 100_000, n))
+                            .unwrap();
+                    }
                 } else if let Some(base) = anchor {
                     let target = (v::now().qpc_100ns() - base) * 48_000 / 10_000_000;
                     let delta = target.saturating_sub(consumed);
@@ -616,21 +618,14 @@ fn media_host_owned_thread_delivers_pcm_and_mf_then_waits_for_actual_retirement(
             },
         )
         .unwrap();
+    let input = Arc::new(input);
+    authority.send(input.clone()).unwrap();
     let mut mf = v::Reader::connect(input.take_endpoint(Duration::from_secs(3)).unwrap());
     assert!(matches!(
         input.take_endpoint(Duration::ZERO),
         Err(HostError::Source)
     ));
     let capture = source.frame(71);
-    let base = anchor_ready.recv_timeout(Duration::from_secs(3)).unwrap();
-    // Deterministic historical PCM around the actual fixture device anchor.
-    // Five contiguous chunks fit the 50ms ingress; no future capture timestamp.
-    for n in 0..5 {
-        input
-            .submit(input.generation(), pcm(base - 400_000 + n * 100_000, n))
-            .unwrap();
-    }
-    release.send(()).unwrap();
     let _ = noticed.recv_timeout(Duration::from_secs(2));
     let deadline = Instant::now() + Duration::from_secs(3);
     while proof.lock().unwrap().0 == 0 {
