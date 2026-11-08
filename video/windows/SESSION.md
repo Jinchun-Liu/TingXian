@@ -114,3 +114,29 @@ FPS, end-to-end synchronization, third-party application selection or eye infere
 
 This is implementation documentation, not a statement that device or release gates
 have passed. Test binaries and the library are experimental components.
+# Native owner bridge (AV-E7b, 2026-11-08)
+
+`TingXianVideoOutput.dll` now exposes `TxDeviceAbi=1` and the fixed
+create/start/cancel/status/stop/destroy ABI in `device_bridge.h`. It reuses the
+existing CameraSession/WindowsCameraBackend. Construction does not initialize
+COM, activate or register a device. Start is one-shot, explicit intent and v2
+only; create-time cancellation ticket rejects stop-before-queued-start. The
+caller supplies a dedicated MTA, separate from the continuous audio owner lane.
+
+The native revocation callback must revoke both media routes without waiting for
+OS device calls. It runs at most once; callback code/context live until successful
+destroy. Start/stop/destroy require the creating thread. Cancel/status can run
+concurrently with owner operations, but the caller must serialize them against
+destruction. Destroy failure retains ownership and allows an explicit cleanup
+retry. No other instance may bypass uncertain cleanup or external drain.
+
+The Rust binding is `timed_video::device::NativeDevice`. It reuses the pinned,
+locked DLL loader, takes an exact `Arc<host::Input>` (not a broad Host stop), and
+obtains that Input's native endpoint itself. Revocation cannot stop a newer
+generation. Cross-thread tokens become inert before freeing the native object;
+failed Drop retains the complete library/object/context until process exit.
+
+This is a native integration API, **not** a main-window start command or proof
+that the installed COM media source is trusted/compatible. Full scheduling,
+source binary trust, device compatibility and receiver drain remain gates.
+CI uses injected backends and inert/rejected production-DLL calls only.

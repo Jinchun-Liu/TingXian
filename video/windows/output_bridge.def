@@ -19,3 +19,10 @@ EXPORTS
     TxTimedCancel
     TxTimedStop
     TxTimedDestroy
+    TxDeviceAbi
+    TxDeviceCreate
+    TxDeviceStart
+    TxDeviceCancel
+    TxDeviceStatusGet
+    TxDeviceStop
+    TxDeviceDestroy

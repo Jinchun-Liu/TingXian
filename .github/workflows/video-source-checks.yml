@@ -70,6 +70,7 @@ jobs:
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-source-test.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-timing-test.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-timed-output-test.exe
+            ${{ runner.temp }}/video-source-build/Release/tingxian-device-bridge-test.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-video-ipc-test.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-eye-output-test.exe
             ${{ runner.temp }}/video-source-build/Release/tingxian-eye-output.lib

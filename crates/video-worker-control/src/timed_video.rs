@@ -1,5 +1,6 @@
 //! Explicit v2 video admission. One pending reservation, no pipe wait in stage,
 //! no camera/device/SDK authority. An admission is not remote presentation.
+pub mod device;
 use crate::{
     av_timeline::{RenderedWindow, NV12_BYTES},
     windows::{verify, Verified},
