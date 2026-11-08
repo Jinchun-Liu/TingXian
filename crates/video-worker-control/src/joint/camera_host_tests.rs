@@ -98,6 +98,7 @@ impl camera::Device for CameraMemory {
         }
         let frame = self.frames.try_recv().ok();
         if frame.is_some() {
+            self.note("frame");
             self.count += 1;
         }
         Ok(frame)
@@ -362,9 +363,8 @@ fn media_camera_to_actual_eye_worker_and_mf_keeps_original_qpc_and_voice() {
     let (mic, pcm_send, trace) = capture_launch(-1, None);
     let (cleaning, cleanup_ready) = mpsc::channel();
     let (finish, finish_gate) = mpsc::channel();
-    let (camera, frames, _cam_trace) =
+    let (camera, frames, cam_trace) =
         camera_launch(-1, trace.clone(), Some((cleaning, finish_gate)));
-    let (anchored, anchor_ready) = mpsc::channel();
     let (proof, proven) = mpsc::channel();
     let (resume, resume_gate) = mpsc::channel();
     let mut base = None;
@@ -383,10 +383,16 @@ fn media_camera_to_actual_eye_worker_and_mf_keeps_original_qpc_and_voice() {
             true,
             move |owner| {
                 if base.is_none() {
-                    // Camera must pump before waiting for corrected data; do not block
-                    // the owner on its own input. MF consumer connects after this anchor.
-                    if owner.snapshot().eye.unwrap().received == 0 {
+                    // The real MF consumer is connected before the first camera
+                    // packet. Wait only after this owner actually pumped that
+                    // packet, then anchor: setup time is not device consumption.
+                    if !cam_trace.lock().unwrap().contains(&"frame") {
                         return;
+                    }
+                    let until = Instant::now() + Duration::from_secs(3);
+                    while owner.snapshot().eye.unwrap().received == 0 {
+                        assert!(Instant::now() < until, "camera correction missing");
+                        thread::sleep(Duration::from_millis(1));
                     }
                     let now = v::now().qpc_100ns();
                     a::anchor(&owner.audio, now);
@@ -396,8 +402,12 @@ fn media_camera_to_actual_eye_worker_and_mf_keeps_original_qpc_and_voice() {
                     first.flags.discontinuity = true;
                     pcm_send.send(first).unwrap();
                     pcm_send.send(pcm(now - 100_000, 10)).unwrap();
-                    anchored.send(()).unwrap();
                 } else {
+                    assert_ne!(
+                        owner.snapshot().phase,
+                        Phase::WaitingVideo,
+                        "synthetic device must not consume before output starts"
+                    );
                     let target = (v::now().qpc_100ns() - base.unwrap()) * 48000 / 10_000_000;
                     let delta = target.saturating_sub(consumed);
                     assert!(delta <= 4800);
@@ -419,11 +429,10 @@ fn media_camera_to_actual_eye_worker_and_mf_keeps_original_qpc_and_voice() {
         )
         .unwrap();
     let endpoint = input.take_endpoint(Duration::from_secs(3)).unwrap();
+    let mut mf = v::Reader::connect(endpoint);
     let frame = camera_frame(input.generation());
     let capture_time = frame.capture.qpc_100ns();
     frames.send(frame).unwrap();
-    anchor_ready.recv_timeout(Duration::from_secs(3)).unwrap();
-    let mut mf = v::Reader::connect(endpoint);
     let (pts, values) = proven.recv_timeout(Duration::from_secs(3)).unwrap_or_else(|e| {
         let before = host.snapshot();
         host.request_stop();

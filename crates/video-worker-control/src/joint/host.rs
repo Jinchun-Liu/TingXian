@@ -912,6 +912,12 @@ where
             }
             shared.publish(endpoint)?;
             while !shared.input_closed() {
+                // Submit one video input before draining voice for the next
+                // output transition. The eye process runs independently; no
+                // inference wait or audio output ticket is held here.
+                if let Some(c) = inputs.camera.as_mut() {
+                    c.pump()?;
+                }
                 tap(&mut owner);
                 if let Some(c) = inputs.capture.as_mut() {
                     for _ in 0..MAX_PACKETS {
@@ -938,9 +944,6 @@ where
                             .admitted += 1;
                     }
                     c.status()?;
-                }
-                if let Some(c) = inputs.camera.as_mut() {
-                    c.pump()?;
                 }
                 for _ in 0..MAX_PACKETS {
                     let Some(packet) = shared.pop() else {
